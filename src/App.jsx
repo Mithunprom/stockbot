@@ -10,6 +10,7 @@ import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist
 import { EXIT_PRESETS, checkExitSignal, checkPortfolioHeat } from './trading/exitStrategy.js'
 import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
+import { fetchDynamicUniverse, getUniverseLabel, ALL_SEED } from './data/universe.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
@@ -95,6 +96,7 @@ export default function App() {
   const [weights,setWeights]=useState(agent.weights)
   const [rlProgress,setRlProgress]=useState(null)
   const [ensembleResults,setEnsembleResults]=useState({})
+  const [universeLabel,setUniverseLabel]=useState('Initializing...')
   const [activeModel,setActiveModel]=useState('ensemble')
   const [nextScreenIn,setNextScreenIn]=useState(SCREEN_INTERVAL)
   const [autoScreenEnabled,setAutoScreenEnabled]=useState(true)
@@ -131,12 +133,14 @@ export default function App() {
   const pricesRef=useRef(prices)
   const signalsRef=useRef(signals)
   const barsRef=useRef(bars)
+  const ensembleRef=useRef(ensembleResults)
 
   // Keep refs in sync for use inside setInterval callbacks
   useEffect(()=>{ portfolioRef.current=portfolio },[portfolio])
   useEffect(()=>{ pricesRef.current=prices },[prices])
   useEffect(()=>{ signalsRef.current=signals },[signals])
   useEffect(()=>{ barsRef.current=bars },[bars])
+  useEffect(()=>{ ensembleRef.current=ensembleResults },[ensembleResults])
 
   // ── Persistence ──────────────────────────────────────────────────────────
   useEffect(()=>{ savePortfolio(portfolio) },[portfolio])
@@ -154,13 +158,16 @@ export default function App() {
     const criteria=custom||SCREENING_PROFILES[activeProfile]?.criteria||DEFAULT_CRITERIA
 
     // Build mock stocks
-    const mockTickers=['NVDA','TSLA','AMD','MSTR','PLTR','COIN','META','AAPL','AMZN','GOOGL','MSFT','ARM','SMCI','AVGO','MARA','IONQ','RKLB','HOOD','ACHR','RIOT']
-    const mockStocks=mockTickers.map(ticker=>{
+    // Fetch dynamic universe — live top movers + most active if API available
+    const universeTickers = await fetchDynamicUniverse(apiKey)
+    setUniverseLabel(getUniverseLabel(!!apiKey))
+    const mockStocks=universeTickers.slice(0,25).map(ticker=>{
       const b=mockBars(ticker)
       const n=b.length
+      const sig=generateSignal(b, agent.weights)
       return { ticker, price:b[n-1].c, change1d:(b[n-1].c-b[n-2].c)/b[n-2].c*100, change5d:(b[n-1].c-b[n-5].c)/b[n-5].c*100,
-        volume:b[n-1].v, composite:Math.random()*2-0.3,
-        scores:{ momentum:Math.random()-0.2, volatility:Math.random()*0.05, volumeSurge:Math.random()*2-0.5, trendBreak:Math.random()-0.2, rsiOversold:Math.random()-0.3 }, bars:b }
+        volume:b[n-1].v, composite:sig.score,
+        scores:{ momentum:sig.factors.momentum||0, volatility:sig.factors.volatility||0, volumeSurge:sig.factors.volume||0, trendBreak:sig.factors.trend||0, rsiOversold:sig.factors.meanReversion||0 }, bars:b }
     }).sort((a,b)=>b.composite-a.composite)
 
     let stocks=mockStocks; let isLive=false
@@ -239,7 +246,8 @@ export default function App() {
       for(const ticker of allTickers) {
         const sig=sigs[ticker], price=px[ticker]?.price
         if(!sig||!price) continue
-        const decision=evaluateAutoTrade(ticker, sig, b[ticker], port, px, autoTradeSettings)
+        const ens=ensembleRef.current[ticker]||null
+        const decision=evaluateAutoTrade(ticker, sig, ens, b[ticker], port, px, autoTradeSettings)
         if(decision) {
           if(decision.action==='BUY') executeTrade(ticker,'BUY',price,sig,true)
           else if(decision.action==='CLOSE') closePosition(ticker,true)
@@ -348,9 +356,10 @@ export default function App() {
   }
 
   function closePosition(ticker, isAuto=false) {
-    const pos=portfolio.positions[ticker]
+    // Use ref to avoid stale closure in auto-trader setInterval
+    const pos=portfolioRef.current.positions[ticker]
     if(!pos) return
-    const px=prices[ticker]?.price||pos.avgPrice
+    const px=pricesRef.current[ticker]?.price||pos.avgPrice
     const pnl=pos.side==='LONG'?(px-pos.avgPrice)*pos.shares:(pos.avgPrice-px)*pos.shares
     setPortfolio(prev=>{
       const next={...prev,positions:{...prev.positions}}
@@ -503,7 +512,7 @@ export default function App() {
 
                 {/* Heatmap — stocks + crypto */}
                 <div style={S.panel}>
-                  <div style={S.pt}>SIGNAL HEATMAP {screenResult.mock&&<span style={{color:C.yellow}}>(MOCK DATA)</span>}</div>
+                  <div style={S.pt}>SIGNAL HEATMAP · <span style={{color:C.accent,textTransform:'none',letterSpacing:0}}>{universeLabel}</span>{screenResult.mock&&<span style={{color:C.yellow}}> (MOCK DATA)</span>}</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5}}>
                     {[...sortedSignals.filter(a=>!signalFilter||a.sig?.signal===signalFilter).slice(0,17),
                       ...ALL_CRYPTO.map(t=>({ticker:t,display:CRYPTO_DISPLAY[t],sig:signals[t]||{score:0,signal:'HOLD'},px:prices[t]}))
