@@ -12,6 +12,7 @@ import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
 import { fetchDynamicUniverse, getUniverseLabel } from './data/universe.js'
 import { fetchCryptoPrices, buildCryptoBars } from './data/cryptoPrices.js'
+import { PRICE_SEEDS } from './data/stockPriceSeeds.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
@@ -57,7 +58,7 @@ const fmt = {
 
 function mockBars(ticker, days=400) {
   const seed=ticker.split('').reduce((a,c)=>a+c.charCodeAt(0),0)
-  const basePx = 50+(seed%200)  // crypto gets real prices via buildCryptoBars
+  const basePx = PRICE_SEEDS[ticker] || (50+(seed%200))  // use real price seed if known
   const bars=[]; let price=basePx; const now=Date.now()
   for(let i=days;i>=0;i--) {
     const t=now-i*86400000,change=(Math.random()-0.48)*price*0.03,o=price
@@ -116,8 +117,8 @@ export default function App() {
   const [exitAlerts,setExitAlerts]=useState([]) // warnings shown in UI
   // Email
   const [emailStatus,setEmailStatus]=useState(null)
-  const [lastAlertSent,setLastAlertSent]=useState(null)
-  const [lastBriefingSent,setLastBriefingSent]=useState(null)
+  const [lastAlertSent,setLastAlertSent]=useState(()=>{ const v=localStorage.getItem('stockbot_alert_sent'); return v?parseInt(v):null })
+  const [lastBriefingSent,setLastBriefingSent]=useState(()=>localStorage.getItem('stockbot_briefing_sent')||null)
   const EMAIL_TO = 'mithunghosh404@gmail.com'
   // News
   const [marketNews,setMarketNews]=useState([])
@@ -338,12 +339,12 @@ export default function App() {
           portfolioValue:val, pnl, pnlPct,
           direction:pnlPct>=0?'up':'down', positions
         })
-        setLastAlertSent(now)
+        localStorage.setItem('stockbot_alert_sent', String(now)); setLastAlertSent(now)
       }
       // Daily briefing — send at 7-8am if not sent today
       const hour=new Date().getHours()
       const todayStr=new Date().toDateString()
-      if(hour===7 && lastBriefingSent!==todayStr) {
+      if(hour>=8 && hour<=11 && lastBriefingSent!==todayStr) {
         const sigs=signalsRef.current
         const allAssets=Object.entries(sigs).map(([ticker,s])=>({ticker,...s}))
         const buys=allAssets.filter(a=>a.signal==='BUY').sort((a,b)=>b.score-a.score)
@@ -357,7 +358,7 @@ export default function App() {
           marketMood: buys.length>sells.length?'BULLISH':sells.length>buys.length?'BEARISH':'NEUTRAL',
           date: new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})
         })
-        setLastBriefingSent(todayStr)
+        localStorage.setItem('stockbot_briefing_sent', todayStr); setLastBriefingSent(todayStr)
       }
     },60000) // check every minute
     return()=>clearInterval(emailCheckRef.current)
@@ -400,6 +401,23 @@ export default function App() {
     })
   }
 
+
+  // Build news sentiment map for RL trainer — { TICKER: avgScore }
+  function buildNewsSentimentMap(articles) {
+    const map = {}
+    for (const a of (articles || [])) {
+      const score = a.sentiment?.score || 0
+      const weight = a.sentiment?.impact === 'high' ? 2 : 1
+      for (const t of (a.tickers || [])) {
+        if (!map[t]) map[t] = { total: 0, count: 0 }
+        map[t].total += score * weight
+        map[t].count += weight
+      }
+    }
+    const result = {}
+    for (const [t, v] of Object.entries(map)) result[t] = v.total / v.count
+    return result
+  }
   function closePosition(ticker, isAuto=false) {
     // Use ref to avoid stale closure in auto-trader setInterval
     const pos=portfolioRef.current.positions[ticker]
@@ -484,8 +502,9 @@ export default function App() {
     if(isTraining||Object.keys(bars).length===0) return
     setIsTraining(true)
     await trainEpisodes(bars,30,
-      ep=>{ setTrainingLog(prev=>[...prev.slice(-50),{episode:ep.episode,score:ep.result.ragScore.toFixed(3),sharpe:ep.result.sharpe.toFixed(2),ret:(ep.result.totalReturn*100).toFixed(1)+'%',regime:ep.regime}]); setRlProgress(ep.agentState); setWeights({...ep.currentWeights}) },
-      done=>{ setWeights({...done.bestWeights}); setBacktestResult(backtestPortfolio(bars,done.bestWeights)); setIsTraining(false) }
+      ep=>{ setTrainingLog(prev=>[...prev.slice(-50),{episode:ep.episode,score:ep.result.ragScore.toFixed(3),sharpe:ep.result.sharpe.toFixed(2),ret:(ep.result.totalReturn*100).toFixed(1)+'%',regime:ep.regime,news:ep.result.newsCount>0?'✓':''}]); setRlProgress(ep.agentState); setWeights({...ep.currentWeights}) },
+      done=>{ setWeights({...done.bestWeights}); setBacktestResult(backtestPortfolio(bars,done.bestWeights)); setIsTraining(false) },
+      buildNewsSentimentMap(marketNewsRef.current)
     )
   }
 
@@ -1013,7 +1032,7 @@ export default function App() {
             <div style={{...S.panel,border:`1px solid ${C.yellow}`}}>
               <div style={S.pt}>✉️ EMAIL ALERTS → {EMAIL_TO}</div>
               <div style={{fontSize:11,color:C.textDim,marginBottom:12,lineHeight:1.6}}>
-                Automatic alerts sent when portfolio moves ±5%. Daily briefing every morning at 7am.
+                Automatic alerts sent when portfolio moves ±5%. Daily briefing every morning at 8-11am ET.
                 Requires <code style={{color:C.accent}}>RESEND_API_KEY</code> set in Vercel env vars.
               </div>
               <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
