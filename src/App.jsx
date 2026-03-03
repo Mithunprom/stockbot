@@ -14,8 +14,7 @@ import { fetchDynamicUniverse, getUniverseLabel } from './data/universe.js'
 import { fetchCryptoPrices, buildCryptoBars } from './data/cryptoPrices.js'
 import { equityCurveToCSV } from './backtest/backtester.js'
 import { isConfigured as alpacaConfigured, getMode as alpacaMode, syncPortfolio } from './trading/alpaca.js'
-// Realistic price seeds (March 2026) — used by mockBars when no API key
-const PRICE_SEEDS={AAPL:215,MSFT:395,NVDA:115,AMZN:210,GOOGL:175,META:620,TSLA:245,AVGO:185,AMD:108,ORCL:165,CRM:290,SNOW:145,PLTR:85,ARM:145,COIN:205,HOOD:42,RKLB:22,IONQ:38,ACHR:12,SMCI:35,MSTR:310,DDOG:115,UBER:82,ABNB:135,LMT:465,NOC:480,RTX:125,BA:175,GD:265,LHX:215,KTOS:28,HII:225,JPM:245,GS:555,V:345,MA:530,BAC:44,BLK:950,C:72,WFC:72,SCHW:78,LLY:820,NVO:85,ABBV:185,MRK:95,PFE:27,GILD:95,AMGN:285,REGN:720,ISRG:495,MRNA:42,XOM:105,CVX:155,OXY:48,SLB:42,COP:105,PSX:135,COST:935,WMT:95,HD:375,NKE:72,MCD:295,SBUX:82,TGT:125,MARA:14,RIOT:8,HUT:18,CLSK:12,BTBT:4,SPY:565,QQQ:480,IWM:210,ARKK:48,SOXL:28,XLK:215,XLE:92,XLF:48,XLV:142,GLD:285,TLT:92}
+import { runAllVerifiers, generateAutoImprovements } from './data/verifier.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
@@ -59,34 +58,26 @@ const fmt = {
   ago: ts=>{ const m=Math.floor((Date.now()-new Date(ts))/60000); return m<60?`${m}m ago`:`${Math.floor(m/60)}h ago` },
 }
 
+// mockBars — synthetic OHLCV bars for backtesting/signals when no real data exists.
+// Prices are index-normalized to 100. Real prices come ONLY from Polygon/CoinGecko.
+// Never display mockBars price as a real stock price.
 function mockBars(ticker, days=400) {
   const charSeed=ticker.split('').reduce((a,c)=>a+c.charCodeAt(0),0)
-  const targetPx = PRICE_SEEDS[ticker] || (50+(charSeed%200))  // where price should END (today)
-
-  // Use a seeded pseudo-random so bars are deterministic per ticker (no flickering on re-render)
-  let rng = charSeed
-  const rand = () => { rng=(rng*1664525+1013904223)&0xffffffff; return (rng>>>0)/0xffffffff }
-
-  // Generate raw random walk
-  const raw=[]; let px=targetPx*(0.7+rand()*0.3) // start 70-100% of target
-  const now=Date.now()
-  for(let i=days;i>=0;i--) {
+  let rng=charSeed
+  const rand=()=>{ rng=(rng*1664525+1013904223)&0xffffffff; return (rng>>>0)/0xffffffff }
+  const raw=[]; let px=100; const now=Date.now()
+  for(let i=days;i>=0;i--){
     const t=now-i*86400000
-    const drift=(rand()-0.485)*0.028  // slight upward bias, ~2.8% daily vol
-    const o=px
-    px=Math.max(targetPx*0.1, px*(1+drift))
+    const o=px; px=Math.max(1,px*(1+(rand()-0.485)*0.028))
     raw.push({t,o,px})
   }
-
-  // Scale so the LAST bar closes exactly at targetPx
-  const finalPx=raw[raw.length-1].px
-  const scale=targetPx/finalPx
+  // Normalize: final bar = 100
+  const scale=100/raw[raw.length-1].px
   return raw.map(({t,o,px:c})=>{
-    const so=o*scale, sc=c*scale
-    const hi=Math.max(so,sc)*(1+rand()*0.008)
-    const lo=Math.min(so,sc)*(1-rand()*0.008)
-    const vol=5e5+rand()*4e6
-    return {t,o:+so.toFixed(2),h:+hi.toFixed(2),l:+lo.toFixed(2),c:+sc.toFixed(2),v:Math.round(vol),vw:+((so+sc)/2).toFixed(2)}
+    const so=+(o*scale).toFixed(4), sc=+(c*scale).toFixed(4)
+    return {t,o:so,h:+(Math.max(so,sc)*(1+rand()*0.008)).toFixed(4),
+      l:+(Math.min(so,sc)*(1-rand()*0.008)).toFixed(4),
+      c:sc,v:Math.round(5e5+rand()*4e6),vw:+((so+sc)/2).toFixed(4)}
   })
 }
 
@@ -108,6 +99,8 @@ export default function App() {
   const [screenProfile,setScreenProfile]=useState(()=>loadSettings().screenProfile||'momentum')
   const [screenResult,setScreenResult]=useState(null)
   const [isScreening,setIsScreening]=useState(false)
+  const [verifyReport,setVerifyReport]=useState(null)
+  const [isVerifying,setIsVerifying]=useState(false)
   const [activeStocks,setActiveStocks]=useState([])
   const [prices,setPrices]=useState({})
   const [bars,setBars]=useState({})
@@ -174,6 +167,8 @@ export default function App() {
   const barsRef=useRef(bars)
   const ensembleRef=useRef(ensembleResults)
   const tradeSizeRef=useRef(tradeSize)
+  const dataStatusRef=useRef({live:false,keyFound:false})
+  const autoSettingsRef=useRef(autoTradeSettings)
 
   // Keep refs in sync for use inside setInterval callbacks
   useEffect(()=>{ portfolioRef.current=portfolio },[portfolio])
@@ -185,6 +180,8 @@ export default function App() {
   useEffect(()=>{ tradeSizeRef.current=tradeSize },[tradeSize])
   useEffect(()=>{ newsStocksRef.current=newsStocks },[newsStocks])
   useEffect(()=>{ marketNewsRef.current=marketNews },[marketNews])
+  useEffect(()=>{ dataStatusRef.current=dataStatus },[dataStatus])
+  useEffect(()=>{ autoSettingsRef.current=autoTradeSettings },[autoTradeSettings])
 
   // ── Persistence ──────────────────────────────────────────────────────────
   // Settings save (not critical for positions so useEffect is fine here)
@@ -207,7 +204,7 @@ export default function App() {
       const b=mockBars(ticker)
       const n=b.length
       const sig=generateSignal(b, agent.weights)
-      return { ticker, price:b[n-1].c, change1d:(b[n-1].c-b[n-2].c)/b[n-2].c*100, change5d:(b[n-1].c-b[n-5].c)/b[n-5].c*100,
+      return { ticker, price:null, change1d:(b[n-1].c-b[n-2].c)/b[n-2].c*100, change5d:(b[n-1].c-b[n-5].c)/b[n-5].c*100,
         volume:b[n-1].v, composite:sig.score,
         scores:{ momentum:sig.factors.momentum||0, volatility:sig.factors.volatility||0, volumeSurge:sig.factors.volume||0, trendBreak:sig.factors.trend||0, rsiOversold:sig.factors.meanReversion||0 }, bars:b }
     }).sort((a,b)=>b.composite-a.composite)
@@ -278,6 +275,8 @@ export default function App() {
     setBars(barsMap)
     setPrices(priceMap)
     setSignals(newSignals)
+    // Auto-run verifiers after each screen (non-blocking)
+    setTimeout(()=>runVerify(priceMap, barsMap, newSignals), 1500)
     setWeights(agent.weights)
     setDataStatus({ live:isLive, keyFound:!!apiKey, lastUpdate:new Date(), screened:tickers.length })
 
@@ -426,25 +425,62 @@ export default function App() {
 
 
   // Build news sentiment map for RL trainer — { TICKER: avgScore }
+  // ── Verifier ──────────────────────────────────────────────────────────────
+  async function runVerify(px, b, sigs) {
+    setIsVerifying(true)
+    try {
+      const report = await runAllVerifiers({
+        prices:   px  || pricesRef.current,
+        bars:     b   || bars,
+        signals:  sigs|| signalsRef.current,
+        weights:  agent.weights,
+        apiKey:   getApiKey(),
+        trainingLog, backtestResult, rlProgress, algoMode,
+        tradeLog: tradeLogRef.current || [],
+        autoSettings: autoSettingsRef.current,
+        emailConfig: { to: EMAIL_TO, lastBriefingSent, lastAlertSent }
+      })
+      setVerifyReport(report)
+
+      // ── Auto-apply improvements ────────────────────────────────────────
+      const { settingPatches, shouldRetrain, retrainReason } = report.improvements || {}
+      if (settingPatches && Object.keys(settingPatches).length > 0) {
+        setAutoTradeSettings(prev => ({ ...prev, ...settingPatches }))
+        console.log('[AutoImprove] Applied setting patches:', settingPatches)
+      }
+      if (shouldRetrain && !isTraining && Object.keys(bars).length > 0) {
+        console.log('[AutoImprove] Triggering retrain:', retrainReason)
+        // Small delay so UI updates first
+        setTimeout(() => startTraining(), 1500)
+      }
+    } catch(e) {
+      console.error('[Verifier]', e)
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
   function buildRichBriefing() {
     const _px=pricesRef.current, _sigs=signalsRef.current
-    const _allA=Object.entries(_sigs).map(([t,s])=>({ticker:t,...s,price:_px[t]?.price||0}))
+    const _live=dataStatusRef.current.live  // only show prices if Polygon is live
+    const _allA=Object.entries(_sigs).map(([t,s])=>({ticker:t,...s,price:_live?(_px[t]?.price||0):0}))
     const _mbuys=_allA.filter(a=>a.signal==='BUY').sort((a,b)=>b.score-a.score)
     const _msells=_allA.filter(a=>a.signal==='SELL').sort((a,b)=>a.score-b.score)
     const _picks=_mbuys.slice(0,6).map(a=>{
       const ens=ensembleRef.current[a.ticker], p=a.price
       const nl=(marketNewsRef.current||[]).find(n=>(n.tickers||[]).includes(a.ticker))
-      const entry=p>0?('$'+(p*0.99).toFixed(2)+'\u2013$'+(p*1.005).toFixed(2)):'—'
-      const stop=p>0?('$'+(p*0.92).toFixed(2)):'—'
-      const target=p>0?('$'+(p*1.10).toFixed(2)):'—'
-      return {ticker:a.ticker,price:p,score:a.score,confidence:a.confidence,
+      // Entry/stop/target only meaningful with real prices
+      const entry=_live&&p>0?('$'+(p*0.99).toFixed(2)+'\u2013$'+(p*1.005).toFixed(2)):'—'
+      const stop =_live&&p>0?('$'+(p*0.92).toFixed(2)):'—'
+      const target=_live&&p>0?('$'+(p*1.10).toFixed(2)):'—'
+      return {ticker:a.ticker,price:_live&&p>0?p:null,score:a.score,confidence:a.confidence,
         ensemble:ens?.signal||a.signal,entryZone:entry,stopLoss:stop,target,
         reason:(ens?(ens.signal+' · '+Math.round((ens.confidence||0)*100)+'% conf · '):'')+'Score '+a.score.toFixed(3),
         newsHeadline:nl?.title||null}
     })
     return {
-      buys:_mbuys.slice(0,10).map(a=>({ticker:a.ticker,price:a.price,score:a.score,confidence:a.confidence,reason:'BUY'})),
-      sells:_msells.slice(0,5).map(a=>({ticker:a.ticker,price:a.price,score:a.score,reason:'SELL'})),
+      buys:_mbuys.slice(0,10).map(a=>({ticker:a.ticker,price:_live&&a.price>0?a.price:null,score:a.score,confidence:a.confidence,reason:'BUY'})),
+      sells:_msells.slice(0,5).map(a=>({ticker:a.ticker,price:_live&&a.price>0?a.price:null,score:a.score,reason:'SELL'})),
       topPicks:_picks, algoMode, portfolioValue:portfolioValue(portfolioRef.current,_px),
       newsHeadlines:(marketNewsRef.current||[]).slice(0,4),
       marketMood:_mbuys.length>_msells.length?'BULLISH':_msells.length>_mbuys.length?'BEARISH':'NEUTRAL',
@@ -454,21 +490,24 @@ export default function App() {
 
   function buildRichEOD() {
     const _px=pricesRef.current, _sigs=signalsRef.current
-    const _allA=Object.entries(_sigs).map(([t,s])=>({ticker:t,...s,price:_px[t]?.price||0}))
+    const _live=dataStatusRef.current.live
+    const _allA=Object.entries(_sigs).map(([t,s])=>({ticker:t,...s,price:_live?(_px[t]?.price||0):0}))
     const port=portfolioRef.current, val=portfolioValue(port,_px)
     const pnl=val-STARTING_CAPITAL
     const pos=Object.entries(port.positions).map(([t,p])=>{
       const curPx=_px[t]?.price||p.avgPrice
       const positionPnl=(p.side==='LONG'?(curPx-p.avgPrice):(p.avgPrice-curPx))*p.shares
-      return {ticker:displayTicker(t),shares:p.shares,avgPrice:p.avgPrice,currentPrice:curPx,
-        pnl:positionPnl,pnlPct:(positionPnl/(p.avgPrice*p.shares))*100}
+      // Only show price if live
+      return {ticker:displayTicker(t),shares:p.shares,avgPrice:_live?p.avgPrice:null,
+        currentPrice:_live?curPx:null,pnl:positionPnl,pnlPct:(positionPnl/(p.avgPrice*p.shares))*100}
     }).sort((a,b)=>b.pnl-a.pnl)
     const today=new Date().toDateString()
     const todayTrades=(tradeLogRef.current||[]).filter(t=>{
       try{return new Date(t.time).toDateString()===today}catch{return false}
-    }).slice(0,10).map(t=>({ticker:displayTicker(t.ticker||''),side:t.side||'',price:t.price||0,shares:t.shares||0,pnl:t.pnl||null}))
+    }).slice(0,10).map(t=>({ticker:displayTicker(t.ticker||''),side:t.side||'',
+      price:_live?t.price||0:null,shares:t.shares||0,pnl:t.pnl||null}))
     const watch=_allA.filter(a=>a.signal==='BUY').sort((a,b)=>b.score-a.score).slice(0,6)
-      .map(a=>({ticker:a.ticker,price:a.price,score:a.score,confidence:a.confidence}))
+      .map(a=>({ticker:a.ticker,price:_live&&a.price>0?a.price:null,score:a.score,confidence:a.confidence}))
     return {
       portfolioValue:val, pnl, pnlPct:(pnl/STARTING_CAPITAL)*100,
       pnlToday:pnl, pnlTodayPct:(pnl/STARTING_CAPITAL)*100,
@@ -631,6 +670,7 @@ export default function App() {
   const fmtCD=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`
   const filteredStocks=screenResult?.stocks.filter(s=>!signalFilter||(signals[s.ticker]?.signal||'HOLD')===signalFilter)||[]
 
+  const verifyBadge = verifyReport ? (verifyReport.overall==='error'?'🔴':verifyReport.overall==='warn'?'🟡':'🟢') : '⚙️'
   const tabs=[
     {id:'screen',icon:'⟳',label:'SCREEN'},
     {id:'signals',icon:'📡',label:'SIGNALS'},
@@ -639,6 +679,7 @@ export default function App() {
     {id:'auto',icon:'🤖',label:'AUTO'},
     {id:'models',icon:'📊',label:'MODELS'},
     {id:'train',icon:'🧠',label:'TRAIN'},
+    {id:'verify',icon:verifyBadge,label:'VERIFY'},
   ]
 
   return (
@@ -1202,39 +1243,94 @@ export default function App() {
               </div>
             </div>
 
-            {/* Auto-trade toggle */}
-            <div style={{...S.panel,border:`1px solid ${autoTradeSettings.enabled?C.purple:C.border}`}}>
+            {/* Auto-trade engine */}
+            <div style={{...S.panel,border:`1px solid ${autoTradeSettings.enabled?C.green:C.border}`}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                <div style={S.pt}>🤖 AUTO-TRADING ENGINE</div>
-                <button style={S.btn(autoTradeSettings.enabled?'active':'default')} onClick={()=>setAutoTradeSettings(p=>({...p,enabled:!p.enabled}))}>
-                  {autoTradeSettings.enabled?'🟢 ON — CLICK TO DISABLE':'⚫ OFF — CLICK TO ENABLE'}
+                <div>
+                  <div style={S.pt}>🤖 AUTO-TRADING ENGINE</div>
+                  <div style={{fontSize:9,color:C.textDim,marginTop:2}}>Scans every 60s · Buys on BUY signal · Exits on TP/SL</div>
+                </div>
+                <button style={{...S.btn(autoTradeSettings.enabled?'active':'default'),fontSize:11,padding:'6px 14px'}}
+                  onClick={()=>setAutoTradeSettings(p=>({...p,enabled:!p.enabled}))}>
+                  {autoTradeSettings.enabled?'🟢 LIVE':'⚫ PAUSED'}
                 </button>
               </div>
-              {autoTradeSettings.enabled&&<div style={{fontSize:10,color:C.purple,marginBottom:12}}>⚠️ Auto-trading is ACTIVE. Bot will buy/sell automatically based on signals.</div>}
-              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
+              {autoTradeSettings.enabled&&(
+                <div style={{fontSize:10,color:C.green,background:'#00ff8811',border:'1px solid #00ff8830',borderRadius:4,padding:'6px 10px',marginBottom:12}}>
+                  ✅ Auto-trading ACTIVE — bot will buy/sell automatically based on signals
+                </div>
+              )}
+
+              {/* ── Primary exit controls — big and prominent ── */}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
+                {/* Take-Profit */}
+                <div style={{background:C.surface,border:`1px solid ${C.green}40`,borderRadius:8,padding:12}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                    <div style={{fontSize:9,color:C.textDim,letterSpacing:2}}>TAKE PROFIT</div>
+                    <span style={{fontSize:14,fontWeight:700,color:C.green}}>+{(autoTradeSettings.takeProfitPct*100).toFixed(0)}%</span>
+                  </div>
+                  <input type="range" min={3} max={50} step={1}
+                    value={Math.round((autoTradeSettings.takeProfitPct||0.10)*100)}
+                    onChange={e=>setAutoTradeSettings(p=>({...p,takeProfitPct:parseInt(e.target.value)/100}))}
+                    style={{width:'100%',accentColor:C.green}}/>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:C.textDim,marginTop:2}}>
+                    <span>3%</span><span>50%</span>
+                  </div>
+                </div>
+
+                {/* Stop-Loss */}
+                <div style={{background:C.surface,border:`1px solid ${C.red}40`,borderRadius:8,padding:12}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                    <div style={{fontSize:9,color:C.textDim,letterSpacing:2}}>STOP LOSS</div>
+                    <span style={{fontSize:14,fontWeight:700,color:C.red}}>-{(autoTradeSettings.stopLossPct*100).toFixed(0)}%</span>
+                  </div>
+                  <input type="range" min={2} max={25} step={1}
+                    value={Math.round((autoTradeSettings.stopLossPct||0.07)*100)}
+                    onChange={e=>setAutoTradeSettings(p=>({...p,stopLossPct:parseInt(e.target.value)/100}))}
+                    style={{width:'100%',accentColor:C.red}}/>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:C.textDim,marginTop:2}}>
+                    <span>2%</span><span>25%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* R/R indicator */}
+              {(()=>{
+                const rr=(autoTradeSettings.takeProfitPct||0.10)/(autoTradeSettings.stopLossPct||0.07)
+                const col=rr>=2?C.green:rr>=1.2?C.yellow:C.red
+                return (
+                  <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:12,marginBottom:14,padding:'8px',background:C.surface,borderRadius:6}}>
+                    <span style={{fontSize:9,color:C.textDim}}>RISK/REWARD</span>
+                    <span style={{fontSize:16,fontWeight:700,color:col}}>{rr.toFixed(1)}x</span>
+                    <span style={{fontSize:9,color:col}}>{rr>=2?'✅ Excellent':rr>=1.5?'✅ Good':rr>=1.2?'⚠️ Acceptable':'❌ Too tight'}</span>
+                  </div>
+                )
+              })()}
+
+              {/* Advanced settings collapsible */}
+              <div style={{fontSize:9,color:C.textDim,letterSpacing:2,marginBottom:8}}>ADVANCED</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8}}>
                 {[
-                  {label:'Min Signal Score',key:'minScore',type:'number',step:0.05},
-                  {label:'Min Confidence %',key:'minConfidence',type:'number',step:0.05},
-                  {label:'Max Positions',key:'maxPositions',type:'number',step:1},
-                  {label:'Position Size %',key:'positionSizePct',type:'number',step:0.01},
+                  {label:'Min Signal Score',key:'minScore',step:0.05,min:0.1,max:0.9},
+                  {label:'Min Confidence',key:'minConfidence',step:0.05,min:0.1,max:0.9},
+                  {label:'Max Positions',key:'maxPositions',step:1,min:1,max:20},
+                  {label:'Position Size %',key:'positionSizePct',step:0.01,min:0.01,max:0.25},
                 ].map(f=>(
                   <div key={f.key}>
-                    <div style={{fontSize:9,color:C.textDim,marginBottom:4}}>{f.label}</div>
-                    <input type="number" step={f.step} value={autoTradeSettings[f.key]}
+                    <div style={{fontSize:9,color:C.textDim,marginBottom:3}}>{f.label}: <span style={{color:C.accent}}>{f.key==='positionSizePct'?`${(autoTradeSettings[f.key]*100).toFixed(0)}%`:autoTradeSettings[f.key]}</span></div>
+                    <input type="number" step={f.step} min={f.min} max={f.max}
+                      value={autoTradeSettings[f.key]}
                       onChange={e=>setAutoTradeSettings(p=>({...p,[f.key]:parseFloat(e.target.value)}))}
                       style={{...S.input,width:'100%'}}/>
                   </div>
                 ))}
               </div>
-              <div style={{marginTop:12}}>
-                <div style={{fontSize:9,color:C.textDim,marginBottom:6}}>EXIT PRESET FOR AUTO-TRADES</div>
-                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                  {Object.entries(EXIT_PRESETS).map(([key,p])=>(
-                    <button key={key} style={{...S.btn(autoTradeSettings.exitPreset===key?'active':'default'),padding:'4px 10px',fontSize:9}} onClick={()=>setAutoTradeSettings(pr=>({...pr,exitPreset:key}))}>
-                      {p.icon} {p.label}
-                    </button>
-                  ))}
-                </div>
+              <div style={{marginTop:10,display:'flex',alignItems:'center',gap:8}}>
+                <input type="checkbox" id="multimodel" checked={!!autoTradeSettings.requireMultiModel}
+                  onChange={e=>setAutoTradeSettings(p=>({...p,requireMultiModel:e.target.checked}))}/>
+                <label htmlFor="multimodel" style={{fontSize:10,color:C.textDim,cursor:'pointer'}}>
+                  Require 2+ models to agree before buying (recommended)
+                </label>
               </div>
             </div>
 
@@ -1405,6 +1501,173 @@ export default function App() {
           </div>
         )}
 
+
+        {/* ══ VERIFY ══ */}
+        {tab==='verify'&&(
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+
+            {/* Header */}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:C.textBright}}>🤖 Subagent Verification System</div>
+                <div style={{fontSize:10,color:C.textDim,marginTop:2}}>5 subagents · prices · signals · RL · strategy · email</div>
+              </div>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                {verifyReport&&<span style={{fontSize:9,color:C.textDim}}>Last run: {new Date(verifyReport.ts).toLocaleTimeString()}</span>}
+                <button style={{...S.btn('primary'),padding:'6px 16px'}} onClick={()=>runVerify()} disabled={isVerifying}>
+                  {isVerifying?'⟳ RUNNING...':'▶ RUN ALL CHECKS'}
+                </button>
+              </div>
+            </div>
+
+            {/* Loading */}
+            {isVerifying&&(
+              <div style={{...S.panel,textAlign:'center',padding:40}}>
+                <div style={{color:C.accent,letterSpacing:4,fontSize:11,marginBottom:8}}>RUNNING 5 SUBAGENTS...</div>
+                <div style={{display:'flex',justifyContent:'center',gap:16}}>
+                  {['PriceVerifier','AlgoVerifier','RLVerifier','StrategyVerifier','EmailVerifier'].map(a=>(
+                    <div key={a} style={{textAlign:'center'}}>
+                      <div style={{width:8,height:8,borderRadius:'50%',background:C.accent,margin:'0 auto 4px',animation:'pulse 1s infinite'}}/>
+                      <div style={{fontSize:8,color:C.textDim}}>{a.replace('Verifier','')}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Idle state */}
+            {!verifyReport&&!isVerifying&&(
+              <div style={{...S.panel,textAlign:'center',padding:48,color:C.textDim}}>
+                <div style={{fontSize:24,marginBottom:8}}>🤖</div>
+                <div style={{fontSize:12,color:C.textBright,marginBottom:6}}>5 Subagents Ready</div>
+                <div style={{fontSize:10}}>PriceVerifier · AlgoVerifier · RLVerifier · StrategyVerifier · EmailVerifier</div>
+                <div style={{fontSize:9,marginTop:8}}>Checks run automatically after each screen. Click to run manually.</div>
+              </div>
+            )}
+
+            {verifyReport&&(
+              <>
+                {/* Overall status */}
+                <div style={{background:verifyReport.overall==='error'?'#ff336611':verifyReport.overall==='warn'?'#ffd70011':'#00ff8811',
+                  border:`1px solid ${verifyReport.overall==='error'?C.red:verifyReport.overall==='warn'?C.yellow:C.green}`,
+                  borderRadius:8,padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{color:verifyReport.overall==='error'?C.red:verifyReport.overall==='warn'?C.yellow:C.green,fontWeight:700,fontSize:12}}>
+                    {verifyReport.overall==='error'?'🔴':verifyReport.overall==='warn'?'🟡':'🟢'} {verifyReport.summary.message}
+                  </span>
+                  <span style={{fontSize:9,color:C.textDim}}>{verifyReport.summary.oks.length}/5 OK</span>
+                </div>
+
+                {/* ── AUTO-IMPROVEMENT PANEL ── */}
+                {verifyReport.improvements&&(
+                  <div style={{...S.panel,border:`1px solid ${C.purple}60`}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                      <div style={{fontSize:11,fontWeight:700,color:C.purple}}>🔧 AUTO-IMPROVEMENT ENGINE</div>
+                      <div style={{display:'flex',gap:6}}>
+                        {verifyReport.improvements.shouldRetrain&&(
+                          <span style={{fontSize:9,padding:'2px 8px',borderRadius:3,background:'#a855f720',border:`1px solid ${C.purple}`,color:C.purple}}>
+                            ⟳ RETRAIN QUEUED
+                          </span>
+                        )}
+                        {Object.keys(verifyReport.improvements.settingPatches||{}).length>0&&(
+                          <span style={{fontSize:9,padding:'2px 8px',borderRadius:3,background:'#00d4ff20',border:`1px solid ${C.accent}`,color:C.accent}}>
+                            ⚙️ SETTINGS PATCHED
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {verifyReport.improvements.actions.map((a,i)=>(
+                      <div key={i} style={{display:'flex',gap:10,padding:'8px 0',borderBottom:`1px solid ${C.border}30`,alignItems:'flex-start'}}>
+                        <span style={{fontSize:14,minWidth:20}}>
+                          {a.type==='ok'?'✅':a.type==='retrain'?'🔄':a.type==='setting'?'⚙️':a.type==='mode'?'🔀':'ℹ️'}
+                        </span>
+                        <div style={{flex:1}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                            <div style={{fontSize:10,fontWeight:700,color:a.severity==='ok'?C.green:a.severity==='error'?C.red:C.yellow}}>{a.label}</div>
+                            <span style={{fontSize:8,color:C.textDim,fontStyle:'italic'}}>{a.fix}</span>
+                          </div>
+                          <div style={{fontSize:9,color:C.textDim,marginTop:2}}>{a.detail}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {Object.keys(verifyReport.improvements.settingPatches||{}).length>0&&(
+                      <div style={{marginTop:8,padding:'6px 10px',background:C.surface,borderRadius:4}}>
+                        <div style={{fontSize:9,color:C.textDim,marginBottom:4}}>APPLIED PATCHES</div>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          {Object.entries(verifyReport.improvements.settingPatches).map(([k,v])=>(
+                            <span key={k} style={{fontSize:9,padding:'2px 8px',borderRadius:3,background:`${C.accent}20`,color:C.accent}}>
+                              {k}: {typeof v==='number'&&v<1?`${(v*100).toFixed(0)}%`:v}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Action items */}
+                {verifyReport.feedback?.length>0&&(
+                  <div style={S.panel}>
+                    <div style={S.pt}>⚠️ ACTION ITEMS ({verifyReport.feedback.length})</div>
+                    {verifyReport.feedback.map((f,i)=>(
+                      <div key={i} style={{display:'flex',gap:10,padding:'8px 0',borderBottom:`1px solid ${C.border}40`,alignItems:'flex-start'}}>
+                        <span style={{fontSize:9,padding:'2px 6px',borderRadius:3,border:`1px solid ${f.severity==='error'?C.red:C.yellow}`,
+                          color:f.severity==='error'?C.red:C.yellow,whiteSpace:'nowrap',marginTop:1}}>
+                          {f.severity==='error'?'ERROR':'WARN'}
+                        </span>
+                        <div>
+                          <div style={{fontSize:10,color:C.textBright}}>{f.label}</div>
+                          <div style={{fontSize:9,color:C.textDim,marginTop:2}}>{f.detail}</div>
+                          <div style={{fontSize:8,color:C.textDim,opacity:0.6,marginTop:1}}>{f.agent}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 5 agent detail cards */}
+                {[
+                  {key:'price',   icon:'💲', name:'PriceVerifier',    desc:'Real vs mock price detection'},
+                  {key:'algo',    icon:'📡', name:'AlgoVerifier',     desc:'Signal logic & data leakage'},
+                  {key:'rl',      icon:'🧠', name:'RLVerifier',       desc:'Reward convergence & Sharpe'},
+                  {key:'strategy',icon:'📈', name:'StrategyVerifier', desc:'Win rate, P&L, trade quality'},
+                  {key:'email',   icon:'✉️', name:'EmailVerifier',    desc:'Email delivery & API health'},
+                ].map(({key,icon,name,desc})=>{
+                  const a=verifyReport.agents[key]
+                  if(!a) return null
+                  const agentColor=a.status==='error'?C.red:a.status==='warn'?C.yellow:C.green
+                  return (
+                    <div key={key} style={{...S.panel,border:`1px solid ${agentColor}40`}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                        <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <span style={{width:8,height:8,borderRadius:'50%',background:agentColor,display:'inline-block',boxShadow:`0 0 8px ${agentColor}`}}/>
+                          <span style={{fontSize:11,fontWeight:700,color:C.textBright}}>{icon} {name}</span>
+                          <span style={{fontSize:9,color:C.textDim}}>{desc}</span>
+                        </div>
+                        <span style={{...S.badge(agentColor),fontSize:9}}>{a.status.toUpperCase()}</span>
+                      </div>
+                      <div style={{fontSize:10,color:C.textDim,marginBottom:8}}>{a.summary}</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:0}}>
+                        {a.checks.map((c,i)=>(
+                          <div key={i} style={{display:'flex',gap:8,padding:'5px 0',borderTop:`1px solid ${C.border}20`,alignItems:'flex-start'}}>
+                            <span style={{color:c.status==='pass'?C.green:c.status==='fail'?C.red:C.yellow,fontSize:12,minWidth:16,marginTop:0}}>
+                              {c.status==='pass'?'✓':c.status==='fail'?'✗':'!'}
+                            </span>
+                            <div style={{flex:1}}>
+                              <div style={{fontSize:9,color:c.status==='pass'?C.textDim:C.textBright}}>{c.label}</div>
+                              {(c.status==='fail'||c.status==='warn')&&(
+                                <div style={{fontSize:9,color:c.status==='fail'?C.red:C.yellow,marginTop:2,lineHeight:1.4}}>{c.detail}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        )}
 
         {/* ══ MODELS ══ */}
         {tab==='models'&&(

@@ -1,37 +1,29 @@
 /**
- * autoTrader.js — Fixed automated trading engine
+ * autoTrader.js — Automated trading engine
  *
- * Bugs fixed:
- *   1. p.ticker undefined → now passed as separate param
- *   2. requireMultiModel actually enforced
- *   3. All position lookups use passed-in state, not stale closures
+ * Defaults: always ON, 10% take-profit, 7% stop-loss
+ * All thresholds are adjustable in the app UI.
  */
 
 import { checkExitSignal, checkPortfolioHeat, EXIT_PRESETS } from './exitStrategy.js'
 
 export const AUTO_TRADE_DEFAULTS = {
-  enabled: false,
+  enabled: true,              // ← always on by default
   minScore: 0.25,
   minConfidence: 0.55,
   maxPositions: 8,
-  positionSizePct: 0.08,   // 8% of total portfolio value per trade
-  exitPreset: 'moderate',
-  requireMultiModel: true, // require 2+ models to agree before buying
+  positionSizePct: 0.08,      // 8% of portfolio per position
+  takeProfitPct: 0.10,        // 10% take-profit  (user-adjustable)
+  stopLossPct: 0.07,          // 7%  stop-loss    (user-adjustable)
+  trailingStopPct: 0.05,      // 5%  trailing stop from peak
+  requireMultiModel: true,
   checkIntervalMs: 60000,
 }
 
 /**
  * Evaluate whether to auto-trade a given asset.
- * All state passed explicitly — no closures, no stale reads.
- *
- * @param {string} ticker
- * @param {object} signal  — from generateSignal()
- * @param {object} ensemble — from runEnsemble(), may be null
- * @param {array}  bars
- * @param {object} portfolio — current portfolio snapshot
- * @param {object} prices   — current prices map
- * @param {object} settings — autoTradeSettings
- * @returns {{ action, reason, urgency, tradeValue? }} | null
+ * Uses inline take-profit / stop-loss from settings (not EXIT_PRESETS)
+ * so UI sliders directly control live exit behavior.
  */
 export function evaluateAutoTrade(ticker, signal, ensemble, bars, portfolio, prices, settings) {
   const s = { ...AUTO_TRADE_DEFAULTS, ...settings }
@@ -41,53 +33,81 @@ export function evaluateAutoTrade(ticker, signal, ensemble, bars, portfolio, pri
   const pos = portfolio.positions[ticker]
   const numPositions = Object.keys(portfolio.positions).length
 
-  // ── 1. Exit checks (highest priority) ────────────────────────────────
+  // ── 1. Exit checks (highest priority) ─────────────────────────────────────
   if (pos) {
-    const preset = EXIT_PRESETS[s.exitPreset] || EXIT_PRESETS.moderate
-    const exit = checkExitSignal(pos, px, signal, bars, preset)
-    if (exit?.shouldExit) {
-      return { action: 'CLOSE', reason: exit.reason, urgency: exit.urgency, pnlPct: exit.pnlPct }
+    const curPx = px
+    const entryPx = pos.avgPrice || curPx
+    const pnlPct = pos.side === 'LONG'
+      ? (curPx - entryPx) / entryPx
+      : (entryPx - curPx) / entryPx
+
+    // Take-profit hit
+    if (pnlPct >= s.takeProfitPct) {
+      return {
+        action: 'CLOSE',
+        reason: `✅ Take-profit ${(s.takeProfitPct*100).toFixed(0)}% reached (+${(pnlPct*100).toFixed(1)}%)`,
+        urgency: 'TAKE_PROFIT',
+        pnlPct
+      }
+    }
+
+    // Hard stop-loss hit
+    if (pnlPct <= -s.stopLossPct) {
+      return {
+        action: 'CLOSE',
+        reason: `🛑 Stop-loss ${(s.stopLossPct*100).toFixed(0)}% hit (${(pnlPct*100).toFixed(1)}%)`,
+        urgency: 'STOP_LOSS',
+        pnlPct
+      }
+    }
+
+    // Trailing stop: if peak existed and price fell trailing% below it
+    const peakPx = pos.highWater || entryPx
+    const drawFromPeak = (peakPx - curPx) / peakPx
+    if (drawFromPeak >= s.trailingStopPct) {
+      return {
+        action: 'CLOSE',
+        reason: `📉 Trailing stop ${(s.trailingStopPct*100).toFixed(0)}% from peak (${(pnlPct*100).toFixed(1)}%)`,
+        urgency: 'TRAIL_STOP',
+        pnlPct
+      }
+    }
+
+    // Strong SELL signal override
+    if (signal.signal === 'SELL' && signal.score < -s.minScore && signal.confidence > s.minConfidence) {
+      return {
+        action: 'CLOSE',
+        reason: `📡 Strong SELL signal (score ${signal.score.toFixed(3)}, conf ${(signal.confidence*100).toFixed(0)}%)`,
+        urgency: 'SIGNAL',
+        pnlPct
+      }
     }
   }
 
-  // ── 2. Portfolio heat — reduce exposure if down 7% ─────────────────
-  const heat = checkPortfolioHeat(portfolio, prices, 0.07)
+  // ── 2. Portfolio heat — reduce if portfolio down 7% ───────────────────────
+  const heat = checkPortfolioHeat(portfolio, prices, s.stopLossPct)
   if (heat?.shouldReduce && pos) {
-    return { action: 'CLOSE', reason: `Portfolio heat: ${heat.reason}`, urgency: 'HIGH', pnlPct: null }
+    return { action: 'CLOSE', reason: `🌡️ Portfolio heat: ${heat.reason}`, urgency: 'HIGH', pnlPct: null }
   }
 
-  // ── 3. Auto-sell on strong SELL signal ────────────────────────────
-  if (pos && signal.signal === 'SELL' && signal.score < -s.minScore && signal.confidence > s.minConfidence) {
-    return { action: 'CLOSE', reason: `SELL signal (score ${signal.score.toFixed(3)}, conf ${(signal.confidence*100).toFixed(0)}%)`, urgency: 'AUTO', pnlPct: null }
-  }
-
-  // ── 4. Entry: only if no existing position ────────────────────────
+  // ── 3. Entry ───────────────────────────────────────────────────────────────
   if (pos) return null
-
-  // Check signal thresholds
   if (signal.score <= s.minScore || signal.confidence <= s.minConfidence) return null
-
-  // Max positions guard
   if (numPositions >= s.maxPositions) return null
 
-  // requireMultiModel: at least 2 of 3 models must agree (BUY)
+  // requireMultiModel: at least 2 of ensemble models must agree BUY
   if (s.requireMultiModel && ensemble) {
-    const modelSignals = Object.values(ensemble.models || {}).map(m => m?.signal)
-    const buyVotes = modelSignals.filter(s => s === 'BUY').length
-    if (buyVotes < 2) {
-      return null // not enough model agreement
-    }
+    const buyVotes = Object.values(ensemble.models || {}).filter(m => m?.signal === 'BUY').length
+    if (buyVotes < 2) return null
   }
 
-  // Cash check — FIX: compute portfolio total value correctly
-  // positions is { ticker: {shares, avgPrice, ...} } — ticker is the KEY not a property
+  // Cash check
   let positionsValue = 0
-  for (const [posTicker, posData] of Object.entries(portfolio.positions)) {
-    positionsValue += posData.shares * (prices[posTicker]?.price || posData.avgPrice)
+  for (const [pt, pd] of Object.entries(portfolio.positions)) {
+    positionsValue += pd.shares * (prices[pt]?.price || pd.avgPrice)
   }
   const totalValue = portfolio.cash + positionsValue
   const tradeValue = totalValue * s.positionSizePct
-
   if (portfolio.cash < tradeValue * 0.8) return null
 
   const modelAgreement = ensemble
@@ -96,7 +116,7 @@ export function evaluateAutoTrade(ticker, signal, ensemble, bars, portfolio, pri
 
   return {
     action: 'BUY',
-    reason: `Score ${signal.score.toFixed(3)} · Conf ${(signal.confidence*100).toFixed(0)}%${modelAgreement ? ` · ${modelAgreement}/4 models agree` : ''}`,
+    reason: `Score ${signal.score.toFixed(3)} · Conf ${(signal.confidence*100).toFixed(0)}%${modelAgreement ? ` · ${modelAgreement}/4 models` : ''}`,
     urgency: 'AUTO',
     tradeValue,
   }

@@ -93,17 +93,17 @@ export default async function handler(req, res) {
       // Top picks with prices and entry zones
       (picks.length > 0 ? section('⭐ High Conviction — Watch at Open', C.purple,
         picks.slice(0,6).map((s,i) => {
-          const px = s.price || 0
-          const entry = s.entryZone || (px > 0 ? `$${(px*0.99).toFixed(2)}–$${(px*1.005).toFixed(2)}` : '—')
-          const stop  = s.stopLoss || (px > 0 ? `$${(px*0.92).toFixed(2)}` : '—')
-          const target = s.target || (px > 0 ? `$${(px*1.10).toFixed(2)}` : '—')
+          const px = s.price != null && s.price > 0 ? s.price : null  // null = no live price
+          const entry = px ? (s.entryZone || `$${(px*0.99).toFixed(2)}–$${(px*1.005).toFixed(2)}`) : '—'
+          const stop  = px ? (s.stopLoss  || `$${(px*0.92).toFixed(2)}`) : '—'
+          const target= px ? (s.target    || `$${(px*1.10).toFixed(2)}`) : '—'
           const ensStr = s.ensemble ? badge(s.ensemble, s.ensemble==='BUY'?C.green:C.red) : ''
           return `<div style="padding:12px 0;border-bottom:1px solid ${C.border}40">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span style="color:#fff;font-weight:700;font-size:14px">#${i+1} ${s.ticker}</span>
               <span>${ensStr}${badge('Conf '+Math.round((s.confidence||0)*100)+'%', C.accent)}</span>
             </div>
-            ${px > 0 ? `<div style="color:#fff;font-size:16px;font-weight:700;margin:4px 0">$${px.toFixed(2)}</div>` : ''}
+            ${px ? `<div style="color:#fff;font-size:16px;font-weight:700;margin:4px 0">$${px.toFixed(2)}</div>` : `<div style="font-size:10px;color:${C.dim};margin:4px 0">Price: add Polygon API key for live prices</div>`}
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
               <div style="background:${C.surface};padding:6px 8px;border-radius:4px">
                 <div style="font-size:8px;color:${C.dim}">ENTRY ZONE</div>
@@ -217,14 +217,15 @@ export default async function handler(req, res) {
       // Open positions
       section('Open Positions at Close', null,
         (positions||[]).length > 0
-          ? (positions||[]).map(p =>
-              `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:4px;padding:8px 0;border-bottom:1px solid ${C.border}30">
+          ? (positions||[]).map(p => {
+              const showPx = p.currentPrice != null && p.currentPrice > 0
+              return `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:4px;padding:8px 0;border-bottom:1px solid ${C.border}30">
                 <span style="color:#fff;font-weight:700">${p.ticker}</span>
                 <span style="color:${C.dim}">${p.shares}sh</span>
-                <span style="color:${C.dim}">$${(p.currentPrice||p.avgPrice||0).toFixed(2)}</span>
+                <span style="color:${C.dim}">${showPx?'$'+(p.currentPrice).toFixed(2):'—'}</span>
                 <span style="color:${(p.pnl||0)>=0?C.green:C.red};font-weight:700;text-align:right">${(p.pnl||0)>=0?'+':''}$${(p.pnl||0).toFixed(0)}</span>
               </div>`
-            ).join('') +
+            }).join('') +
             `<div style="display:flex;gap:16px;margin-top:10px;font-size:10px">
               ${bestPosition ? `<span style="color:${C.green}">★ Best: ${bestPosition.ticker} +${(bestPosition.pnlPct||0).toFixed(1)}%</span>` : ''}
               ${worstPosition ? `<span style="color:${C.red}">▼ Worst: ${worstPosition.ticker} ${(worstPosition.pnlPct||0).toFixed(1)}%</span>` : ''}
@@ -235,10 +236,10 @@ export default async function handler(req, res) {
       // Watchlist for tomorrow
       (nextDayWatchlist && nextDayWatchlist.length > 0 ? section('🔭 Watch Tomorrow at Open', C.purple,
         nextDayWatchlist.slice(0,6).map((s,i) => {
-          const px = s.price || 0
+          const px = s.price != null && s.price > 0 ? s.price : null
           return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${C.border}30">
             <span style="color:#fff;font-weight:700">#${i+1} ${s.ticker}</span>
-            ${px > 0 ? `<span style="color:${C.dim}">$${px.toFixed(2)}</span>` : ''}
+            ${px ? `<span style="color:${C.dim}">$${px.toFixed(2)}</span>` : ''}
             ${badge('BUY', C.green)}
             <span style="color:${C.accent}">Score ${(s.score||0).toFixed(3)}</span>
             <span style="color:${C.dim};font-size:9px">Conf ${Math.round((s.confidence||0)*100)}%</span>
