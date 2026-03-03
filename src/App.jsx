@@ -9,6 +9,7 @@ import { trainEpisodes, stopTraining } from './rl/trainer.js'
 import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist, saveWatchlist, loadSettings, saveSettings, resetPortfolio as resetStored, normalizeTicket, displayTicker } from './data/persistence.js'
 import { EXIT_PRESETS, checkExitSignal, checkPortfolioHeat } from './trading/exitStrategy.js'
 import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
+import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
@@ -93,6 +94,8 @@ export default function App() {
   const [selectedAsset,setSelectedAsset]=useState(null)
   const [weights,setWeights]=useState(agent.weights)
   const [rlProgress,setRlProgress]=useState(null)
+  const [ensembleResults,setEnsembleResults]=useState({})
+  const [activeModel,setActiveModel]=useState('ensemble')
   const [nextScreenIn,setNextScreenIn]=useState(SCREEN_INTERVAL)
   const [autoScreenEnabled,setAutoScreenEnabled]=useState(true)
   const [signalFilter,setSignalFilter]=useState(null)
@@ -194,6 +197,12 @@ export default function App() {
       if(b&&b.length>0) newSignals[t]=generateSignal(b,agent.weights)
     }
 
+    // Compute ensemble for all assets
+    const ensMap = {}
+    for (const [t,b] of Object.entries(barsMap)) {
+      try { ensMap[t] = runEnsemble(b, agent.weights, barsMap['SPY']||null, null) } catch(e){}
+    }
+    setEnsembleResults(ensMap)
     setScreenResult({ stocks:stocks.slice(0,15), timestamp:new Date(), mock:!isLive })
     setActiveStocks(tickers)
     setBars(barsMap)
@@ -407,6 +416,7 @@ export default function App() {
     {id:'news',icon:'📰',label:'NEWS'},
     {id:'paper',icon:'💼',label:'PAPER'},
     {id:'auto',icon:'🤖',label:'AUTO'},
+    {id:'models',icon:'📊',label:'MODELS'},
     {id:'train',icon:'🧠',label:'TRAIN'},
   ]
 
@@ -1090,6 +1100,147 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+
+        {/* ══ MODELS ══ */}
+        {tab==='models'&&(
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              {['ensemble',...MODEL_INFO.map(m=>m.id)].map(id=>(
+                <button key={id} style={{...S.btn(activeModel===id?'active':'default'),fontSize:10}}
+                  onClick={()=>setActiveModel(id)}>
+                  {id==='ensemble'?'⚡ ENSEMBLE':(MODEL_INFO.find(m=>m.id===id)?.icon||'') + ' ' + (MODEL_INFO.find(m=>m.id===id)?.name?.split(' ')[0]||id)}
+                </button>
+              ))}
+            </div>
+
+            {activeModel==='ensemble'&&(
+              <>
+                <div style={S.panel}>
+                  <div style={S.pt}>⚡ ENSEMBLE — ALL MODELS COMBINED</div>
+                  <div style={{fontSize:10,color:C.textDim,marginBottom:12,lineHeight:1.6}}>
+                    Combines Technical (35%), Fama-French 5F (25%), Temporal CNN (25%), News Sentiment (15%) into one confidence-weighted signal.
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5}}>
+                    {Object.entries(ensembleResults).filter(([t])=>activeStocks.includes(t)).slice(0,15).map(([ticker,ens])=>{
+                      if(!ens) return null
+                      const score=ens.score||0, hue=score>0?'144,255,136':'255,51,102'
+                      return (
+                        <div key={ticker} onClick={()=>{setSelectedAsset(ticker);setTab('signals')}}
+                          style={{padding:'8px 4px',borderRadius:4,cursor:'pointer',background:`rgba(${hue},${Math.abs(score)*0.4})`,border:`1px solid rgba(${hue},${Math.abs(score)*0.6})`,textAlign:'center'}}>
+                          <div style={{fontSize:10,fontWeight:700,color:C.textBright}}>{ticker}</div>
+                          <div style={{fontSize:9,color:score>0?C.green:C.red}}>{ens.signal}</div>
+                          <div style={{fontSize:8,color:C.textDim}}>{(ens.confidence*100).toFixed(0)}% conf</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div style={S.panel}>
+                  <div style={S.pt}>SIGNAL BREAKDOWN BY MODEL</div>
+                  <div style={{overflowX:'auto'}}>
+                    <table style={{...S.table,minWidth:520}}>
+                      <thead>
+                        <tr>
+                          <th style={S.th}>TICKER</th>
+                          {MODEL_INFO.slice(0,4).map(m=><th key={m.id} style={S.th}>{m.icon} {m.name.split(' ')[0].toUpperCase()}</th>)}
+                          <th style={S.th}>ENSEMBLE</th>
+                          <th style={S.th}>CONFIDENCE</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeStocks.slice(0,12).map(ticker=>{
+                          const ens=ensembleResults[ticker]
+                          if(!ens) return null
+                          return (
+                            <tr key={ticker} style={{cursor:'pointer'}} onClick={()=>{setSelectedAsset(ticker);setTab('signals')}}>
+                              <td style={{...S.td,fontWeight:700,color:C.textBright}}>{ticker}</td>
+                              {MODEL_INFO.slice(0,4).map(m=>{
+                                const res=ens.models?.[m.id]
+                                return <td key={m.id} style={S.td}>{res?<span style={S.sigBadge(res.signal)}>{res.signal}</span>:<span style={{color:C.textDim,fontSize:9}}>—</span>}</td>
+                              })}
+                              <td style={S.td}><span style={{...S.sigBadge(ens.signal),fontWeight:700}}>{ens.signal}</span></td>
+                              <td style={{...S.td,color:ens.confidence>0.7?C.green:ens.confidence>0.4?C.yellow:C.textDim}}>{(ens.confidence*100).toFixed(0)}%</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {activeModel!=='ensemble'&&(()=>{
+              const modelDef=MODEL_INFO.find(m=>m.id===activeModel)
+              if(!modelDef) return null
+              return (
+                <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                  <div style={{...S.panel,border:`1px solid ${C.purple}`}}>
+                    <div style={{fontSize:16,fontWeight:700,color:C.purple,marginBottom:8}}>{modelDef.icon} {modelDef.name}</div>
+                    <div style={{fontSize:11,color:C.text,lineHeight:1.6,marginBottom:8}}>{modelDef.desc}</div>
+                    <div style={{fontSize:10,color:C.accent,padding:'6px 10px',background:C.accentDim,borderRadius:4}}>📚 {modelDef.sota}</div>
+                  </div>
+                  <div style={S.panel}>
+                    <div style={S.pt}>RESULTS — ALL SCREENED STOCKS</div>
+                    <div style={{overflowX:'auto'}}>
+                      <table style={{...S.table,minWidth:420}}>
+                        <thead>
+                          <tr>
+                            <th style={S.th}>TICKER</th>
+                            <th style={S.th}>SCORE</th>
+                            <th style={S.th}>SIGNAL</th>
+                            {activeModel==='famaFrench'&&<><th style={S.th}>BETA</th><th style={S.th}>ALPHA</th><th style={S.th}>RMW</th><th style={S.th}>TYPE</th></>}
+                            {activeModel==='tcn'&&<><th style={S.th}>PATTERN</th><th style={S.th}>ALIGNMENT</th><th style={S.th}>VOL SURGE</th></>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeStocks.slice(0,15).map(ticker=>{
+                            const ens=ensembleResults[ticker]
+                            const res=ens?.models?.[activeModel]
+                            if(!res) return null
+                            return (
+                              <tr key={ticker} style={{cursor:'pointer'}} onClick={()=>{setSelectedAsset(ticker);setTab('signals')}}>
+                                <td style={{...S.td,fontWeight:700,color:C.textBright}}>{ticker}</td>
+                                <td style={{...S.td,color:res.score>0?C.green:C.red,fontWeight:700}}>{res.score?.toFixed(3)}</td>
+                                <td style={S.td}><span style={S.sigBadge(res.signal)}>{res.signal}</span></td>
+                                {activeModel==='famaFrench'&&<>
+                                  <td style={{...S.td,color:res.beta>1.2?C.orange:C.text}}>{res.beta}</td>
+                                  <td style={{...S.td,color:res.alpha>0?C.green:C.red}}>{res.alpha!=null?(res.alpha*100).toFixed(2)+'%':'—'}</td>
+                                  <td style={{...S.td,color:res.rmw>0?C.green:C.red}}>{res.rmw?.toFixed(2)}</td>
+                                  <td style={{...S.td,fontSize:9,color:C.textDim}}>{res.interpretation?.value}</td>
+                                </>}
+                                {activeModel==='tcn'&&<>
+                                  <td style={{...S.td,color:res.pattern?.includes('UP')?C.green:res.pattern?.includes('DOWN')?C.red:C.textDim,fontSize:9}}>{res.pattern}</td>
+                                  <td style={{...S.td,color:res.maAlignment>0?C.green:C.red}}>{res.maAlignment?.toFixed(2)}</td>
+                                  <td style={{...S.td,color:res.volSurge>1.5?C.orange:C.textDim}}>{res.volSurge?.toFixed(1)}x</td>
+                                </>}
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
+            <div style={S.panel}>
+              <div style={S.pt}>🗺️ FUTURE MODELS ROADMAP — SOTA IN QUANT FINANCE</div>
+              {FUTURE_MODELS.map((m,i)=>(
+                <div key={i} style={{padding:'10px 12px',background:C.surface,borderRadius:6,border:`1px solid ${C.border}`,marginBottom:8}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.textBright}}>{m.name}</div>
+                    <span style={{fontSize:9,padding:'2px 6px',borderRadius:2,border:`1px solid ${m.difficulty==='Very High'?C.red:m.difficulty==='High'?C.orange:C.yellow}`,color:m.difficulty==='Very High'?C.red:m.difficulty==='High'?C.orange:C.yellow}}>{m.difficulty}</span>
+                  </div>
+                  <div style={{fontSize:10,color:C.textDim,lineHeight:1.5}}>{m.desc}</div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
