@@ -6,6 +6,9 @@ import { generateSignal } from './signals/signals.js'
 import { backtestPortfolio } from './backtest/backtester.js'
 import { agent } from './rl/agent.js'
 import { trainEpisodes, stopTraining } from './rl/trainer.js'
+import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
+import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist, saveWatchlist, loadSettings, saveSettings, resetPortfolio as resetStoredPortfolio, normalizeTicket, displayTicker } from './data/persistence.js'
+import { getCryptoBars } from './data/polygonClient.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
@@ -144,11 +147,17 @@ export default function App() {
   const [nextScreenIn, setNextScreenIn] = useState(SCREEN_INTERVAL_SECS)
   const [autoScreenEnabled, setAutoScreenEnabled] = useState(true)
   const [hasAutoRun, setHasAutoRun] = useState(false)
+  const [signalFilter, setSignalFilter] = useState(null) // null=all, 'BUY', 'SELL'
   const [customCriteria, setCustomCriteria] = useState(DEFAULT_CRITERIA)
+  const [ensembleResults, setEnsembleResults] = useState({})
+  const [activeModel, setActiveModel] = useState('ensemble')
   // Paper trading
-  const [portfolio, setPortfolio] = useState(createPortfolio())
-  const [tradeLog, setTradeLog] = useState([])
-  const [tradeSize, setTradeSize] = useState(2000)
+  const [portfolio, setPortfolio] = useState(() => loadPortfolio())
+  const [tradeLog, setTradeLog] = useState(() => loadTradeLog())
+  const [tradeSize, setTradeSize] = useState(() => loadSettings().tradeSize || 2000)
+  const [watchlist, setWatchlist] = useState(() => loadWatchlist())
+  const [watchlistInput, setWatchlistInput] = useState('')
+  const [addTickerError, setAddTickerError] = useState('')
   // News
   const [marketNews, setMarketNews] = useState([])
   const [tickerNews, setTickerNews] = useState([])
@@ -161,6 +170,12 @@ export default function App() {
   const countdownRef = useRef(null)
   const isScreeningRef = useRef(false)
   const apiKey = getApiKey()
+
+  // ── Persistence — auto-save on changes ──────────────────────────────────
+  useEffect(() => { savePortfolio(portfolio) }, [portfolio])
+  useEffect(() => { saveTradeLog(tradeLog) }, [tradeLog])
+  useEffect(() => { saveWatchlist(watchlist) }, [watchlist])
+  useEffect(() => { saveSettings({ tradeSize, screenProfile, autoScreenEnabled: true }) }, [tradeSize, screenProfile])
 
   // ── Screener ──────────────────────────────────────────────────────────────
   const runScreener = useCallback(async (profile, custom) => {
@@ -195,7 +210,14 @@ export default function App() {
 
     const barsMap = {}
     stocks.forEach(s => { barsMap[s.ticker] = (s.bars||[]).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v,vw:b.vw||b.c})) })
-    ALL_CRYPTO.forEach(t => { barsMap[t] = mockBars(CRYPTO_DISPLAY[t]) })
+    ALL_CRYPTO.forEach(t => { if(!barsMap[t]) barsMap[t] = mockBars(CRYPTO_DISPLAY[t]) })
+
+    // Compute ensemble for all assets
+    const ensembleMap = {}
+    for (const [t,b] of Object.entries(barsMap)) {
+      try { ensembleMap[t] = runEnsemble(b, agent.weights, barsMap['SPY']||null, null) } catch(e){}
+    }
+    setEnsembleResults(ensembleMap)
 
     const priceMap = {}
     stocks.forEach(s => { priceMap[s.ticker] = { price:s.price, changePct:s.change1d, change:s.price*s.change1d/100, volume:s.volume } })
@@ -329,8 +351,27 @@ export default function App() {
   }
 
   function resetPortfolio() {
-    setPortfolio(createPortfolio())
+    resetStoredPortfolio()
+    setPortfolio(loadPortfolio())
     setTradeLog([])
+  }
+
+  // ── Watchlist management ─────────────────────────────────────────────────
+  function addToWatchlist(input) {
+    const ticker = normalizeTicket(input)
+    if (!ticker || ticker.length < 1) { setAddTickerError('Enter a ticker symbol'); return }
+    if (watchlist.includes(ticker)) { setAddTickerError(`${displayTicker(ticker)} already in watchlist`); return }
+    setAddTickerError('')
+    setWatchlist(prev => [...prev, ticker])
+    setWatchlistInput('')
+    // Add mock bars if not already tracked
+    if (!bars[ticker]) {
+      setBars(prev => ({ ...prev, [ticker]: mockBars(displayTicker(ticker)) }))
+    }
+  }
+
+  function removeFromWatchlist(ticker) {
+    setWatchlist(prev => prev.filter(t => t !== ticker))
   }
 
   // ── RL Training ───────────────────────────────────────────────────────────
@@ -393,6 +434,7 @@ export default function App() {
     { id:'news', icon:'📰', label:'NEWS' },
     { id:'signals', icon:'📡', label:'SIGNALS' },
     { id:'paper', icon:'💼', label:'PAPER' },
+    { id:'models', icon:'🧠', label:'MODELS' },
     { id:'train', icon:'🤖', label:'TRAIN' },
   ]
 
@@ -468,14 +510,19 @@ export default function App() {
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
                   {[
-                    { label:'FOUND', value:screenResult.stocks.length, color:C.accent },
-                    { label:'BUY', value:buys.length, color:C.green },
-                    { label:'SELL', value:sells.length, color:C.red },
-                    { label:'UPDATED', value:screenResult.timestamp?.toLocaleTimeString(), color:C.textDim },
+                    { label:'ALL', value:screenResult.stocks.length, color:C.accent, filter:null },
+                    { label:'BUY ▲', value:buys.length, color:C.green, filter:'BUY' },
+                    { label:'SELL ▼', value:sells.length, color:C.red, filter:'SELL' },
+                    { label:'UPDATED', value:screenResult.timestamp?.toLocaleTimeString(), color:C.textDim, filter:undefined },
                   ].map(m=>(
-                    <div key={m.label} style={S.panel}>
+                    <div key={m.label}
+                      onClick={m.filter!==undefined ? ()=>setSignalFilter(f=>f===m.filter?null:m.filter) : undefined}
+                      style={{ ...S.panel, cursor:m.filter!==undefined?'pointer':'default',
+                        border:`1px solid ${signalFilter===m.filter&&m.filter!==undefined?m.color:C.border}`,
+                        background:signalFilter===m.filter&&m.filter!==undefined?m.color+'11':C.panel }}>
                       <div style={S.panelTitle}>{m.label}</div>
                       <div style={{ fontSize:18, fontWeight:700, color:m.color }}>{m.value}</div>
+                      {m.filter!==undefined && <div style={{ fontSize:8, color:C.textDim, marginTop:2 }}>{signalFilter===m.filter?'CLICK TO CLEAR':'CLICK TO FILTER'}</div>}
                     </div>
                   ))}
                 </div>
@@ -484,7 +531,7 @@ export default function App() {
                 <div style={S.panel}>
                   <div style={S.panelTitle}>SIGNAL HEATMAP {screenResult.mock&&<span style={{ color:C.yellow }}>(MOCK)</span>}</div>
                   <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:5 }}>
-                    {sortedSignals.slice(0,20).map(a=>{
+                    {sortedSignals.filter(a=>!signalFilter||a.sig?.signal===signalFilter).slice(0,20).map(a=>{
                       const score=a.sig?.score||0, hue=score>0?'144,255,136':'255,51,102'
                       return (
                         <div key={a.ticker} onClick={()=>{ setSelectedAsset(a.ticker); setTab('signals') }}
@@ -506,7 +553,7 @@ export default function App() {
                         <tr>{['#','TICKER','PRICE','1D%','5D%','MOMENTUM','VOL SURGE','TREND','SCORE','SIGNAL'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr>
                       </thead>
                       <tbody>
-                        {screenResult.stocks.map((s,i)=>{
+                        {screenResult.stocks.filter(s=>!signalFilter||(signals[s.ticker]||{signal:'HOLD'}).signal===signalFilter).map((s,i)=>{
                           const sig=signals[s.ticker]||{signal:'HOLD',score:0}
                           return (
                             <tr key={s.ticker} style={{ cursor:'pointer' }} onClick={()=>{ setSelectedAsset(s.ticker); setTab('signals') }}>
@@ -708,32 +755,92 @@ export default function App() {
         {tab==='paper' && (
           <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
 
+            {/* ── Watchlist & Add Ticker ── */}
+            <div style={S.panel}>
+              <div style={S.panelTitle}>📌 WATCHLIST — PERSISTENT LIVE P&L</div>
+              <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+                <input
+                  value={watchlistInput}
+                  onChange={e=>{ setWatchlistInput(e.target.value.toUpperCase()); setAddTickerError('') }}
+                  onKeyDown={e=>{ if(e.key==='Enter') addToWatchlist(watchlistInput) }}
+                  placeholder="Add ticker (NVDA, BTC, ETH...)"
+                  style={{ background:C.surface, border:`1px solid ${addTickerError?C.red:C.border}`, color:C.textBright, padding:'8px 12px', borderRadius:4, fontFamily:'inherit', fontSize:11, flex:1, minWidth:160, outline:'none' }}/>
+                <button style={{ ...S.btn('primary'), padding:'8px 16px' }} onClick={()=>addToWatchlist(watchlistInput)}>
+                  + ADD
+                </button>
+              </div>
+              {addTickerError && <div style={{ fontSize:10, color:C.red, marginBottom:8 }}>{addTickerError}</div>}
+
+              {/* Watchlist table with live P&L */}
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ ...S.table, minWidth:480 }}>
+                  <thead>
+                    <tr>{['TICKER','PRICE','1D%','SIGNAL','POSITION','AVG PRICE','UNREAL P&L',''].map(h=><th key={h} style={S.th}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {watchlist.map(ticker=>{
+                      const display = displayTicker(ticker)
+                      const px = prices[ticker] || prices[display]
+                      const pos = portfolio.positions[ticker]
+                      const curPx = px?.price || pos?.avgPrice || 0
+                      const unreal = pos ? (pos.side==='LONG' ? (curPx-pos.avgPrice)*pos.shares : (pos.avgPrice-curPx)*pos.shares) : null
+                      const sig = signals[ticker] || { signal:'HOLD', score:0 }
+                      return (
+                        <tr key={ticker} style={{ cursor:'pointer' }} onClick={()=>{ setSelectedAsset(ticker); setTab('signals') }}>
+                          <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{display}</td>
+                          <td style={S.td}>{px?.price ? `$${px.price.toFixed(2)}` : <span style={{ color:C.textDim }}>loading...</span>}</td>
+                          <td style={{ ...S.td, color:px?.changePct>=0?C.green:C.red }}>{px?.changePct!=null?`${px.changePct.toFixed(2)}%`:'—'}</td>
+                          <td style={S.td}><span style={S.sigBadge(sig.signal)}>{sig.signal}</span></td>
+                          <td style={S.td}>{pos ? <span style={{ color:pos.side==='LONG'?C.green:C.red }}>{pos.side} {pos.shares}sh</span> : <span style={{ color:C.textDim }}>—</span>}</td>
+                          <td style={S.td}>{pos ? `$${pos.avgPrice.toFixed(2)}` : '—'}</td>
+                          <td style={{ ...S.td, fontWeight:pos?700:400, color:unreal!=null?(unreal>=0?C.green:C.red):C.textDim }}>
+                            {unreal!=null ? `${unreal>=0?'+':''}$${unreal.toFixed(0)}` : '—'}
+                          </td>
+                          <td style={S.td}>
+                            <button style={{ background:'transparent', border:'none', color:C.textDim, cursor:'pointer', fontSize:12, padding:'0 4px' }}
+                              onClick={e=>{ e.stopPropagation(); removeFromWatchlist(ticker) }}>✕</button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {watchlist.length===0&&(
+                      <tr><td colSpan={8} style={{ ...S.td, textAlign:'center', color:C.textDim, padding:24 }}>Add tickers above to track them</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize:9, color:C.textDim, marginTop:8 }}>
+                💾 Watchlist saved to your browser — persists across sessions. Tap any row to trade.
+              </div>
+            </div>
+
             {/* Portfolio summary */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:8 }}>
               {[
                 { label:'PORTFOLIO VALUE', value:`$${curPortfolioValue.toFixed(0)}`, color:C.textBright },
                 { label:'TOTAL P&L', value:`${totalPnL>=0?'+':''}$${totalPnL.toFixed(0)}`, color:totalPnL>=0?C.green:C.red },
-                { label:'CASH', value:`$${portfolio.cash.toFixed(0)}`, color:C.accent },
+                { label:'CASH REMAINING', value:`$${portfolio.cash.toFixed(0)}`, color:C.accent },
                 { label:'OPEN POSITIONS', value:Object.keys(portfolio.positions).length, color:C.purple },
               ].map(m=>(
                 <div key={m.label} style={S.panel}>
                   <div style={S.panelTitle}>{m.label}</div>
                   <div style={{ fontSize:18, fontWeight:700, color:m.color }}>{m.value}</div>
+                  {m.label==='PORTFOLIO VALUE'&&<div style={{ fontSize:9, color:C.textDim, marginTop:4 }}>💾 Auto-saved · survives refresh</div>}
                 </div>
               ))}
             </div>
 
             {/* Equity curve */}
-            {portfolio.history.length > 2 && (
+            {portfolio.history && portfolio.history.length > 2 && (
               <div style={S.panel}>
-                <div style={S.panelTitle}>PORTFOLIO EQUITY CURVE</div>
+                <div style={S.panelTitle}>EQUITY CURVE — ALL TIME</div>
                 <ResponsiveContainer width="100%" height={140}>
                   <AreaChart data={portfolio.history.map((h,i)=>({i,value:h.value}))}>
-                    <defs><linearGradient id="pg2" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.green} stopOpacity={0.3}/><stop offset="95%" stopColor={C.green} stopOpacity={0}/></linearGradient></defs>
+                    <defs><linearGradient id="pg2" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={totalPnL>=0?C.green:C.red} stopOpacity={0.3}/><stop offset="95%" stopColor={totalPnL>=0?C.green:C.red} stopOpacity={0}/></linearGradient></defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                     <XAxis dataKey="i" tick={false}/>
                     <YAxis tick={{ fontSize:8, fill:C.textDim }} tickFormatter={v=>`$${(v/1000).toFixed(0)}K`}/>
-                    <ReferenceLine y={STARTING_CAPITAL} stroke={C.border} strokeDasharray="4 4"/>
+                    <ReferenceLine y={100000} stroke={C.border} strokeDasharray="4 4"/>
                     <Tooltip contentStyle={{ background:C.panel, border:`1px solid ${C.border}`, fontSize:10 }} formatter={v=>[`$${v.toFixed(0)}`,'Value']}/>
                     <Area type="monotone" dataKey="value" stroke={totalPnL>=0?C.green:C.red} fill="url(#pg2)" strokeWidth={2} dot={false}/>
                   </AreaChart>
@@ -741,66 +848,68 @@ export default function App() {
               </div>
             )}
 
-            {/* Open positions */}
+            {/* Open positions with close button */}
             {Object.keys(portfolio.positions).length > 0 && (
               <div style={S.panel}>
-                <div style={S.panelTitle}>OPEN POSITIONS</div>
-                <table style={S.table}>
-                  <thead><tr>{['TICKER','SIDE','SHARES','AVG PRICE','CUR PRICE','UNREAL P&L',''].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {Object.entries(portfolio.positions).map(([ticker,pos])=>{
-                      const curPx=prices[ticker]?.price||pos.avgPrice
-                      const unreal=pos.side==='LONG'?(curPx-pos.avgPrice)*pos.shares:(pos.avgPrice-curPx)*pos.shares
-                      return (
-                        <tr key={ticker}>
-                          <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{ticker}</td>
-                          <td style={S.td}><span style={S.sigBadge(pos.side==='LONG'?'BUY':'SELL')}>{pos.side}</span></td>
-                          <td style={S.td}>{pos.shares}</td>
-                          <td style={S.td}>{fmt.price(pos.avgPrice)}</td>
-                          <td style={S.td}>{fmt.price(curPx)}</td>
-                          <td style={{ ...S.td, color:unreal>=0?C.green:C.red, fontWeight:700 }}>${unreal.toFixed(0)}</td>
-                          <td style={S.td}>
-                            <button style={{ ...S.btn('danger'), padding:'2px 8px', fontSize:9 }} onClick={()=>closePosition(ticker)}>CLOSE</button>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                <div style={S.panelTitle}>OPEN POSITIONS — LIVE P&L</div>
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ ...S.table, minWidth:480 }}>
+                    <thead><tr>{['TICKER','SIDE','SHARES','AVG IN','CURRENT','UNREAL P&L','%',''].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {Object.entries(portfolio.positions).map(([ticker,pos])=>{
+                        const curPx = prices[ticker]?.price || prices[displayTicker(ticker)]?.price || pos.avgPrice
+                        const unreal = pos.side==='LONG' ? (curPx-pos.avgPrice)*pos.shares : (pos.avgPrice-curPx)*pos.shares
+                        const unrealPct = (unreal / (pos.avgPrice*pos.shares)) * 100
+                        return (
+                          <tr key={ticker}>
+                            <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{displayTicker(ticker)}</td>
+                            <td style={S.td}><span style={S.sigBadge(pos.side==='LONG'?'BUY':'SELL')}>{pos.side}</span></td>
+                            <td style={S.td}>{pos.shares}</td>
+                            <td style={S.td}>${pos.avgPrice.toFixed(2)}</td>
+                            <td style={S.td}>${curPx.toFixed(2)}</td>
+                            <td style={{ ...S.td, fontWeight:700, color:unreal>=0?C.green:C.red }}>{unreal>=0?'+':''}${unreal.toFixed(0)}</td>
+                            <td style={{ ...S.td, color:unrealPct>=0?C.green:C.red }}>{unrealPct>=0?'+':''}{unrealPct.toFixed(1)}%</td>
+                            <td style={S.td}><button style={{ ...S.btn('danger'), padding:'2px 10px', fontSize:9 }} onClick={()=>closePosition(ticker)}>CLOSE</button></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
-            {/* Trade to execute */}
+            {/* Trade size + reset */}
             <div style={S.panel}>
-              <div style={S.panelTitle}>EXECUTE TRADE</div>
-              <div style={{ fontSize:11, color:C.textDim, marginBottom:10 }}>Go to SIGNALS tab to trade. Or close positions above.</div>
-              <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <div style={S.panelTitle}>SETTINGS</div>
+              <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
                 <span style={{ fontSize:10, color:C.textDim }}>Trade size: $</span>
                 <input type="number" value={tradeSize} onChange={e=>setTradeSize(parseInt(e.target.value)||1000)}
                   style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.textBright, padding:'6px 10px', borderRadius:4, width:90, fontFamily:'inherit', fontSize:11 }}/>
-                <button style={{ ...S.btn('danger'), marginLeft:'auto' }} onClick={resetPortfolio}>↺ RESET PORTFOLIO</button>
+                <span style={{ fontSize:9, color:C.textDim }}>Starting capital: $100,000</span>
+                <button style={{ ...S.btn('danger'), marginLeft:'auto' }} onClick={()=>{ if(window.confirm('Reset portfolio? This cannot be undone.')) resetPortfolio() }}>↺ RESET</button>
               </div>
             </div>
 
             {/* Trade log */}
             <div style={S.panel}>
-              <div style={S.panelTitle}>TRADE LOG — {tradeLog.length} TRADES</div>
+              <div style={S.panelTitle}>TRADE LOG — {tradeLog.length} TRADES (PERSISTED)</div>
               {tradeLog.length===0 ? (
-                <div style={{ textAlign:'center', padding:32, color:C.textDim }}>No trades yet — go to SIGNALS and click BUY or SELL</div>
+                <div style={{ textAlign:'center', padding:24, color:C.textDim }}>No trades yet — go to SIGNALS and click BUY or SELL</div>
               ) : (
-                <div style={{ overflowX:'auto' }}>
+                <div style={{ overflowX:'auto', maxHeight:300, overflowY:'auto' }}>
                   <table style={{ ...S.table, minWidth:400 }}>
                     <thead><tr>{['TIME','TICKER','SIDE','PRICE','SHARES','VALUE','P&L'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
                     <tbody>
                       {tradeLog.map(t=>(
                         <tr key={t.id}>
                           <td style={{ ...S.td, fontSize:9, color:C.textDim }}>{t.time}</td>
-                          <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{t.ticker}</td>
+                          <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{displayTicker(t.ticker)}</td>
                           <td style={S.td}><span style={S.sigBadge(t.side==='BUY'?'BUY':t.side==='SELL'?'SELL':'HOLD')}>{t.side}</span></td>
-                          <td style={S.td}>{fmt.price(t.price)}</td>
+                          <td style={S.td}>${t.price?.toFixed(2)||'—'}</td>
                           <td style={S.td}>{t.shares}</td>
                           <td style={S.td}>${t.value?.toFixed(0)}</td>
-                          <td style={{ ...S.td, color:t.pnl>=0?C.green:t.pnl<0?C.red:C.textDim }}>{t.pnl?`${t.pnl>=0?'+':''}$${t.pnl}`:'—'}</td>
+                          <td style={{ ...S.td, color:t.pnl>0?C.green:t.pnl<0?C.red:C.textDim }}>{t.pnl?`${t.pnl>=0?'+':''}$${t.pnl}`:'—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -885,6 +994,162 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+
+        {/* ══ MODELS ══ */}
+        {tab==='models' && (
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+
+            {/* Model selector */}
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {['ensemble',...MODEL_INFO.map(m=>m.id)].map(id=>(
+                <button key={id}
+                  style={{ ...S.btn(activeModel===id?'active':'default'), fontSize:10 }}
+                  onClick={()=>setActiveModel(id)}>
+                  {id==='ensemble'?'⚡ ENSEMBLE':MODEL_INFO.find(m=>m.id===id)?.icon+' '+MODEL_INFO.find(m=>m.id===id)?.name||id}
+                </button>
+              ))}
+            </div>
+
+            {/* Ensemble overview */}
+            {activeModel==='ensemble' && (
+              <>
+                <div style={S.panel}>
+                  <div style={S.panelTitle}>⚡ ENSEMBLE MODEL — ALL SIGNALS COMBINED</div>
+                  <div style={{ fontSize:11, color:C.textDim, lineHeight:1.6, marginBottom:12 }}>
+                    Combines Technical, Fama-French 5F, Temporal CNN, and News Sentiment into one weighted signal.
+                    Models with higher recent accuracy get more weight.
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:5 }}>
+                    {Object.entries(ensembleResults).filter(([t])=>activeStocks.includes(t)).slice(0,15).map(([ticker,ens])=>{
+                      if(!ens) return null
+                      const score=ens.score||0, hue=score>0?'144,255,136':'255,51,102'
+                      return (
+                        <div key={ticker} onClick={()=>{ setSelectedAsset(ticker); setTab('signals') }}
+                          style={{ padding:'8px 6px', borderRadius:4, cursor:'pointer', background:`rgba(${hue},${Math.abs(score)*0.4})`, border:`1px solid rgba(${hue},${Math.abs(score)*0.6})`, textAlign:'center' }}>
+                          <div style={{ fontSize:10, fontWeight:700, color:C.textBright }}>{ticker}</div>
+                          <div style={{ fontSize:9, color:score>0?C.green:C.red }}>{ens.signal}</div>
+                          <div style={{ fontSize:8, color:C.textDim }}>{(ens.confidence*100).toFixed(0)}% conf</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Model breakdown table */}
+                <div style={S.panel}>
+                  <div style={S.panelTitle}>SIGNAL BREAKDOWN BY MODEL</div>
+                  <div style={{ overflowX:'auto' }}>
+                    <table style={{ ...S.table, minWidth:500 }}>
+                      <thead>
+                        <tr>
+                          <th style={S.th}>TICKER</th>
+                          {MODEL_INFO.slice(0,4).map(m=><th key={m.id} style={S.th}>{m.icon} {m.name.split(' ')[0].toUpperCase()}</th>)}
+                          <th style={S.th}>ENSEMBLE</th>
+                          <th style={S.th}>CONFIDENCE</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeStocks.slice(0,12).map(ticker=>{
+                          const ens=ensembleResults[ticker]
+                          if(!ens) return null
+                          return (
+                            <tr key={ticker} style={{ cursor:'pointer' }} onClick={()=>{ setSelectedAsset(ticker); setTab('signals') }}>
+                              <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{ticker}</td>
+                              {MODEL_INFO.slice(0,4).map(m=>{
+                                const res=ens.models?.[m.id]
+                                return <td key={m.id} style={S.td}>{res?<span style={S.sigBadge(res.signal)}>{res.signal}</span>:<span style={{ color:C.textDim, fontSize:9 }}>—</span>}</td>
+                              })}
+                              <td style={S.td}><span style={{ ...S.sigBadge(ens.signal), fontWeight:700 }}>{ens.signal}</span></td>
+                              <td style={{ ...S.td, color:ens.confidence>0.7?C.green:ens.confidence>0.4?C.yellow:C.textDim }}>{(ens.confidence*100).toFixed(0)}%</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Individual model detail */}
+            {activeModel!=='ensemble' && (() => {
+              const modelDef = MODEL_INFO.find(m=>m.id===activeModel)
+              if(!modelDef) return null
+              return (
+                <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                  <div style={{ ...S.panel, border:`1px solid ${C.purple}` }}>
+                    <div style={{ fontSize:16, fontWeight:700, color:C.purple, marginBottom:8 }}>{modelDef.icon} {modelDef.name}</div>
+                    <div style={{ fontSize:11, color:C.text, lineHeight:1.6, marginBottom:8 }}>{modelDef.desc}</div>
+                    <div style={{ fontSize:10, color:C.accent, padding:'6px 10px', background:C.accentDim, borderRadius:4 }}>
+                      📚 USED BY: {modelDef.sota}
+                    </div>
+                  </div>
+
+                  <div style={S.panel}>
+                    <div style={S.panelTitle}>RESULTS — ALL SCREENED STOCKS</div>
+                    <div style={{ overflowX:'auto' }}>
+                      <table style={{ ...S.table, minWidth:400 }}>
+                        <thead>
+                          <tr>
+                            <th style={S.th}>TICKER</th>
+                            <th style={S.th}>SCORE</th>
+                            <th style={S.th}>SIGNAL</th>
+                            {activeModel==='famaFrench'&&<><th style={S.th}>BETA</th><th style={S.th}>ALPHA</th><th style={S.th}>RMW</th><th style={S.th}>TYPE</th></>}
+                            {activeModel==='tcn'&&<><th style={S.th}>PATTERN</th><th style={S.th}>ALIGNMENT</th><th style={S.th}>VOL SURGE</th></>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeStocks.slice(0,15).map(ticker=>{
+                            const ens=ensembleResults[ticker]
+                            const res=ens?.models?.[activeModel]
+                            if(!res) return null
+                            return (
+                              <tr key={ticker} style={{ cursor:'pointer' }} onClick={()=>{ setSelectedAsset(ticker); setTab('signals') }}>
+                                <td style={{ ...S.td, fontWeight:700, color:C.textBright }}>{ticker}</td>
+                                <td style={{ ...S.td, color:res.score>0?C.green:C.red, fontWeight:700 }}>{res.score?.toFixed(3)}</td>
+                                <td style={S.td}><span style={S.sigBadge(res.signal)}>{res.signal}</span></td>
+                                {activeModel==='famaFrench'&&<>
+                                  <td style={{ ...S.td, color:res.beta>1.2?C.orange:C.text }}>{res.beta}</td>
+                                  <td style={{ ...S.td, color:res.alpha>0?C.green:C.red }}>{(res.alpha*100).toFixed(2)}%</td>
+                                  <td style={{ ...S.td, color:res.rmw>0?C.green:C.red }}>{res.rmw?.toFixed(2)}</td>
+                                  <td style={{ ...S.td, fontSize:9, color:C.textDim }}>{res.interpretation?.value}</td>
+                                </>}
+                                {activeModel==='tcn'&&<>
+                                  <td style={{ ...S.td, color:res.pattern?.includes('UP')?C.green:res.pattern?.includes('DOWN')?C.red:C.textDim, fontSize:9 }}>{res.pattern}</td>
+                                  <td style={{ ...S.td, color:res.maAlignment>0?C.green:C.red }}>{res.maAlignment?.toFixed(2)}</td>
+                                  <td style={{ ...S.td, color:res.volSurge>1.5?C.orange:C.textDim }}>{res.volSurge?.toFixed(1)}x</td>
+                                </>}
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* SOTA roadmap */}
+            <div style={S.panel}>
+              <div style={S.panelTitle}>🗺️ FUTURE MODELS ROADMAP — SOTA IN QUANT FINANCE</div>
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                {FUTURE_MODELS.map((m,i)=>(
+                  <div key={i} style={{ padding:'10px 12px', background:C.surface, borderRadius:6, border:`1px solid ${C.border}` }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:C.textBright }}>{m.name}</div>
+                      <span style={{ fontSize:9, padding:'2px 6px', borderRadius:2, border:`1px solid ${m.difficulty==='Very High'?C.red:m.difficulty==='High'?C.orange:C.yellow}`, color:m.difficulty==='Very High'?C.red:m.difficulty==='High'?C.orange:C.yellow }}>
+                        {m.difficulty}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:10, color:C.textDim, lineHeight:1.5 }}>{m.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
