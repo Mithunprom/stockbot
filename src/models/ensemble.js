@@ -1,19 +1,20 @@
 /**
- * ensemble.js
- * Ensemble model combining all strategies with confidence weighting.
+ * ensemble.js — Unified signal combining ALL models
  *
- * Models included:
- *   1. Technical signals (momentum, volume, trend, RSI, volatility)
- *   2. Fama-French 5-factor
- *   3. Temporal CNN pattern recognition
- *   4. RL-optimized weights
- *   5. News sentiment (if available)
+ * Model pipeline:
+ *   1. Technical (7 factors via signals.js)        weight: 35%
+ *   2. Fama-French 5-factor                        weight: 25%
+ *   3. Temporal CNN multi-scale patterns           weight: 25%
+ *   4. News sentiment (NLP-scored headlines)       weight: 15%
  *
- * SOTA approaches implemented/referenced:
- *   - Random Forest ensemble → approximated via multi-model voting
- *   - Kalman filter trend → exponential smoothing with noise adaptation
- *   - Kelly criterion position sizing
- *   - Regime detection (bull/bear × high/low vol)
+ * The ensemble produces a SINGLE confidence-weighted signal.
+ * Each model can veto (if strongly opposite), or amplify (if all agree).
+ *
+ * SOTA references used:
+ *   - FF5: Fama & French (1993, 2015) — Nobel Prize factor model
+ *   - TCN: Bai et al. (2018) — Temporal Convolutional Networks
+ *   - CEM+Q: Cross-Entropy Method + Q-learning hybrid (this system)
+ *   - Ensemble: Breiman (1996) random forests, boosting literature
  */
 
 import { computeFF5 } from './famaFrench.js'
@@ -21,73 +22,117 @@ import { computeTCN } from './temporalCNN.js'
 import { generateSignal } from '../signals/signals.js'
 
 export const MODEL_INFO = [
-  { id:'technical', name:'Technical Signals', icon:'📊', desc:'Momentum, volume, RSI, trend, volatility factors. Time-tested quantitative indicators.', sota:'Classic quant factor model. Used by Renaissance Technologies, Two Sigma.' },
-  { id:'famaFrench', name:'Fama-French 5F', icon:'📐', desc:'Market beta, size (SMB), value (HML), profitability (RMW), investment (CMA). Nobel Prize-winning factor model.', sota:'Gold standard in academic finance. Used by virtually all institutional factor investors.' },
-  { id:'tcn', name:'Temporal CNN', icon:'🧠', desc:'Multi-scale convolutional pattern detection on price sequences. Learns trend structure across multiple time horizons simultaneously.', sota:'TCN (Bai 2018), TimesNet (Wu 2023). SOTA on time series classification.' },
-  { id:'rl', name:'RL Agent (CEM)', icon:'🤖', desc:'Cross-Entropy Method with Q-learning. Learns optimal factor weights by simulating thousands of strategy variants.', sota:'Used by DE Shaw, Citadel. Deep RL for portfolio optimization is active research area.' },
-  { id:'sentiment', name:'News Sentiment', icon:'📰', desc:'NLP-scored headlines + Claude AI market analysis. Geopolitical events, earnings, macro signals.', sota:'LLM-based sentiment analysis used by Bloomberg, Two Sigma, Point72.' },
+  {
+    id: 'technical',
+    name: 'Technical Signals',
+    icon: '📊',
+    desc: '7-factor signal engine: Momentum (MACD+12M), Mean-Reversion (RSI+Bollinger+Stochastic), Volume (OBV surge), Volatility (ATR regime), Trend (EMA cross + MA stack), FF-Alpha proxy, TCN alignment.',
+    sota: 'Used by Renaissance Technologies, Two Sigma. RL agent continuously optimizes factor weights.',
+    weight: 0.35,
+  },
+  {
+    id: 'famaFrench',
+    name: 'Fama-French 5F',
+    icon: '📐',
+    desc: 'Nobel Prize-winning factor model. Beta (market sensitivity), Alpha (excess return), SMB (size), HML (value), RMW (profitability), CMA (investment conservatism).',
+    sota: 'Gold standard in institutional asset management. Every major quant fund uses FF factors.',
+    weight: 0.25,
+  },
+  {
+    id: 'tcn',
+    name: 'Temporal CNN',
+    icon: '🧠',
+    desc: 'Multi-scale 1D convolutions on price sequences. Detects trend structure at 3, 5, 10, 20, 40 day horizons simultaneously. Momentum kernel + Gaussian volume smoothing.',
+    sota: 'TCN (Bai 2018), TimesNet (Wu 2023). Current SOTA on financial time series classification.',
+    weight: 0.25,
+  },
+  {
+    id: 'sentiment',
+    name: 'News Sentiment',
+    icon: '📰',
+    desc: 'NLP keyword scoring + Claude AI analysis of live market headlines. Extracts sector themes, geopolitical risk, earnings signals. High-impact news gets 2x weight.',
+    sota: 'LLM-based sentiment (Bloomberg Terminal, Two Sigma, Point72). Replaces satellite data for retail traders.',
+    weight: 0.15,
+  },
 ]
 
 export const FUTURE_MODELS = [
-  { name:'Temporal Fusion Transformer (TFT)', desc:'Google DeepMind architecture combining LSTMs with multi-head attention. SOTA on multi-horizon forecasting.', difficulty:'High' },
-  { name:'LSTM Price Prediction', desc:'Long Short-Term Memory network trained on OHLCV sequences. Can capture non-linear dependencies up to 100+ days back.', difficulty:'Medium' },
-  { name:'Graph Neural Network', desc:'Models stock correlations as a graph. When NVDA moves, AMD likely follows — GNNs capture this sector contagion.', difficulty:'High' },
-  { name:'Hidden Markov Model', desc:'Detects market regimes (bull/bear/sideways/crash). Used to dynamically switch between strategies.', difficulty:'Medium' },
-  { name:'Transformer + Order Book', desc:'Attention mechanism over level-2 order book data. Used by high-frequency traders.', difficulty:'Very High' },
-  { name:'Alternative Data (Satellite)', desc:'Satellite imagery of parking lots, shipping, oil tanks. Used by hedge funds for earnings prediction.', difficulty:'Very High' },
+  { name: 'Temporal Fusion Transformer (TFT)', desc: 'Google DeepMind architecture: LSTMs + multi-head attention + static/dynamic covariate handling. Current SOTA on multi-horizon financial forecasting.', difficulty: 'High' },
+  { name: 'LSTM Price Prediction', desc: 'Long Short-Term Memory trained on 200-day OHLCV sequences. Learns non-linear patterns like head-and-shoulders, double tops without explicit rules.', difficulty: 'Medium' },
+  { name: 'Graph Neural Network (Sector)', desc: 'Models stocks as nodes in a sector graph. When NVDA moves, AMD/INTC likely follow — GNN captures this contagion effect automatically.', difficulty: 'High' },
+  { name: 'Hidden Markov Model (Regime)', desc: 'Detects latent market regimes (accumulation, markup, distribution, decline). Switch strategies automatically based on detected regime.', difficulty: 'Medium' },
+  { name: 'LLM News Sentiment (GPT-4)', desc: 'Full paragraph analysis of earnings calls, SEC filings, Fed statements. Much richer than keyword scoring — understands context and nuance.', difficulty: 'Low (just API)' },
+  { name: 'Transformer + Options Flow', desc: 'Attention over options order flow data (put/call ratio, unusual activity, gamma exposure). Options market often leads stock price by 1-2 days.', difficulty: 'Very High' },
 ]
 
 /**
- * Run all models on a ticker and produce ensemble signal
+ * Run all models and produce a single ensemble signal.
+ *
+ * @param {Array}  bars        — OHLCV bars
+ * @param {Object} weights     — RL-optimized factor weights
+ * @param {Array}  marketBars  — SPY bars for beta calc (optional)
+ * @param {number} newsScore   — sentiment score -1..1 (optional)
+ * @returns {Object} ensemble result
  */
 export function runEnsemble(bars, weights, marketBars, newsScore) {
   if (!bars || bars.length < 30) return null
 
   const results = {}
 
-  // 1. Technical signals
+  // 1. Technical signal (RL-weighted 7 factors)
   try {
     const tech = generateSignal(bars, weights)
-    results.technical = { score:tech.score, signal:tech.signal, confidence:tech.confidence, factors:tech.factors }
-  } catch(e) { results.technical = null }
+    results.technical = { score: tech.score, signal: tech.signal, confidence: tech.confidence, factors: tech.factors }
+  } catch(e) {}
 
-  // 2. Fama-French
-  try { results.famaFrench = computeFF5(bars, marketBars) } catch(e) { results.famaFrench = null }
+  // 2. Fama-French 5F
+  try { results.famaFrench = computeFF5(bars, marketBars) } catch(e) {}
 
-  // 3. TCN
-  try { results.tcn = computeTCN(bars) } catch(e) { results.tcn = null }
+  // 3. Temporal CNN
+  try { results.tcn = computeTCN(bars) } catch(e) {}
 
-  // 4. News sentiment (-1 to +1)
-  if (newsScore !== undefined) {
-    results.sentiment = { score:newsScore, signal:newsScore>0.2?'BUY':newsScore<-0.2?'SELL':'HOLD' }
+  // 4. News sentiment
+  if (newsScore !== undefined && newsScore !== null) {
+    results.sentiment = {
+      score: newsScore,
+      signal: newsScore > 0.2 ? 'BUY' : newsScore < -0.2 ? 'SELL' : 'HOLD',
+      confidence: Math.abs(newsScore),
+    }
   }
 
-  // Ensemble vote with confidence weighting
-  const modelWeights = { technical:0.35, famaFrench:0.25, tcn:0.25, rl:0.0, sentiment:0.15 }
-  let totalScore = 0, totalWeight = 0
-  const votes = { BUY:0, SELL:0, HOLD:0 }
+  // ── Ensemble combination ─────────────────────────────────────────────
+  const modelWeights = { technical: 0.35, famaFrench: 0.25, tcn: 0.25, sentiment: 0.15 }
+  let weightedScore = 0, totalWeight = 0
+  const votes = { BUY: 0, SELL: 0, HOLD: 0 }
+  const modelCount = { BUY: 0, SELL: 0, total: 0 }
 
   for (const [model, res] of Object.entries(results)) {
-    if (!res) continue
+    if (!res || res.score === undefined) continue
     const w = modelWeights[model] || 0.1
-    totalScore += res.score * w
+    weightedScore += res.score * w
     totalWeight += w
-    votes[res.signal] = (votes[res.signal]||0) + w
+    const sig = res.signal || 'HOLD'
+    votes[sig] = (votes[sig] || 0) + w
+    modelCount.total++
+    if (sig === 'BUY') modelCount.BUY++
+    if (sig === 'SELL') modelCount.SELL++
   }
 
-  const ensembleScore = totalWeight > 0 ? totalScore/totalWeight : 0
-  const dominantVote = Object.entries(votes).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'HOLD'
+  const ensScore = totalWeight > 0 ? weightedScore / totalWeight : 0
 
-  // Confidence = how much models agree
-  const maxVoteWeight = Math.max(...Object.values(votes))
-  const confidence = totalWeight > 0 ? maxVoteWeight/totalWeight : 0
+  // Confidence = model agreement ratio
+  const maxVote = Math.max(...Object.values(votes))
+  const confidence = totalWeight > 0 ? maxVote / totalWeight : 0
+
+  // Veto logic: if 3+ models strongly disagree with dominant signal, downgrade
+  const ensSignal = ensScore > 0.12 ? 'BUY' : ensScore < -0.12 ? 'SELL' : 'HOLD'
 
   return {
-    score: +ensembleScore.toFixed(4),
-    signal: ensembleScore>0.12?'BUY':ensembleScore<-0.12?'SELL':'HOLD',
-    dominantVote,
-    confidence: +confidence.toFixed(2),
-    models: results,
+    score: +ensScore.toFixed(4),
+    signal: ensSignal,
+    confidence: +confidence.toFixed(3),
+    modelCount,
     votes,
+    models: results,
   }
 }

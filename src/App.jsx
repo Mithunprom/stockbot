@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { screenStocks, SCREENING_PROFILES, DEFAULT_CRITERIA } from './data/screener.js'
-import { fetchMarketNews, fetchTickerNews, scoreWithClaude } from './data/news.js'
+import { fetchMarketNews, fetchTickerNews, scoreWithClaude, extractNewsStocks, clearNewsCache } from './data/news.js'
 import { generateSignal, calcRSI, calcMACD, calcBollingerBands, calcATR } from './signals/signals.js'
 import { backtestPortfolio } from './backtest/backtester.js'
 import { agent } from './rl/agent.js'
@@ -10,7 +10,7 @@ import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist
 import { EXIT_PRESETS, checkExitSignal, checkPortfolioHeat } from './trading/exitStrategy.js'
 import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
-import { fetchDynamicUniverse, getUniverseLabel, ALL_SEED } from './data/universe.js'
+import { fetchDynamicUniverse, getUniverseLabel } from './data/universe.js'
 import { fetchCryptoPrices, buildCryptoBars } from './data/cryptoPrices.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
@@ -121,6 +121,7 @@ export default function App() {
   const EMAIL_TO = 'mithunghosh404@gmail.com'
   // News
   const [marketNews,setMarketNews]=useState([])
+  const [newsStocks,setNewsStocks]=useState([]) // tickers surfaced by news
   const [tickerNews,setTickerNews]=useState([])
   const [aiSentiment,setAiSentiment]=useState(null)
 
@@ -171,8 +172,8 @@ export default function App() {
 
     // Build mock stocks
     // Fetch dynamic universe — live top movers + most active if API available
-    const universeTickers = await fetchDynamicUniverse(apiKey)
-    setUniverseLabel(getUniverseLabel(!!apiKey))
+    const universeTickers = await fetchDynamicUniverse(apiKey, newsStocks, watchlist)
+    setUniverseLabel(getUniverseLabel(!!apiKey, newsStocks.length))
     const mockStocks=universeTickers.slice(0,25).map(ticker=>{
       const b=mockBars(ticker)
       const n=b.length
@@ -225,10 +226,24 @@ export default function App() {
       if(b&&b.length>0) newSignals[t]=generateSignal(b,agent.weights)
     }
 
-    // Compute ensemble for all assets
+    // Score news sentiment per ticker
+    const newsSentimentMap = {}
+    if(typeof marketNews !== 'undefined') {
+      for(const n of (marketNews||[])) {
+        for(const t of (n.tickers||[])) {
+          if(!newsSentimentMap[t]) newsSentimentMap[t]=[]
+          newsSentimentMap[t].push(n.sentiment?.score||0)
+        }
+      }
+    }
+    // Compute ensemble for all assets with news sentiment wired in
     const ensMap = {}
     for (const [t,b] of Object.entries(barsMap)) {
-      try { ensMap[t] = runEnsemble(b, agent.weights, barsMap['SPY']||null, null) } catch(e){}
+      try {
+        const sentScores = newsSentimentMap[t]
+        const sentScore = sentScores?.length ? sentScores.reduce((a,x)=>a+x,0)/sentScores.length : null
+        ensMap[t] = runEnsemble(b, agent.weights, barsMap['SPY']||null, sentScore)
+      } catch(e){}
     }
     setEnsembleResults(ensMap)
     setScreenResult({ stocks:stocks.slice(0,15), timestamp:new Date(), mock:!isLive })
@@ -428,9 +443,38 @@ export default function App() {
   }
 
   // ── News ──────────────────────────────────────────────────────────────────
-  async function loadMarketNews() {
-    const news=await fetchMarketNews(10); setMarketNews(news)
+  async function loadMarketNews(force=false) {
+    if(force) clearNewsCache()
+    const news=await fetchMarketNews(12,force)
+    setMarketNews(news)
     const ai=await scoreWithClaude(news); if(ai) setAiSentiment(ai)
+    // Extract tickers mentioned in today's news and surface them
+    const extracted=extractNewsStocks(news)
+    setNewsStocks(extracted)
+    // Auto-add high-conviction news tickers to active universe
+    if(extracted.length>0) {
+      const newTickers=extracted.filter(c=>Math.abs(c.score)>0.5).map(c=>c.ticker).filter(t=>!activeStocks.includes(t))
+      if(newTickers.length>0) {
+        setActiveStocks(prev=>[...new Set([...prev,...newTickers])].slice(0,25))
+        // Generate bars+signals for new tickers
+        const newBarsMap={}
+        for(const t of newTickers) {
+          if(!bars[t]) { const b=mockBars(t); newBarsMap[t]=b }
+        }
+        if(Object.keys(newBarsMap).length>0) {
+          setBars(prev=>({...prev,...newBarsMap}))
+          const newPrices={}
+          for(const [t,b] of Object.entries(newBarsMap)) {
+            const last=b[b.length-1],prev2=b[b.length-2]
+            newPrices[t]={ price:last.c, changePct:(last.c-prev2.c)/prev2.c*100, volume:last.v }
+          }
+          setPrices(prev=>({...prev,...newPrices}))
+          const newSigs={}
+          for(const [t,b] of Object.entries(newBarsMap)) newSigs[t]=generateSignal(b,agent.weights)
+          setSignals(prev=>({...prev,...newSigs}))
+        }
+      }
+    }
   }
   async function loadTickerNews(ticker) { setTickerNews([]); setTickerNews(await fetchTickerNews(ticker,5)) }
 
@@ -557,7 +601,7 @@ export default function App() {
                       return (
                         <div key={a.ticker} onClick={()=>{setSelectedAsset(a.ticker);setTab('signals')}}
                           style={{padding:'7px 4px',borderRadius:4,cursor:'pointer',background:`rgba(${hue},${Math.abs(score)*0.4})`,border:`1px solid rgba(${hue},${Math.abs(score)*0.7})`,textAlign:'center'}}>
-                          <div style={{fontSize:10,fontWeight:700,color:C.textBright}}>{a.display}</div>
+                          <div style={{fontSize:10,fontWeight:700,color:C.textBright}}>{a.display}{newsStocks.find(n=>n.ticker===a.ticker)?'📰':''}</div>
                           <div style={{fontSize:8,color:score>0?C.green:score<0?C.red:C.textDim}}>{score>=0?'+':''}{score.toFixed(2)}</div>
                           {isCrypto&&<div style={{fontSize:7,color:C.purple}}>CRYPTO</div>}
                           {a.px?.price&&<div style={{fontSize:8,color:C.textDim}}>{fmt.price(a.px.price)}</div>}
@@ -571,10 +615,9 @@ export default function App() {
                   <div style={S.pt}>RANKED STOCKS {signalFilter&&`— ${signalFilter} ONLY`}</div>
                   <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
                     <table style={{...S.table,minWidth:580}}>
-                      <thead><tr>{['#','TICKER','PRICE','1D%','5D%','RSI','MOMENTUM','VOL SURGE','TREND','SCORE','SIGNAL'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                      <thead><tr>{['#','TICKER','PRICE','1D%','RSI','TECH','FF5','TCN','SENTIMENT','ENSEMBLE','CONF'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
                       <tbody>
                         {filteredStocks.map((s,i)=>{
-                          const sig=signals[s.ticker]||{signal:'HOLD',score:0}
                           const rsi=s.bars?calcRSI(s.bars.map(b=>b.c),14):50
                           return (
                             <tr key={s.ticker} style={{cursor:'pointer'}} onClick={()=>{setSelectedAsset(s.ticker);setTab('signals')}}>
@@ -758,7 +801,7 @@ export default function App() {
         {tab==='news'&&(
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
             <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-              <button style={S.btn('primary')} onClick={loadMarketNews}>⟳ REFRESH</button>
+              <button style={S.btn('primary')} onClick={()=>loadMarketNews(true)}>⟳ REFRESH LIVE</button>
               <button style={S.btn('warn')} onClick={()=>sendEmail('daily_briefing',{
                 buys:sortedSignals.filter(a=>a.sig?.signal==='BUY').slice(0,8).map(a=>({ticker:a.display,score:a.sig.score,confidence:a.sig.confidence,reason:`${a.sig.signal}`})),
                 sells:sortedSignals.filter(a=>a.sig?.signal==='SELL').slice(0,5).map(a=>({ticker:a.display,score:a.sig.score,reason:'SELL signal'})),
@@ -777,6 +820,22 @@ export default function App() {
                   <div style={{fontSize:24,fontWeight:700,color:aiSentiment.sentiment==='BULLISH'?C.green:aiSentiment.sentiment==='BEARISH'?C.red:C.textDim}}>{aiSentiment.sentiment}</div>
                   <div style={{fontSize:11,color:C.text}}>{aiSentiment.reason}</div>
                 </div>
+              </div>
+            )}
+
+            {newsStocks.length>0&&(
+              <div style={{...S.panel,border:`1px solid ${C.purple}`}}>
+                <div style={S.pt}>📡 STOCKS SURFACED FROM TODAY'S NEWS — AUTO-ADDED TO SCREEN</div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
+                  {newsStocks.map(c=>(
+                    <div key={c.ticker} onClick={()=>{setSelectedAsset(c.ticker);setTab('signals')}}
+                      style={{background:c.score>0?'#00ff8822':'#ff336622',border:`1px solid ${c.score>0?C.green:C.red}`,borderRadius:6,padding:'6px 12px',cursor:'pointer'}}>
+                      <div style={{fontWeight:700,color:C.textBright,fontSize:11}}>{c.ticker}</div>
+                      <div style={{fontSize:9,color:c.score>0?C.green:C.red}}>{c.score>0?'BULLISH':'BEARISH'} · {c.count} mention{c.count>1?'s':''}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:9,color:C.textDim}}>These tickers appeared in today's news and have been added to the screener universe.</div>
               </div>
             )}
 
