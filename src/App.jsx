@@ -239,6 +239,7 @@ export default function App() {
           if(!newsSentimentMap[t]) newsSentimentMap[t]=[]
           newsSentimentMap[t].push(n.sentiment?.score||0)
         }
+    }
     // Compute ensemble for all assets with news sentiment wired in
     const ensMap = {}
     for (const [t,b] of Object.entries(barsMap)) {
