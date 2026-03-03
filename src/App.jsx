@@ -656,23 +656,31 @@ export default function App() {
                   <div style={S.pt}>RANKED STOCKS {signalFilter&&`— ${signalFilter} ONLY`}</div>
                   <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
                     <table style={{...S.table,minWidth:580}}>
-                      <thead><tr>{['#','TICKER','PRICE','1D%','RSI','TECH','FF5','TCN','SENTIMENT','ENSEMBLE','CONF'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                      <thead><tr>{['#','TICKER','PRICE','1D%','RSI','TECH','FF5','TCN','NEWS','ENSEMBLE','CONF'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
                       <tbody>
                         {filteredStocks.map((s,i)=>{
-                          const rsi=s.bars?calcRSI(s.bars.map(b=>b.c),14):50
+                          const techSig = signals[s.ticker]||{signal:'HOLD',score:0,confidence:0}
+                          const ens = ensembleResults[s.ticker]
+                          const ff5Sig  = ens?.models?.famaFrench?.signal||'—'
+                          const tcnSig  = ens?.models?.tcn?.signal||'—'
+                          const newsSig = ens?.models?.sentiment?.signal||'—'
+                          const ensSignal = ens?.signal || techSig.signal
+                          const ensConf   = ens?.confidence ?? techSig.confidence ?? 0
+                          const rsi = s.bars ? calcRSI(s.bars.map(b=>b.c),14) : 50
+                          const hasNews = newsStocks.find(n=>n.ticker===s.ticker)
                           return (
                             <tr key={s.ticker} style={{cursor:'pointer'}} onClick={()=>{setSelectedAsset(s.ticker);setTab('signals')}}>
                               <td style={{...S.td,color:C.textDim}}>{i+1}</td>
-                              <td style={{...S.td,color:C.textBright,fontWeight:700}}>{s.ticker}</td>
+                              <td style={{...S.td,color:C.textBright,fontWeight:700}}>{s.ticker}{hasNews?<span style={{color:C.purple,fontSize:8,marginLeft:3}}>📰</span>:null}</td>
                               <td style={S.td}>{fmt.price(s.price)}</td>
                               <td style={{...S.td,...fmt.chg(s.change1d)}}>{s.change1d?.toFixed(2)}%</td>
-                              <td style={{...S.td,...fmt.chg(s.change5d)}}>{s.change5d?.toFixed(2)}%</td>
                               <td style={{...S.td,color:rsi<30?C.green:rsi>70?C.red:C.textDim}}>{rsi.toFixed(0)}</td>
-                              <td style={{...S.td,color:s.scores.momentum>0?C.green:C.red}}>{(s.scores.momentum*100).toFixed(0)}%</td>
-                              <td style={{...S.td,color:s.scores.volumeSurge>0.5?C.orange:C.textDim}}>{s.scores.volumeSurge>0?'+':''}{(s.scores.volumeSurge*100).toFixed(0)}%</td>
-                              <td style={{...S.td,color:s.scores.trendBreak>0?C.green:C.red}}>{s.scores.trendBreak>0?'↑':'↓'}</td>
-                              <td style={{...S.td,color:s.composite>0?C.green:C.red,fontWeight:700}}>{s.composite.toFixed(3)}</td>
-                              <td style={S.td}><span style={S.sigBadge(sig.signal)}>{sig.signal}</span></td>
+                              <td style={S.td}><span style={S.sigBadge(techSig.signal)}>{techSig.signal}</span></td>
+                              <td style={S.td}><span style={S.sigBadge(ff5Sig)}>{ff5Sig}</span></td>
+                              <td style={S.td}><span style={S.sigBadge(tcnSig)}>{tcnSig}</span></td>
+                              <td style={S.td}><span style={S.sigBadge(newsSig)}>{newsSig}</span></td>
+                              <td style={{...S.td,fontWeight:700}}><span style={S.sigBadge(ensSignal)}>{ensSignal}</span></td>
+                              <td style={{...S.td,color:ensConf>0.65?C.green:ensConf>0.4?C.yellow:C.textDim,fontWeight:700}}>{(ensConf*100).toFixed(0)}%</td>
                             </tr>
                           )
                         })}
