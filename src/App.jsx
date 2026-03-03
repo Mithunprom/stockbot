@@ -58,15 +58,34 @@ const fmt = {
 }
 
 function mockBars(ticker, days=400) {
-  const seed=ticker.split('').reduce((a,c)=>a+c.charCodeAt(0),0)
-  const basePx = PRICE_SEEDS[ticker] || (50+(seed%200))  // use real price seed if known
-  const bars=[]; let price=basePx; const now=Date.now()
+  const charSeed=ticker.split('').reduce((a,c)=>a+c.charCodeAt(0),0)
+  const targetPx = PRICE_SEEDS[ticker] || (50+(charSeed%200))  // where price should END (today)
+
+  // Use a seeded pseudo-random so bars are deterministic per ticker (no flickering on re-render)
+  let rng = charSeed
+  const rand = () => { rng=(rng*1664525+1013904223)&0xffffffff; return (rng>>>0)/0xffffffff }
+
+  // Generate raw random walk
+  const raw=[]; let px=targetPx*(0.7+rand()*0.3) // start 70-100% of target
+  const now=Date.now()
   for(let i=days;i>=0;i--) {
-    const t=now-i*86400000,change=(Math.random()-0.48)*price*0.03,o=price
-    price=Math.max(1,price+change)
-    bars.push({t,o,h:Math.max(o,price)*(1+Math.random()*0.01),l:Math.min(o,price)*(1-Math.random()*0.01),c:price,v:1e6+Math.random()*5e6,vw:(o+price)/2})
+    const t=now-i*86400000
+    const drift=(rand()-0.485)*0.028  // slight upward bias, ~2.8% daily vol
+    const o=px
+    px=Math.max(targetPx*0.1, px*(1+drift))
+    raw.push({t,o,px})
   }
-  return bars
+
+  // Scale so the LAST bar closes exactly at targetPx
+  const finalPx=raw[raw.length-1].px
+  const scale=targetPx/finalPx
+  return raw.map(({t,o,px:c})=>{
+    const so=o*scale, sc=c*scale
+    const hi=Math.max(so,sc)*(1+rand()*0.008)
+    const lo=Math.min(so,sc)*(1-rand()*0.008)
+    const vol=5e5+rand()*4e6
+    return {t,o:+so.toFixed(2),h:+hi.toFixed(2),l:+lo.toFixed(2),c:+sc.toFixed(2),v:Math.round(vol),vw:+((so+sc)/2).toFixed(2)}
+  })
 }
 
 function getApiKey() {
