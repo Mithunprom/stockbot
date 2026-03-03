@@ -121,7 +121,9 @@ export default function App() {
   const EMAIL_TO = 'mithunghosh404@gmail.com'
   // News
   const [marketNews,setMarketNews]=useState([])
+  const marketNewsRef=useRef([])
   const [newsStocks,setNewsStocks]=useState([]) // tickers surfaced by news
+  const newsStocksRef=useRef([])
   const [tickerNews,setTickerNews]=useState([])
   const [aiSentiment,setAiSentiment]=useState(null)
 
@@ -156,6 +158,8 @@ export default function App() {
   useEffect(()=>{ barsRef.current=bars },[bars])
   useEffect(()=>{ ensembleRef.current=ensembleResults },[ensembleResults])
   useEffect(()=>{ tradeSizeRef.current=tradeSize },[tradeSize])
+  useEffect(()=>{ newsStocksRef.current=newsStocks },[newsStocks])
+  useEffect(()=>{ marketNewsRef.current=marketNews },[marketNews])
 
   // ── Persistence ──────────────────────────────────────────────────────────
   // Settings save (not critical for positions so useEffect is fine here)
@@ -172,8 +176,8 @@ export default function App() {
 
     // Build mock stocks
     // Fetch dynamic universe — live top movers + most active if API available
-    const universeTickers = await fetchDynamicUniverse(apiKey, newsStocks, watchlist)
-    setUniverseLabel(getUniverseLabel(!!apiKey, newsStocks.length))
+    const universeTickers = await fetchDynamicUniverse(apiKey, newsStocksRef.current, watchlist)
+    setUniverseLabel(getUniverseLabel(!!apiKey, newsStocksRef.current.length))
     const mockStocks=universeTickers.slice(0,25).map(ticker=>{
       const b=mockBars(ticker)
       const n=b.length
@@ -228,14 +232,11 @@ export default function App() {
 
     // Score news sentiment per ticker
     const newsSentimentMap = {}
-    if(typeof marketNews !== 'undefined') {
-      for(const n of (marketNews||[])) {
+    for(const n of (marketNewsRef.current||[])) {
         for(const t of (n.tickers||[])) {
           if(!newsSentimentMap[t]) newsSentimentMap[t]=[]
           newsSentimentMap[t].push(n.sentiment?.score||0)
         }
-      }
-    }
     // Compute ensemble for all assets with news sentiment wired in
     const ensMap = {}
     for (const [t,b] of Object.entries(barsMap)) {
@@ -446,11 +447,11 @@ export default function App() {
   async function loadMarketNews(force=false) {
     if(force) clearNewsCache()
     const news=await fetchMarketNews(12,force)
-    setMarketNews(news)
+    marketNewsRef.current=news; setMarketNews(news)
     const ai=await scoreWithClaude(news); if(ai) setAiSentiment(ai)
     // Extract tickers mentioned in today's news and surface them
     const extracted=extractNewsStocks(news)
-    setNewsStocks(extracted)
+    newsStocksRef.current=extracted; setNewsStocks(extracted)
     // Auto-add high-conviction news tickers to active universe
     if(extracted.length>0) {
       const newTickers=extracted.filter(c=>Math.abs(c.score)>0.5).map(c=>c.ticker).filter(t=>!activeStocks.includes(t))
