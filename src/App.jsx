@@ -12,6 +12,8 @@ import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
 import { fetchDynamicUniverse, getUniverseLabel } from './data/universe.js'
 import { fetchCryptoPrices, buildCryptoBars } from './data/cryptoPrices.js'
+import { equityCurveToCSV } from './backtest/backtester.js'
+import { isConfigured as alpacaConfigured, getMode as alpacaMode, syncPortfolio } from './trading/alpaca.js'
 // Realistic price seeds (March 2026) — used by mockBars when no API key
 const PRICE_SEEDS={AAPL:215,MSFT:395,NVDA:115,AMZN:210,GOOGL:175,META:620,TSLA:245,AVGO:185,AMD:108,ORCL:165,CRM:290,SNOW:145,PLTR:85,ARM:145,COIN:205,HOOD:42,RKLB:22,IONQ:38,ACHR:12,SMCI:35,MSTR:310,DDOG:115,UBER:82,ABNB:135,LMT:465,NOC:480,RTX:125,BA:175,GD:265,LHX:215,KTOS:28,HII:225,JPM:245,GS:555,V:345,MA:530,BAC:44,BLK:950,C:72,WFC:72,SCHW:78,LLY:820,NVO:85,ABBV:185,MRK:95,PFE:27,GILD:95,AMGN:285,REGN:720,ISRG:495,MRNA:42,XOM:105,CVX:155,OXY:48,SLB:42,COP:105,PSX:135,COST:935,WMT:95,HD:375,NKE:72,MCD:295,SBUX:82,TGT:125,MARA:14,RIOT:8,HUT:18,CLSK:12,BTBT:4,SPY:565,QQQ:480,IWM:210,ARKK:48,SOXL:28,XLK:215,XLE:92,XLF:48,XLV:142,GLD:285,TLT:92}
 
@@ -137,6 +139,8 @@ export default function App() {
   const [exitAlerts,setExitAlerts]=useState([]) // warnings shown in UI
   // Email
   const [emailStatus,setEmailStatus]=useState(null)
+  const [observationMode,setObservationMode]=useState(false)
+  const [algoMode,setAlgoMode]=useState('CEM')
   const [lastAlertSent,setLastAlertSent]=useState(()=>{ const v=localStorage.getItem('stockbot_alert_sent'); return v?parseInt(v):null })
   const [lastBriefingSent,setLastBriefingSent]=useState(()=>localStorage.getItem('stockbot_briefing_sent')||null)
   const EMAIL_TO = 'mithunghosh404@gmail.com'
@@ -362,25 +366,23 @@ export default function App() {
         })
         localStorage.setItem('stockbot_alert_sent', String(now)); setLastAlertSent(now)
       }
-      // Daily briefing — send at 7-8am if not sent today
+      // ☀️ Morning briefing — 8:00–9:00am, once per day
       const hour=new Date().getHours()
       const todayStr=new Date().toDateString()
-      if(hour>=8 && hour<=11 && lastBriefingSent!==todayStr) {
-        const sigs=signalsRef.current
-        const allAssets=Object.entries(sigs).map(([ticker,s])=>({ticker,...s}))
-        const buys=allAssets.filter(a=>a.signal==='BUY').sort((a,b)=>b.score-a.score)
-        const sells=allAssets.filter(a=>a.signal==='SELL').sort((a,b)=>a.score-b.score)
-        const topPicks=buys.slice(0,5).map(a=>({
-          ticker:a.ticker, score:a.score, confidence:a.confidence,
-          reason:`${a.signal} · conf ${Math.round(a.confidence*100)}%`
-        }))
-        sendEmail('daily_briefing',{
-          buys, sells, topPicks,
-          marketMood: buys.length>sells.length?'BULLISH':sells.length>buys.length?'BEARISH':'NEUTRAL',
-          date: new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})
-        })
-        localStorage.setItem('stockbot_briefing_sent', todayStr); setLastBriefingSent(todayStr)
+      if(hour>=8 && hour<=9 && lastBriefingSent!==todayStr) {
+        sendEmail('daily_briefing', buildRichBriefing())
+        localStorage.setItem('stockbot_briefing_sent', todayStr)
+        setLastBriefingSent(todayStr)
       }
+
+      // 📊 EOD performance report — 4:00–4:30pm, once per day
+      const isEOD = hour===16 && new Date().getMinutes()<=30
+      const todayEOD = 'eod_'+todayStr
+      if(isEOD && localStorage.getItem('stockbot_eod_sent')!==todayEOD) {
+        sendEmail('end_of_day', buildRichEOD())
+        localStorage.setItem('stockbot_eod_sent', todayEOD)
+      }
+
     },60000) // check every minute
     return()=>clearInterval(emailCheckRef.current)
   },[lastAlertSent,lastBriefingSent])
@@ -424,6 +426,60 @@ export default function App() {
 
 
   // Build news sentiment map for RL trainer — { TICKER: avgScore }
+  function buildRichBriefing() {
+    const _px=pricesRef.current, _sigs=signalsRef.current
+    const _allA=Object.entries(_sigs).map(([t,s])=>({ticker:t,...s,price:_px[t]?.price||0}))
+    const _mbuys=_allA.filter(a=>a.signal==='BUY').sort((a,b)=>b.score-a.score)
+    const _msells=_allA.filter(a=>a.signal==='SELL').sort((a,b)=>a.score-b.score)
+    const _picks=_mbuys.slice(0,6).map(a=>{
+      const ens=ensembleRef.current[a.ticker], p=a.price
+      const nl=(marketNewsRef.current||[]).find(n=>(n.tickers||[]).includes(a.ticker))
+      const entry=p>0?('$'+(p*0.99).toFixed(2)+'\u2013$'+(p*1.005).toFixed(2)):'—'
+      const stop=p>0?('$'+(p*0.92).toFixed(2)):'—'
+      const target=p>0?('$'+(p*1.10).toFixed(2)):'—'
+      return {ticker:a.ticker,price:p,score:a.score,confidence:a.confidence,
+        ensemble:ens?.signal||a.signal,entryZone:entry,stopLoss:stop,target,
+        reason:(ens?(ens.signal+' · '+Math.round((ens.confidence||0)*100)+'% conf · '):'')+'Score '+a.score.toFixed(3),
+        newsHeadline:nl?.title||null}
+    })
+    return {
+      buys:_mbuys.slice(0,10).map(a=>({ticker:a.ticker,price:a.price,score:a.score,confidence:a.confidence,reason:'BUY'})),
+      sells:_msells.slice(0,5).map(a=>({ticker:a.ticker,price:a.price,score:a.score,reason:'SELL'})),
+      topPicks:_picks, algoMode, portfolioValue:portfolioValue(portfolioRef.current,_px),
+      newsHeadlines:(marketNewsRef.current||[]).slice(0,4),
+      marketMood:_mbuys.length>_msells.length?'BULLISH':_msells.length>_mbuys.length?'BEARISH':'NEUTRAL',
+      date:new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})
+    }
+  }
+
+  function buildRichEOD() {
+    const _px=pricesRef.current, _sigs=signalsRef.current
+    const _allA=Object.entries(_sigs).map(([t,s])=>({ticker:t,...s,price:_px[t]?.price||0}))
+    const port=portfolioRef.current, val=portfolioValue(port,_px)
+    const pnl=val-STARTING_CAPITAL
+    const pos=Object.entries(port.positions).map(([t,p])=>{
+      const curPx=_px[t]?.price||p.avgPrice
+      const positionPnl=(p.side==='LONG'?(curPx-p.avgPrice):(p.avgPrice-curPx))*p.shares
+      return {ticker:displayTicker(t),shares:p.shares,avgPrice:p.avgPrice,currentPrice:curPx,
+        pnl:positionPnl,pnlPct:(positionPnl/(p.avgPrice*p.shares))*100}
+    }).sort((a,b)=>b.pnl-a.pnl)
+    const today=new Date().toDateString()
+    const todayTrades=(tradeLogRef.current||[]).filter(t=>{
+      try{return new Date(t.time).toDateString()===today}catch{return false}
+    }).slice(0,10).map(t=>({ticker:displayTicker(t.ticker||''),side:t.side||'',price:t.price||0,shares:t.shares||0,pnl:t.pnl||null}))
+    const watch=_allA.filter(a=>a.signal==='BUY').sort((a,b)=>b.score-a.score).slice(0,6)
+      .map(a=>({ticker:a.ticker,price:a.price,score:a.score,confidence:a.confidence}))
+    return {
+      portfolioValue:val, pnl, pnlPct:(pnl/STARTING_CAPITAL)*100,
+      pnlToday:pnl, pnlTodayPct:(pnl/STARTING_CAPITAL)*100,
+      positions:pos, bestPosition:pos[0]||null, worstPosition:pos[pos.length-1]||null,
+      todayTrades, nextDayWatchlist:watch, totalTrades:(tradeLogRef.current||[]).length,
+      sharpe:backtestResult?.sharpe||null, maxDrawdown:backtestResult?.maxDrawdown||null,
+      algoMode, marketMood:_allA.filter(a=>a.signal==='BUY').length>_allA.filter(a=>a.signal==='SELL').length?'BULLISH':'BEARISH',
+      date:new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})
+    }
+  }
+
   function buildNewsSentimentMap(articles) {
     const map = {}
     for (const a of (articles || [])) {
@@ -518,13 +574,49 @@ export default function App() {
   }
   async function loadTickerNews(ticker) { setTickerNews([]); setTickerNews(await fetchTickerNews(ticker,5)) }
 
+
+  // ── CSV / Data Export ─────────────────────────────────────────────────────
+  function downloadCSV(content, filename) {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
+  function downloadEquityCurveCSV() {
+    if (!backtestResult || !backtestResult.equityCurve || !backtestResult.equityCurve.length) {
+      alert('Run backtest or training first'); return
+    }
+    downloadCSV(equityCurveToCSV(backtestResult.equityCurve), 'stockbot_equity_' + new Date().toISOString().split('T')[0] + '.csv')
+  }
+  function downloadTradeLogCSV() {
+    if (!backtestResult || !backtestResult.tradeLog || !backtestResult.tradeLog.length) {
+      alert('Run backtest or training first'); return
+    }
+    const rows = ['date,ticker,action,price,shares,reason,confidence']
+    backtestResult.tradeLog.forEach(function(t) {
+      rows.push([new Date(t.date).toISOString().split('T')[0],t.ticker,t.action,t.price,t.shares,t.reason||'',t.confidence||''].join(','))
+    })
+    downloadCSV(rows.join('
+'), 'stockbot_trades_' + new Date().toISOString().split('T')[0] + '.csv')
+  }
+  function downloadPaperLogCSV() {
+    if (!tradeLog || !tradeLog.length) { alert('No paper trades yet'); return }
+    const rows = ['time,ticker,side,price,shares,pnl,capital_after']
+    tradeLog.forEach(function(t) {
+      rows.push([t.time||'',displayTicker(t.ticker||''),t.side||'',t.price||'',t.shares||'',t.pnl!=null?t.pnl.toFixed(2):'',t.capitalAfter!=null?t.capitalAfter.toFixed(2):''].join(','))
+    })
+    downloadCSV(rows.join('
+'), 'stockbot_paper_' + new Date().toISOString().split('T')[0] + '.csv')
+  }
+
   // ── RL Training ───────────────────────────────────────────────────────────
   async function startTraining() {
     if(isTraining||Object.keys(bars).length===0) return
     setIsTraining(true)
     await trainEpisodes(bars,30,
-      ep=>{ setTrainingLog(prev=>[...prev.slice(-50),{episode:ep.episode,score:ep.result.ragScore.toFixed(3),sharpe:ep.result.sharpe.toFixed(2),ret:(ep.result.totalReturn*100).toFixed(1)+'%',regime:ep.regime,news:ep.result.newsCount>0?'✓':''}]); setRlProgress(ep.agentState); setWeights({...ep.currentWeights}) },
-      done=>{ setWeights({...done.bestWeights}); setBacktestResult(backtestPortfolio(bars,done.bestWeights)); setIsTraining(false) },
+      ep=>{ setTrainingLog(prev=>[...prev.slice(-50),{episode:ep.episode,score:ep.result.ragScore.toFixed(3),sharpe:ep.result.sharpe.toFixed(2),dd:(ep.result.maxDrawdown*100).toFixed(1)+'%',ret:(ep.result.totalReturn*100).toFixed(1)+'%',regime:ep.regime,algo:ep.result.algo||'CEM',news:ep.result.newsCount>0?'✓':''}]); setRlProgress(ep.agentState); setWeights({...ep.currentWeights}); setAlgoMode(ep.result.algo||'CEM'); if(ep.result.maxDrawdown>0.15) setObservationMode(true) },
+      done=>{ const finalBt=backtestPortfolio(bars,done.bestWeights); setWeights({...done.bestWeights}); setBacktestResult(finalBt); setIsTraining(false); setAlgoMode(done.currentAlgo||'CEM'); setObservationMode(finalBt.maxDrawdown>0.15) },
       buildNewsSentimentMap(marketNewsRef.current)
     )
   }
@@ -559,6 +651,8 @@ export default function App() {
             :!dataStatus.keyFound?<span style={S.badge(C.yellow)}>MOCK</span>
             :dataStatus.live?<span style={S.badge(C.green)}>LIVE · {dataStatus.screened}</span>
             :<span style={S.badge(C.yellow)}>LOADING</span>}
+          <span style={S.badge(algoMode==='PPO'?C.green:algoMode==='SAC'?C.yellow:C.accent)}>{algoMode}</span>
+          {observationMode&&<span style={S.badge(C.red)}>OBS MODE</span>}
           {autoTradeSettings.enabled&&<span style={S.badge(C.purple)}>🤖 AUTO-TRADE ON</span>}
           {emailStatus&&<span style={S.badge(emailStatus==='sent'?C.green:C.yellow)}>{emailStatus==='sent'?'✉️ SENT':'✉️ '+emailStatus}</span>}
         </div>
@@ -583,6 +677,13 @@ export default function App() {
           </div>
         )}
 
+        {observationMode&&(
+          <div style={{background:'#ff336611',border:'1px solid #ff3366',borderRadius:8,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:12}}>
+            <span style={{color:'#ff3366',fontSize:10,fontWeight:700}}>OBS MODE</span>
+            <span style={{color:'#ffd700',fontSize:10}}>Max Drawdown exceeded 15%. Auto-trading suspended per spec. RL agent observing only.</span>
+            <button style={{...S.btn('danger'),padding:'2px 10px',fontSize:9}} onClick={()=>setObservationMode(false)}>RESUME</button>
+          </div>
+        )}
         {/* ══ SCREEN ══ */}
         {tab==='screen'&&(
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
@@ -851,14 +952,8 @@ export default function App() {
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
             <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
               <button style={S.btn('primary')} onClick={()=>loadMarketNews(true)}>⟳ REFRESH LIVE</button>
-              <button style={S.btn('warn')} onClick={()=>sendEmail('daily_briefing',{
-                buys:sortedSignals.filter(a=>a.sig?.signal==='BUY').slice(0,8).map(a=>({ticker:a.display,score:a.sig.score,confidence:a.sig.confidence,reason:`${a.sig.signal}`})),
-                sells:sortedSignals.filter(a=>a.sig?.signal==='SELL').slice(0,5).map(a=>({ticker:a.display,score:a.sig.score,reason:'SELL signal'})),
-                topPicks:sortedSignals.filter(a=>a.sig?.signal==='BUY').slice(0,5).map(a=>({ticker:a.display,score:a.sig.score,confidence:a.sig.confidence,reason:`Score ${a.sig.score.toFixed(3)}`})),
-                marketMood:buys.length>sells.length?'BULLISH':sells.length>buys.length?'BEARISH':'NEUTRAL',
-                date:new Date().toLocaleDateString()
-              })}>
-                ✉️ SEND BRIEFING NOW
+              <button style={S.btn('warn')} onClick={()=>sendEmail('daily_briefing', buildRichBriefing())}>
+                ✉️ SEND MORNING BRIEF NOW
               </button>
             </div>
 
@@ -1029,7 +1124,11 @@ export default function App() {
             </div>
 
             <div style={S.panel}>
-              <div style={S.pt}>TRADE LOG ({tradeLog.length})</div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div style={S.pt} style={{marginBottom:0}}>TRADE LOG</div>
+                <button style={{...S.btn('primary'),padding:'4px 12px',fontSize:9}} onClick={downloadPaperLogCSV}>↓ CSV</button>
+              </div>
+ ({tradeLog.length})</div>
               {tradeLog.length===0?<div style={{textAlign:'center',padding:24,color:C.textDim}}>No trades yet</div>:(
                 <div style={{overflowX:'auto',maxHeight:280,overflowY:'auto'}}>
                   <table style={{...S.table,minWidth:420}}>
@@ -1062,7 +1161,25 @@ export default function App() {
               <div style={S.pt}>✉️ EMAIL ALERTS → {EMAIL_TO}</div>
               <div style={{fontSize:11,color:C.textDim,marginBottom:12,lineHeight:1.6}}>
                 Automatic alerts sent when portfolio moves ±5%. Daily briefing every morning at 8-11am ET.
-                Requires <code style={{color:C.accent}}>RESEND_API_KEY</code> set in Vercel env vars.
+                
+              {/* ── Alpaca Broker Bridge (claude.md Phase 4) ── */}
+              <div style={{...S.panel,border:'1px solid #00d4ff33'}}>
+                <div style={S.pt}>ALPACA BROKER BRIDGE · <span style={{color:alpacaConfigured()?'#00ff88':'#ffd700'}}>{alpacaConfigured()?alpacaMode()+' CONNECTED':'NOT CONFIGURED'}</span></div>
+                {alpacaConfigured()?(
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8}}>
+                    <button style={{...S.btn('green'),fontSize:9}} onClick={async()=>{try{const p=await syncPortfolio(portfolio);setPortfolio(p);setEmailStatus('Alpaca synced')}catch(e){setEmailStatus('Sync failed: '+e.message)}}}>⟳ SYNC POSITIONS</button>
+                    <span style={{fontSize:9,color:'#64748b',alignSelf:'center'}}>Mode: {alpacaMode()} · Set VITE_ALPACA_KEY_ID + VITE_ALPACA_SECRET_KEY in Vercel</span>
+                  </div>
+                ):(
+                  <div style={{fontSize:9,color:'#64748b',marginTop:8}}>
+                    Add to Vercel environment variables:<br/>
+                    <code style={{color:'#00d4ff'}}>VITE_ALPACA_KEY_ID</code> · <code style={{color:'#00d4ff'}}>VITE_ALPACA_SECRET_KEY</code> · <code style={{color:'#00d4ff'}}>VITE_ALPACA_PAPER=true</code><br/>
+                    Paper trading is free at alpaca.markets — no commission.
+                  </div>
+                )}
+              </div>
+
+              Requires <code style={{color:C.accent}}>RESEND_API_KEY</code> set in Vercel env vars.
               </div>
               <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                 <button style={S.btn('warn')} onClick={()=>sendEmail('portfolio_alert',{
@@ -1072,14 +1189,11 @@ export default function App() {
                 })}>
                   ✉️ TEST PORTFOLIO ALERT
                 </button>
-                <button style={S.btn('primary')} onClick={()=>sendEmail('daily_briefing',{
-                  buys:sortedSignals.filter(a=>a.sig?.signal==='BUY').slice(0,8).map(a=>({ticker:a.display,score:a.sig.score,confidence:a.sig.confidence,reason:`Score ${a.sig.score.toFixed(3)}`})),
-                  sells:sortedSignals.filter(a=>a.sig?.signal==='SELL').slice(0,5).map(a=>({ticker:a.display,score:a.sig.score,reason:'SELL signal'})),
-                  topPicks:sortedSignals.filter(a=>a.sig?.signal==='BUY').slice(0,5).map(a=>({ticker:a.display,score:a.sig.score,confidence:a.sig.confidence,reason:`Ensemble BUY · conf ${Math.round(a.sig.confidence*100)}%`})),
-                  marketMood:buys.length>sells.length?'BULLISH':sells.length>buys.length?'BEARISH':'NEUTRAL',
-                  date:new Date().toLocaleDateString()
-                })}>
-                  ✉️ TEST DAILY BRIEFING
+                <button style={S.btn('primary')} onClick={()=>sendEmail('daily_briefing', buildRichBriefing())}>
+                  ☀️ TEST MORNING BRIEF
+                </button>
+                <button style={S.btn('warn')} onClick={()=>sendEmail('end_of_day', buildRichEOD())}>
+                  📊 TEST EOD REPORT
                 </button>
               </div>
               {emailStatus&&<div style={{marginTop:8,fontSize:10,color:emailStatus==='sent'?C.green:C.yellow}}>{emailStatus==='sent'?'✓ Email sent successfully':emailStatus}</div>}
@@ -1220,6 +1334,25 @@ export default function App() {
               </div>
             </div>
 
+
+            {/* CSV Export */}
+            {backtestResult && (
+              <div style={{...S.panel, border:'1px solid #00d4ff33'}}>
+                <div style={S.pt}>📥 EXPORT DATA</div>
+                <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                  <button style={{...S.btn('primary'), padding:'8px 16px'}} onClick={downloadEquityCurveCSV}>
+                    ↓ EQUITY CURVE CSV
+                  </button>
+                  <button style={{...S.btn('primary'), padding:'8px 16px'}} onClick={downloadTradeLogCSV}>
+                    ↓ TRADE LOG CSV
+                  </button>
+                </div>
+                <div style={{marginTop:8, fontSize:9, color:'#64748b'}}>
+                  Equity curve: daily portfolio value, cash, positions, observation mode flags<br/>
+                  Trade log: every entry/exit with price, shares, Kelly sizing, stop-loss reason
+                </div>
+              </div>
+            )}
             {trainingLog.length>0&&(
               <div style={S.panel}>
                 <div style={S.pt}>TRAINING SCORE HISTORY</div>
@@ -1239,19 +1372,34 @@ export default function App() {
 
             {backtestResult&&(
               <div style={S.panel}>
-                <div style={S.pt}>BACKTEST RESULT — BEST WEIGHTS</div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div style={S.pt}>BACKTEST RESULT — BEST WEIGHTS · <span style={{color:C.accent}}>{algoMode} mode</span></div>
+                  {backtestResult.equityCurve?.length>0&&(
+                    <button style={{...S.btn('primary'),padding:'3px 10px',fontSize:9}} onClick={()=>{
+                      const csv=equityCurveToCSV(backtestResult.equityCurve)
+                      const b=new Blob([csv],{type:'text/csv'})
+                      const u=URL.createObjectURL(b)
+                      const a=document.createElement('a');a.href=u;a.download='equity_curve.csv';a.click()
+                    }}>⬇ CSV</button>
+                  )}
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:8,marginTop:8}}>
                   {[
                     {label:'RETURN',value:fmt.pct(backtestResult.totalReturn),color:backtestResult.totalReturn>=0?C.green:C.red},
                     {label:'SHARPE',value:backtestResult.sharpe.toFixed(2),color:C.accent},
-                    {label:'MAX DD',value:`-${(backtestResult.maxDrawdown*100).toFixed(1)}%`,color:C.red},
+                    {label:'MAX DD',value:`-${(backtestResult.maxDrawdown*100).toFixed(1)}%`,color:backtestResult.maxDrawdown>0.15?C.red:C.yellow},
+                    {label:'REWARD',value:backtestResult.reward?.toFixed(3)||'—',color:C.purple},
+                    {label:'TRADES',value:backtestResult.trades||0,color:C.textDim},
                   ].map(m=>(
-                    <div key={m.label} style={{textAlign:'center',padding:12,background:C.surface,borderRadius:6}}>
+                    <div key={m.label} style={{textAlign:'center',padding:10,background:C.surface,borderRadius:6}}>
                       <div style={S.pt}>{m.label}</div>
-                      <div style={{fontSize:18,fontWeight:700,color:m.color}}>{m.value}</div>
+                      <div style={{fontSize:16,fontWeight:700,color:m.color}}>{m.value}</div>
                     </div>
                   ))}
                 </div>
+                {backtestResult.observationModeHits>0&&(
+                  <div style={{marginTop:8,fontSize:9,color:C.red}}>⚠️ {backtestResult.observationModeHits} bars in Observation Mode (DD &gt; 15%)</div>
+                )}
               </div>
             )}
           </div>
