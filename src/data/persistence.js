@@ -75,7 +75,7 @@ export function loadWatchlist() { return load(KEYS.watchlist, DEFAULT_WATCHLIST)
 export function saveWatchlist(list) { return save(KEYS.watchlist, list) }
 
 // ── Settings ──────────────────────────────────────────────────────────────
-const DEFAULT_SETTINGS = { tradeSize: 2000, screenProfile: 'momentum' }
+const DEFAULT_SETTINGS = { tradeSize: 5000, screenProfile: 'momentum' }
 export function loadSettings() { return load(KEYS.settings, DEFAULT_SETTINGS) }
 export function saveSettings(s) { return save(KEYS.settings, s) }
 

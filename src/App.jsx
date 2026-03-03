@@ -11,10 +11,11 @@ import { EXIT_PRESETS, checkExitSignal, checkPortfolioHeat } from './trading/exi
 import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
 import { fetchDynamicUniverse, getUniverseLabel, ALL_SEED } from './data/universe.js'
+import { fetchCryptoPrices, buildCryptoBars } from './data/cryptoPrices.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
-const CRYPTO_MOCK_PRICES = {'X:BTCUSD':96500,'X:ETHUSD':3400,'X:SOLUSD':185}
+// Crypto prices fetched live from CoinGecko — see cryptoPrices.js
 const SCREEN_INTERVAL = 30*60
 const STARTING_CAPITAL = 100000
 
@@ -56,7 +57,7 @@ const fmt = {
 
 function mockBars(ticker, days=400) {
   const seed=ticker.split('').reduce((a,c)=>a+c.charCodeAt(0),0)
-  const basePx = CRYPTO_MOCK_PRICES[ticker]||(50+(seed%200))
+  const basePx = 50+(seed%200)  // crypto gets real prices via buildCryptoBars
   const bars=[]; let price=basePx; const now=Date.now()
   for(let i=days;i>=0;i--) {
     const t=now-i*86400000,change=(Math.random()-0.48)*price*0.03,o=price
@@ -105,7 +106,7 @@ export default function App() {
   // Portfolio — persisted
   const [portfolio,setPortfolio]=useState(()=>loadPortfolio())
   const [tradeLog,setTradeLog]=useState(()=>loadTradeLog())
-  const [tradeSize,setTradeSize]=useState(()=>loadSettings().tradeSize||2000)
+  const [tradeSize,setTradeSize]=useState(()=>loadSettings().tradeSize||5000)
   const [watchlist,setWatchlist]=useState(()=>loadWatchlist())
   const [watchlistInput,setWatchlistInput]=useState('')
   // Auto-trading
@@ -191,21 +192,30 @@ export default function App() {
     const barsMap={}
     stocks.forEach(s=>{ barsMap[s.ticker]=(s.bars||[]).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v,vw:b.vw||b.c})) })
 
-    // Add crypto bars
+    // Fetch live crypto prices from CoinGecko (free, no API key needed)
+    let cryptoPriceData = {}
+    try { cryptoPriceData = await fetchCryptoPrices() } catch(e) { console.warn('[App] Crypto fetch failed:', e) }
+
+    // Build crypto bars anchored to live prices
     for(const pair of ALL_CRYPTO) {
-      barsMap[pair]=mockBars(pair) // always has realistic prices via CRYPTO_MOCK_PRICES
+      const livePrice = cryptoPriceData[pair]?.price
+      barsMap[pair] = buildCryptoBars(pair, livePrice)
     }
 
     // Build price map — stocks AND crypto
     const priceMap={}
     stocks.forEach(s=>{ priceMap[s.ticker]={ price:s.price, changePct:s.change1d, volume:s.volume } })
 
-    // Crypto prices from last bar of their bars
+    // Crypto prices from live fetch
     for(const pair of ALL_CRYPTO) {
-      const b=barsMap[pair]
-      if(b&&b.length>1) {
-        const last=b[b.length-1], prev=b[b.length-2]
-        priceMap[pair]={ price:last.c, changePct:(last.c-prev.c)/prev.c*100, volume:last.v }
+      if(cryptoPriceData[pair]) {
+        priceMap[pair]=cryptoPriceData[pair]
+      } else {
+        const b=barsMap[pair]
+        if(b&&b.length>1) {
+          const last=b[b.length-1], prev=b[b.length-2]
+          priceMap[pair]={ price:last.c, changePct:(last.c-prev.c)/prev.c*100, volume:last.v }
+        }
       }
     }
 
@@ -341,7 +351,7 @@ export default function App() {
   function executeTrade(ticker,side,price,signal,isAuto=false) {
     if(!price||price<=0) return
     // Use ref so auto-trader setInterval always gets current tradeSize
-    const effectiveSize = isAuto ? (tradeSizeRef.current || 2000) : tradeSize
+    const effectiveSize = isAuto ? (tradeSizeRef.current || 5000) : tradeSize
     const shares=Math.floor(effectiveSize/price)
     if(shares<=0) return
     setPortfolio(prev=>{
@@ -1069,8 +1079,7 @@ export default function App() {
             <div style={{...S.panel,border:`1px solid ${C.border}`}}>
               <div style={S.pt}>WHAT'S BEING OPTIMIZED</div>
               <div style={{fontSize:10,color:C.textDim,lineHeight:1.7}}>
-                The RL agent optimizes weights for <span style={{color:C.accent}}>7 signals</span>: Momentum · Mean-Reversion · Volume/OBV · Volatility/ATR · Trend/MACD · <span style={{color:C.purple}}>Fama-French Alpha</span> · <span style={{color:C.yellow}}>TCN Multi-Scale</span>
-                <br/>Uses Cross-Entropy Method with regime-aware sampling — learns different weights for bull/bear × low/high-vol markets.
+                The RL agent optimizes weights for <span style={{color:C.accent}}>7 signals</span>: Momentum · Mean-Reversion · Volume/OBV · Volatility/ATR · Trend/MACD · <span style={{color:C.purple}}>FF5 Alpha</span> · <span style={{color:C.yellow}}>TCN Align</span><br/><br/><span style={{color:C.green}}>Reward = Sharpe (45%) + Calmar (20%) + Model Agreement FF5+TCN (20%) + Return (15%)</span><br/>Agent is rewarded MORE when signals agree with Fama-French and TCN — so optimized weights work across ALL models, not just technicals. Regime-aware: separate weight pools per market regime.
               </div>
             </div>
 
