@@ -6,7 +6,7 @@ import { generateSignal, calcRSI, calcMACD, calcBollingerBands, calcATR } from '
 import { backtestPortfolio } from './backtest/backtester.js'
 import { agent } from './rl/agent.js'
 import { trainEpisodes, stopTraining } from './rl/trainer.js'
-import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist, saveWatchlist, loadSettings, saveSettings, resetPortfolio as resetStored, normalizeTicket, displayTicker } from './data/persistence.js'
+import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist, saveWatchlist, loadSettings, saveSettings, resetPortfolio as resetStored, normalizeTicket, displayTicker, debugStorage } from './data/persistence.js'
 import { EXIT_PRESETS, checkExitSignal, checkPortfolioHeat } from './trading/exitStrategy.js'
 import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
@@ -124,29 +124,40 @@ export default function App() {
   const [aiSentiment,setAiSentiment]=useState(null)
 
   const screenTimerRef=useRef(null)
+  // Save portfolio on tab close — last line of defense
+  useEffect(()=>{
+    const handler = () => {
+      savePortfolio(portfolioRef.current)
+      saveTradeLog(tradeLogRef.current || [])
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
   const countdownRef=useRef(null)
   const autoTradeRef=useRef(null)
   const emailCheckRef=useRef(null)
   const isScreeningRef=useRef(false)
   const apiKey=getApiKey()
   const portfolioRef=useRef(portfolio)
+  const tradeLogRef=useRef(tradeLog)
   const pricesRef=useRef(prices)
   const signalsRef=useRef(signals)
   const barsRef=useRef(bars)
   const ensembleRef=useRef(ensembleResults)
+  const tradeSizeRef=useRef(tradeSize)
 
   // Keep refs in sync for use inside setInterval callbacks
   useEffect(()=>{ portfolioRef.current=portfolio },[portfolio])
+  useEffect(()=>{ tradeLogRef.current=tradeLog },[tradeLog])
   useEffect(()=>{ pricesRef.current=prices },[prices])
   useEffect(()=>{ signalsRef.current=signals },[signals])
   useEffect(()=>{ barsRef.current=bars },[bars])
   useEffect(()=>{ ensembleRef.current=ensembleResults },[ensembleResults])
+  useEffect(()=>{ tradeSizeRef.current=tradeSize },[tradeSize])
 
   // ── Persistence ──────────────────────────────────────────────────────────
-  useEffect(()=>{ savePortfolio(portfolio) },[portfolio])
-  useEffect(()=>{ saveTradeLog(tradeLog) },[tradeLog])
-  useEffect(()=>{ saveWatchlist(watchlist) },[watchlist])
-  useEffect(()=>{ saveSettings({ tradeSize, screenProfile, autoTrade:autoTradeSettings }) },[tradeSize,screenProfile,autoTradeSettings])
+  // Settings save (not critical for positions so useEffect is fine here)
+  useEffect(()=>{ saveSettings({ tradeSize, screenProfile }) },[tradeSize,screenProfile])
 
   // ── Screener ─────────────────────────────────────────────────────────────
   const runScreener = useCallback(async(profile,custom)=>{
@@ -329,7 +340,9 @@ export default function App() {
   // ── Paper Trading ─────────────────────────────────────────────────────────
   function executeTrade(ticker,side,price,signal,isAuto=false) {
     if(!price||price<=0) return
-    const shares=Math.floor(tradeSize/price)
+    // Use ref so auto-trader setInterval always gets current tradeSize
+    const effectiveSize = isAuto ? (tradeSizeRef.current || 2000) : tradeSize
+    const shares=Math.floor(effectiveSize/price)
     if(shares<=0) return
     setPortfolio(prev=>{
       const next={...prev,positions:{...prev.positions}}
@@ -350,9 +363,15 @@ export default function App() {
       }
       const val=portfolioValue(next,pricesRef.current)
       next.history=[...(prev.history||[]),{value:val,t:Date.now()}].slice(-500)
+      // SAVE SYNCHRONOUSLY — don't rely on useEffect which fires after render
+      savePortfolio(next)
       return next
     })
-    setTradeLog(prev=>[{ id:Date.now(), ticker, side, price, shares, value:shares*price, signal:signal?.score?.toFixed(3)||'—', time:new Date().toLocaleTimeString(), auto:isAuto },...prev.slice(0,499)])
+    setTradeLog(prev=>{
+      const next=[{ id:Date.now(), ticker, side, price, shares, value:shares*price, signal:signal?.score?.toFixed(3)||'—', time:new Date().toLocaleTimeString(), auto:isAuto },...prev.slice(0,499)]
+      saveTradeLog(next)
+      return next
+    })
   }
 
   function closePosition(ticker, isAuto=false) {
@@ -367,9 +386,15 @@ export default function App() {
       delete next.positions[ticker]
       const val=portfolioValue(next,pricesRef.current)
       next.history=[...(prev.history||[]),{value:val,t:Date.now()}].slice(-500)
+      // SAVE SYNCHRONOUSLY
+      savePortfolio(next)
       return next
     })
-    setTradeLog(prev=>[{ id:Date.now(), ticker, side:'CLOSE', price:px, shares:pos.shares, value:pos.shares*px, signal:'—', time:new Date().toLocaleTimeString(), pnl:parseFloat(pnl.toFixed(2)), auto:isAuto },...prev.slice(0,499)])
+    setTradeLog(prev=>{
+      const next=[{ id:Date.now(), ticker, side:'CLOSE', price:px, shares:pos.shares, value:pos.shares*px, signal:'—', time:new Date().toLocaleTimeString(), pnl:parseFloat(pnl.toFixed(2)), auto:isAuto },...prev.slice(0,499)]
+      saveTradeLog(next)
+      return next
+    })
   }
 
   function resetPortfolio() {
@@ -382,7 +407,7 @@ export default function App() {
     const ticker=normalizeTicket(input)
     if(!ticker||ticker.length<1) return
     if(watchlist.includes(ticker)) return
-    setWatchlist(prev=>[...prev,ticker])
+    setWatchlist(prev=>{ const next=[...prev,ticker]; saveWatchlist(next); return next })
     setWatchlistInput('')
     if(!bars[ticker]) setBars(prev=>({...prev,[ticker]:mockBars(ticker)}))
     if(!prices[ticker]) {
@@ -806,7 +831,10 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              <div style={{fontSize:9,color:C.textDim,marginTop:6}}>💾 Survives refresh · Tap row to trade · BTC/ETH/SOL supported</div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6}}>
+                <div style={{fontSize:9,color:C.textDim}}>💾 Auto-saved per trade · Survives refresh · BTC/ETH/SOL supported</div>
+                <button style={{...S.btn('default'),fontSize:8,padding:'2px 8px'}} onClick={()=>debugStorage()}>🔍 DEBUG STORAGE</button>
+              </div>
             </div>
 
             {/* Portfolio metrics */}
