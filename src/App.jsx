@@ -6,7 +6,7 @@ import { generateSignal, calcRSI, calcMACD, calcBollingerBands, calcATR } from '
 import { backtestPortfolio } from './backtest/backtester.js'
 import { agent } from './rl/agent.js'
 import { trainEpisodes, stopTraining } from './rl/trainer.js'
-import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist, saveWatchlist, loadSettings, saveSettings, resetPortfolio as resetStored, normalizeTicket, displayTicker, debugStorage } from './data/persistence.js'
+import { loadPortfolio, savePortfolio, loadTradeLog, saveTradeLog, loadWatchlist, saveWatchlist, loadSettings, saveSettings, resetPortfolio as resetStored, normalizeTicket, displayTicker, debugStorage, loadScreenerCache, saveScreenerCache, isScreenerCacheFresh } from './data/persistence.js'
 import { EXIT_PRESETS, checkExitSignal, checkPortfolioHeat } from './trading/exitStrategy.js'
 import { evaluateAutoTrade, AUTO_TRADE_DEFAULTS } from './trading/autoTrader.js'
 import { runEnsemble, MODEL_INFO, FUTURE_MODELS } from './models/ensemble.js'
@@ -20,7 +20,7 @@ import { verifyPricesViaPolygon, applyPriceGate } from './data/priceGate.js'
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
 // Crypto prices fetched live from CoinGecko — see cryptoPrices.js
-const SCREEN_INTERVAL = 30*60
+const SCREEN_INTERVAL = 15*60
 const STARTING_CAPITAL = 100000
 
 const C = {
@@ -125,14 +125,18 @@ function portfolioValue(port, prices) {
 function App() {
   const [tab,setTab]=useState('screen')
   const [screenProfile,setScreenProfile]=useState(()=>loadSettings().screenProfile||'momentum')
-  const [screenResult,setScreenResult]=useState(null)
+  const [screenResult,setScreenResult]=useState(()=>{
+    const c=loadScreenerCache(); if(!isScreenerCacheFresh(c)) return null
+    return { stocks:c.stocks, timestamp:new Date(c.timestamp), mock:false, fromCache:true }
+  })
   const [isScreening,setIsScreening]=useState(false)
+  const [isRefreshing,setIsRefreshing]=useState(false)
   const [verifyReport,setVerifyReport]=useState(null)
   const [isVerifying,setIsVerifying]=useState(false)
-  const [activeStocks,setActiveStocks]=useState([])
-  const [prices,setPrices]=useState({})
+  const [activeStocks,setActiveStocks]=useState(()=>{ const c=loadScreenerCache(); return isScreenerCacheFresh(c)?(c.tickers||[]):[] })
+  const [prices,setPrices]=useState(()=>{ const c=loadScreenerCache(); return isScreenerCacheFresh(c)?(c.prices||{}):{}  })
   const [bars,setBars]=useState({})
-  const [signals,setSignals]=useState({})
+  const [signals,setSignals]=useState(()=>{ const c=loadScreenerCache(); return isScreenerCacheFresh(c)?(c.signals||{}):{}  })
   const [backtestResult,setBacktestResult]=useState(null)
   const [trainingLog,setTrainingLog]=useState([])
   const [isTraining,setIsTraining]=useState(false)
@@ -156,7 +160,7 @@ function App() {
   // Auto-trading
   const [autoTradeSettings,setAutoTradeSettings]=useState({...AUTO_TRADE_DEFAULTS,...loadSettings().autoTrade})
   const [autoTradeLog,setAutoTradeLog]=useState([])
-  const [verifiedTickers,setVerifiedTickers]=useState(new Set()) // tickers with confirmed Polygon prices
+  const [verifiedTickers,setVerifiedTickers]=useState(()=>{ const c=loadScreenerCache(); return isScreenerCacheFresh(c)?new Set(c.verifiedTickers||[]):new Set() })
   const verifiedRef=useRef(new Set())
   const [exitPreset,setExitPreset]=useState('moderate')
   const [exitAlerts,setExitAlerts]=useState([]) // warnings shown in UI
@@ -222,7 +226,9 @@ function App() {
   const runScreener = useCallback(async(profile,custom)=>{
     if(isScreeningRef.current) return
     isScreeningRef.current=true
-    setIsScreening(true); setScreenResult(null)
+    // First load (no data yet) → show full spinner. Background refresh → keep old data visible.
+    setIsScreening(true)
+    setIsRefreshing(true)
 
     const activeProfile=profile||screenProfile
     const criteria=custom||SCREENING_PROFILES[activeProfile]?.criteria||DEFAULT_CRITERIA
@@ -296,7 +302,9 @@ function App() {
     // Update priceMap with gate-corrected prices
     stocks.forEach(s=>{ if(s.price) priceMap[s.ticker]={ price:s.price, changePct:s.change1d, volume:s.volume } })
 
-    const tickers=stocks.slice(0,15).map(s=>s.ticker)
+    // Only include price-verified stocks in the trading universe when live data is available.
+    // Unverified stocks (price unreachable) are still shown in the screener UI but excluded from signals/auto-trader.
+    const tickers=stocks.slice(0,15).filter(s=>!isLive||s.priceVerified).map(s=>s.ticker)
     const newSignals={}
     for(const [t,b] of Object.entries(barsMap)) {
       if(b&&b.length>0) newSignals[t]=generateSignal(b,agent.weights)
@@ -320,11 +328,20 @@ function App() {
       } catch(e){}
     }
     setEnsembleResults(ensMap)
-    setScreenResult({ stocks:stocks.slice(0,15), timestamp:new Date(), mock:!isLive })
+    const newScreenResult={ stocks:stocks.slice(0,15), timestamp:new Date(), mock:!isLive }
+    setScreenResult(newScreenResult)
     setActiveStocks(tickers)
     setBars(barsMap)
     setPrices(priceMap)
     setSignals(newSignals)
+    // Persist screener result so the same stocks appear on next page load
+    saveScreenerCache({
+      stocks: newScreenResult.stocks,
+      tickers,
+      prices: priceMap,
+      signals: Object.fromEntries(Object.entries(newSignals).map(([t,s])=>[t,{signal:s.signal,score:s.score,factors:s.factors,confidence:s.confidence}])),
+      verifiedTickers: [...verifiedSet],
+    })
     // Auto-run verifiers after each screen (non-blocking)
     setTimeout(()=>runVerify(priceMap, barsMap, newSignals), 1500)
     setWeights(agent.weights)
@@ -332,13 +349,18 @@ function App() {
 
     isScreeningRef.current=false
     setIsScreening(false)
+    setIsRefreshing(false)
     loadMarketNews()
   },[apiKey,screenProfile])
 
   // ── Scheduler ────────────────────────────────────────────────────────────
   const hasAutoRunRef=useRef(false)
   useEffect(()=>{
-    if(!hasAutoRunRef.current){ hasAutoRunRef.current=true; runScreener() }
+    if(!hasAutoRunRef.current){
+      hasAutoRunRef.current=true
+      // Skip immediate run if we loaded fresh data from cache — wait for the 15-min interval instead
+      if(!isScreenerCacheFresh(loadScreenerCache())) runScreener()
+    }
   },[runScreener])
 
   useEffect(()=>{
@@ -837,16 +859,16 @@ function App() {
               ))}
             </div>
 
-            {isScreening&&<div style={{...S.panel,textAlign:'center',padding:48}}><div style={{color:C.accent,letterSpacing:4}}>SCANNING MARKET...</div></div>}
+            {isScreening&&!screenResult&&<div style={{...S.panel,textAlign:'center',padding:48}}><div style={{color:C.accent,letterSpacing:4}}>SCANNING MARKET...</div></div>}
 
-            {!isScreening&&screenResult&&(
+            {screenResult&&(
               <>
                 <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
                   {[
                     {label:'ALL',value:screenResult.stocks.length,color:C.accent,filter:null},
                     {label:'BUY ▲',value:buys.length,color:C.green,filter:'BUY'},
                     {label:'SELL ▼',value:sells.length,color:C.red,filter:'SELL'},
-                    {label:'UPDATED',value:screenResult.timestamp?.toLocaleTimeString(),color:C.textDim,filter:undefined},
+                    {label:isRefreshing?'REFRESHING':'UPDATED',value:isRefreshing?'⟳ ...':(screenResult.fromCache?'CACHED · ':'')+screenResult.timestamp?.toLocaleTimeString(),color:isRefreshing?C.yellow:C.textDim,filter:undefined},
                   ].map(m=>(
                     <div key={m.label} onClick={m.filter!==undefined?()=>setSignalFilter(f=>f===m.filter?null:m.filter):undefined}
                       style={{...S.panel,cursor:m.filter!==undefined?'pointer':'default',border:`1px solid ${signalFilter===m.filter&&m.filter!==undefined?m.color:C.border}`,background:signalFilter===m.filter&&m.filter!==undefined?m.color+'11':C.panel}}>

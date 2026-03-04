@@ -93,6 +93,16 @@ export function displayTicker(ticker) {
   return DISPLAY_MAP[ticker] || ticker
 }
 
+// ── Screener Cache ─────────────────────────────────────────────────────────
+// Stores last screener result so the same stocks appear on page refresh.
+// TTL matches the 15-min refresh interval — stale cache triggers a fresh run.
+const SCREENER_CACHE_KEY = 'stockbot_screener_v1'
+const SCREENER_CACHE_TTL = 15 * 60 * 1000
+
+export function loadScreenerCache() { return load(SCREENER_CACHE_KEY, null) }
+export function saveScreenerCache(data) { return save(SCREENER_CACHE_KEY, { ...data, timestamp: Date.now() }) }
+export function isScreenerCacheFresh(cache) { return !!(cache && (Date.now() - cache.timestamp) < SCREENER_CACHE_TTL) }
+
 // ── Debug helper ──────────────────────────────────────────────────────────
 export function debugStorage() {
   const p = loadPortfolio()
