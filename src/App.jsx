@@ -20,7 +20,7 @@ import { verifyPricesViaPolygon, applyPriceGate } from './data/priceGate.js'
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
 // Crypto prices fetched live from CoinGecko — see cryptoPrices.js
-const SCREEN_INTERVAL = 60*60  // 1 hour — grouped bars data is daily; cache makes re-screens instant
+const SCREEN_INTERVAL = 15*60  // 15 min — grouped bars cached in-memory, re-screens cost 0 extra API calls
 const STARTING_CAPITAL = 100000
 
 const C = {
