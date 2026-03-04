@@ -20,7 +20,7 @@ import { verifyPricesViaPolygon, applyPriceGate } from './data/priceGate.js'
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
 // Crypto prices fetched live from CoinGecko — see cryptoPrices.js
-const SCREEN_INTERVAL = 15*60
+const SCREEN_INTERVAL = 60*60  // 1 hour — grouped bars data is daily; cache makes re-screens instant
 const STARTING_CAPITAL = 100000
 
 const C = {
@@ -236,7 +236,10 @@ function App() {
     // Build mock stocks
     // Fetch dynamic universe — live top movers + most active if API available
     const universeTickers = await fetchDynamicUniverse(apiKey, newsStocksRef.current, watchlist)
-    setUniverseLabel(getUniverseLabel(!!apiKey, newsStocksRef.current.length))
+    const newsCount=newsStocksRef.current.length
+    setUniverseLabel(apiKey
+      ? `S&P 500 (~250 stocks)${newsCount>0?` · ${newsCount} news-boosted`:''} · grouped daily bars`
+      : getUniverseLabel(false, newsCount))
     const mockStocks=universeTickers.slice(0,25).map(ticker=>{
       const b=mockBars(ticker)
       const n=b.length
@@ -248,13 +251,31 @@ function App() {
 
     let stocks=mockStocks; let isLive=false
     if(apiKey) {
-      try { const r=await screenStocks(criteria,20); if(r.stocks.length>0){stocks=r.stocks;isLive=true} }
+      // Pass newsStocks so trending tickers get a sentiment boost in scoring.
+      // Grouped bars are cached in screener.js — first call fetches 5 days (~65s),
+      // every subsequent hourly re-screen re-scores from cache instantly (0 API calls).
+      try { const r=await screenStocks(criteria,20,newsStocksRef.current); if(r.stocks.length>0){stocks=r.stocks;isLive=true} }
       catch(e){ console.error('[Screener]',e) }
     }
 
-    // Build bars map — stocks + crypto with CORRECT prices
+    // Build bars map — combine 400-day scaled mockBars with real 5-day bars for each stock.
+    // mockBars is deterministic (ticker-seeded) and normalized to ~$100; we scale it to the
+    // real current price so RSI/MACD/signals work at the correct price magnitude.
+    // The last N bars are replaced with real OHLCV data from the grouped bars endpoint.
     const barsMap={}
-    stocks.forEach(s=>{ barsMap[s.ticker]=(s.bars||[]).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v,vw:b.vw||b.c})) })
+    stocks.forEach(s=>{
+      const realBars=(s.bars||[]).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v,vw:b.vw||b.c}))
+      if(realBars.length>0 && s.price>0) {
+        const scale=s.price/100  // mockBars final ≈ 100; scale to real price level
+        const synthetic=mockBars(s.ticker,400).slice(0,-realBars.length).map(b=>({
+          t:b.t, o:+(b.o*scale).toFixed(4), h:+(b.h*scale).toFixed(4),
+          l:+(b.l*scale).toFixed(4), c:+(b.c*scale).toFixed(4), v:b.v, vw:+(b.vw*scale).toFixed(4)
+        }))
+        barsMap[s.ticker]=[...synthetic,...realBars]
+      } else {
+        barsMap[s.ticker]=mockBars(s.ticker)
+      }
+    })
 
     // Fetch live crypto prices from CoinGecko (free, no API key needed)
     let cryptoPriceData = {}

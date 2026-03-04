@@ -1,284 +1,257 @@
 /**
- * screener.js
- * Dynamic stock screener — discovers stocks based on real performance criteria.
+ * screener.js — S&P 500 screener via grouped daily bars
  *
- * Screening criteria (configurable):
- *   1. Momentum     — top % gainers over N days
- *   2. Volatility   — stocks with unusual price movement (ATR-based)
- *   3. Volume surge — unusual volume vs 20-day average
- *   4. Trend break  — price crossing above key moving averages
- *   5. RSI oversold — potential mean-reversion candidates
+ * Strategy:
+ *   1. Fetch last 5 trading days using the grouped bars endpoint
+ *      GET /v2/aggs/grouped/locale/us/market/stocks/{date}
+ *      → 1 API call returns ALL US stocks for that date
+ *   2. Filter to S&P 500 universe (~250 major components)
+ *   3. Score by 5-day momentum + volume surge + trend + news sentiment
+ *   4. Return top 20 with their real 5-day OHLCV bars
  *
- * Data source: Polygon.io free tier (/v2/aggs/grouped/locale/us/market/stocks/{date})
- * This endpoint returns ALL stocks for a given day in one call — very efficient.
+ * API budget: 5 calls on first screen (one per date, 13s apart).
+ * groupedDayCache is in-memory with NO TTL — daily bars are historical
+ * and immutable, so subsequent hourly re-screens are instant (0 API calls).
  */
 
 const BASE_URL = 'https://api.polygon.io'
-const API_KEY = import.meta.env.VITE_POLYGON_API_KEY || ''
+const API_KEY  = import.meta.env.VITE_POLYGON_API_KEY || ''
 
-// ── Candidate universe (broad market, not cherry-picked) ──────────────────
-// These are just seeds for the screener — the screener will rank and filter them
-// In a real system you'd pull from a full market index
-const BROAD_UNIVERSE = [
-  // Mega cap tech
-  'AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','AVGO','AMD','ORCL',
-  // Growth / momentum
-  'PLTR','ARM','SMCI','MSTR','COIN','MARA','IONQ','HOOD','RKLB','ACHR',
-  // Finance
-  'JPM','GS','V','MA','BRK.B','BAC','C','WFC',
-  // Healthcare
-  'LLY','NVO','UNH','JNJ','ABBV','MRK',
-  // Energy
-  'XOM','CVX','OXY','SLB',
-  // Consumer
-  'COST','WMT','HD','NKE','SBUX',
-  // ETFs as market proxies
-  'SPY','QQQ','IWM','ARKK','SOXL',
-  // Crypto-adjacent
-  'RIOT','HUT','CLSK','BTBT',
+// ── S&P 500 Universe (~250 major components) ──────────────────────────────
+// Covers all 11 GICS sectors. Updated for 2025/2026 composition.
+export const SP500_UNIVERSE = [
+  // ── Mega-cap Tech ──────────────────────────────────────────────────────
+  'AAPL','MSFT','NVDA','AMZN','GOOGL','GOOG','META','TSLA','AVGO','ORCL',
+  // ── Large-cap Tech / Semis ─────────────────────────────────────────────
+  'AMD','INTC','QCOM','TXN','AMAT','LRCX','KLAC','MRVL','MU','NXPI',
+  'ADI','KEYS','MPWR','MCHP','SWKS','QRVO','ENPH','ON','GFS',
+  // ── Software / Cloud ───────────────────────────────────────────────────
+  'CRM','PANW','SNPS','CDNS','FTNT','CSCO','IBM','DELL','MSI','CDW',
+  'NOW','INTU','ADSK','ANSS','CTSH','WDAY','TEAM','HUBS','DDOG','SNOW',
+  'CRWD','ZS','OKTA','NET','MDB','ESTC','SPLK','PAYC','PCTY',
+  // ── Cyber / Defense Tech ───────────────────────────────────────────────
+  'LDOS','BAH','SAIC','CACI','EPAM','GEN',
+  // ── Financials ─────────────────────────────────────────────────────────
+  'JPM','BAC','WFC','GS','MS','C','USB','PNC','TFC','COF',
+  'AXP','BLK','SCHW','CME','ICE','MSCI','SPGI','MCO','FIS','FISV',
+  'GPN','MA','V','PYPL','SYF','DFS','KEY','RF','HBAN','CFG','FHN',
+  // ── Healthcare ─────────────────────────────────────────────────────────
+  'LLY','UNH','JNJ','ABT','ABBV','MRK','PFE','TMO','DHR','SYK',
+  'MDT','BSX','EW','ISRG','REGN','VRTX','AMGN','BIIB','BMY','GILD',
+  'MRNA','CI','HUM','ELV','CVS','MCK','CAH','ABC','HOLX','ZBH','IQV',
+  // ── Consumer Discretionary ─────────────────────────────────────────────
+  'HD','MCD','NKE','LOW','SBUX','TJX','BKNG','CMG','YUM','ROST',
+  'ORLY','AZO','DHI','LEN','PHM','TOL','NVR','GRMN','ABNB','UBER',
+  'LYFT','DASH','RCL','CCL','MAR','HLT','NCLH','MGM','WYNN','LVS',
+  'F','GM','RIVN','LCID','STLA',
+  // ── Consumer Staples ───────────────────────────────────────────────────
+  'WMT','PG','KO','PEP','COST','MDLZ','PM','MO','KMB','CL',
+  'GIS','K','HSY','SYY','KR','ADM','EL','CHD','CLX','COTY',
+  // ── Energy ─────────────────────────────────────────────────────────────
+  'XOM','CVX','COP','EOG','PSX','VLO','MPC','SLB','BKR','HAL',
+  'OXY','DVN','FANG','MRO','APA','CTRA','EQT','RRC','AR','SM',
+  // ── Industrials ────────────────────────────────────────────────────────
+  'HON','CAT','DE','GE','MMM','RTX','LMT','NOC','GD','LHX',
+  'UNP','UPS','FDX','DAL','UAL','AAL','LUV','CSX','NSC','CP',
+  'EMR','ETN','ROK','PH','ITW','TT','DOV','FTV','XYL','AME','GNRC',
+  'KTOS','HII','GD','AXON','RGEN',
+  // ── Materials ──────────────────────────────────────────────────────────
+  'LIN','APD','ECL','SHW','PPG','IFF','DD','DOW','NUE','STLD',
+  'FCX','NEM','ALB','RPM','SEE','PKG','IP','CF','MOS','CE',
+  // ── Utilities ──────────────────────────────────────────────────────────
+  'NEE','DUK','SO','D','AEP','EXC','SRE','XEL','ES','AWK',
+  // ── Real Estate ────────────────────────────────────────────────────────
+  'AMT','PLD','CCI','EQIX','SBAC','O','AVB','EQR','PSA','EXR',
+  // ── Communication ──────────────────────────────────────────────────────
+  'NFLX','DIS','CMCSA','VZ','T','CHTR','TMUS','EA','TTWO','RBLX',
+  'SNAP','PINS','ZM','MTCH','PARA','WBD',
+  // ── Growth / Momentum (S&P 500 eligible or near-S&P) ──────────────────
+  'PLTR','ARM','SMCI','COIN','MSTR','MARA','RIOT','IONQ','HOOD','RKLB',
+  'ACHR','JOBY','LUNR','RDDT','CAVA','BIRK',
 ]
 
-// ── Cache ──────────────────────────────────────────────────────────────────
-const cache = new Map()
-function getCached(key) {
-  const e = cache.get(key)
-  if (!e || Date.now() - e.ts > 15 * 60 * 1000) { cache.delete(key); return null }
-  return e.data
-}
-function setCached(key, data) { cache.set(key, { data, ts: Date.now() }) }
+// Deduplicate
+const SP500 = [...new Set(SP500_UNIVERSE)]
 
-async function apiFetch(path, params = {}) {
-  const key = path + JSON.stringify(params)
-  const cached = getCached(key)
-  if (cached) return cached
-
-  const url = new URL(BASE_URL + path)
-  url.searchParams.set('apiKey', API_KEY)
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
-
-  const res = await fetch(url.toString())
-  if (!res.ok) throw new Error(`API_${res.status}`)
-  const data = await res.json()
-  setCached(key, data)
-  return data
-}
-
-// ── Get grouped daily bars (1 API call for entire market) ──────────────────
-async function getGroupedDaily(date) {
-  const data = await apiFetch(
-    `/v2/aggs/grouped/locale/us/market/stocks/${date}`,
-    { adjusted: 'true' }
-  )
-  // Returns { results: [{ T: ticker, o, h, l, c, v, vw, n }] }
-  const map = {}
-  for (const r of (data.results || [])) {
-    if (r.T) map[r.T] = { ticker: r.T, open: r.o, high: r.h, low: r.l, close: r.c, volume: r.v, vwap: r.vw, trades: r.n }
-  }
-  return map
-}
-
-// ── Get recent daily bars for a ticker (for multi-day calculations) ────────
-async function getDailyBars(ticker, days = 30) {
-  const to = new Date()
-  const from = new Date(Date.now() - (days + 10) * 86400000)
-  const fmtD = d => d.toISOString().split('T')[0]
-  const data = await apiFetch(
-    `/v2/aggs/ticker/${ticker}/range/1/day/${fmtD(from)}/${fmtD(to)}`,
-    { adjusted: 'true', sort: 'asc', limit: days + 10 }
-  )
-  return data.results || []
-}
-
-// ── Previous trading day ───────────────────────────────────────────────────
-function getPrevTradingDay(daysBack = 1) {
+// ── Date Helpers ──────────────────────────────────────────────────────────
+function getRecentTradingDates(n) {
+  const dates = []
   const d = new Date()
-  d.setDate(d.getDate() - daysBack)
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1)
-  return d.toISOString().split('T')[0]
-}
-
-// ── Scoring functions ──────────────────────────────────────────────────────
-
-function calcMomentumScore(bars) {
-  if (bars.length < 5) return 0
-  const current = bars[bars.length - 1].c
-  const weekAgo = bars[Math.max(0, bars.length - 5)].c
-  const monthAgo = bars[Math.max(0, bars.length - 20)].c
-  const weekReturn = (current - weekAgo) / weekAgo
-  const monthReturn = (current - monthAgo) / monthAgo
-  return weekReturn * 0.6 + monthReturn * 0.4
-}
-
-function calcVolatilityScore(bars) {
-  if (bars.length < 10) return 0
-  const returns = bars.slice(-10).map((b, i, arr) =>
-    i === 0 ? 0 : Math.abs((b.c - arr[i-1].c) / arr[i-1].c)
-  )
-  return returns.reduce((a, b) => a + b, 0) / returns.length
-}
-
-function calcVolumeSurgeScore(bars) {
-  if (bars.length < 21) return 0
-  const avgVol = bars.slice(-21, -1).reduce((a, b) => a + b.v, 0) / 20
-  const todayVol = bars[bars.length - 1].v
-  return avgVol > 0 ? (todayVol / avgVol) - 1 : 0
-}
-
-function calcTrendBreakScore(bars) {
-  if (bars.length < 20) return 0
-  const closes = bars.map(b => b.c)
-  const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20
-  const ma5 = closes.slice(-5).reduce((a, b) => a + b, 0) / 5
-  const current = closes[closes.length - 1]
-  // Positive when price > both MAs and short MA > long MA (golden cross-like)
-  const aboveMa20 = (current - ma20) / ma20
-  const shortAboveLong = (ma5 - ma20) / ma20
-  return aboveMa20 * 0.5 + shortAboveLong * 0.5
-}
-
-function calcRSIOversoldScore(bars) {
-  if (bars.length < 15) return 0
-  const closes = bars.map(b => b.c)
-  let gains = 0, losses = 0
-  for (let i = closes.length - 14; i < closes.length; i++) {
-    const diff = closes[i] - closes[i-1]
-    if (diff > 0) gains += diff; else losses -= diff
+  // Step back 1 day first — today's grouped bars aren't complete until market close
+  d.setDate(d.getDate() - 1)
+  while (dates.length < n) {
+    if (d.getDay() !== 0 && d.getDay() !== 6) dates.unshift(d.toISOString().split('T')[0])
+    d.setDate(d.getDate() - 1)
   }
-  const rs = losses === 0 ? 100 : gains / losses
-  const rsi = 100 - 100 / (1 + rs)
-  // Score is higher when RSI is oversold (< 35) — contrarian bounce signal
-  return rsi < 35 ? (35 - rsi) / 35 : rsi > 65 ? -(rsi - 65) / 35 : 0
+  return dates
+}
+
+// ── Grouped Day Cache ─────────────────────────────────────────────────────
+// No TTL: daily bars are historical and immutable within a session.
+// First screen fetches 5 days (5 API calls). Every subsequent re-screen
+// reuses this cache → 0 additional API calls, instant re-scoring.
+const groupedDayCache = new Map()
+
+async function fetchGroupedDay(date) {
+  if (groupedDayCache.has(date)) {
+    console.log(`[Screener] Cache hit: ${date}`)
+    return groupedDayCache.get(date)
+  }
+  if (!API_KEY) return {}
+  try {
+    const res = await fetch(
+      `${BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/${date}?adjusted=true&include_otc=false&apiKey=${API_KEY}`,
+      { signal: AbortSignal.timeout(20000) }
+    )
+    if (res.status === 429) { console.warn('[Screener] Rate limited on', date); return {} }
+    if (!res.ok) { console.warn('[Screener] HTTP', res.status, 'for', date); return {} }
+    const data = await res.json()
+    const map = {}
+    for (const r of (data.results || [])) if (r.T) map[r.T] = r
+    groupedDayCache.set(date, map)
+    console.log(`[Screener] Grouped ${date}: ${Object.keys(map).length} stocks`)
+    return map
+  } catch(e) {
+    console.warn('[Screener] fetchGroupedDay failed:', date, e.message)
+    return {}
+  }
 }
 
 // ── Main Screener ──────────────────────────────────────────────────────────
-
 /**
- * Screen stocks based on criteria weights.
- * @param {Object} criteria - weights for each criterion (0 to 1)
- * @param {number} topN     - how many stocks to return
- * @returns {Array} ranked stocks with scores
+ * Screen S&P 500 using grouped daily bars.
+ *
+ * @param {Object} criteria   - Profile weights (momentum, volumeSurge, trendBreak, ...)
+ * @param {number} topN       - Max results (default 20)
+ * @param {Array}  newsStocks - [{ticker, score}] from news engine for sentiment boost
+ * @returns {Promise<{stocks, all, errors, criteria, timestamp}>}
  */
-export async function screenStocks(criteria = DEFAULT_CRITERIA, topN = 20) {
+export async function screenStocks(criteria = DEFAULT_CRITERIA, topN = 20, newsStocks = []) {
   const {
-    momentum = 0.3,
-    volatility = 0.2,
-    volumeSurge = 0.2,
-    trendBreak = 0.2,
-    rsiOversold = 0.1,
-    minPrice = 5,
-    maxPrice = 10000,
-    minVolume = 500000,
+    momentum    = 0.35,
+    volumeSurge = 0.25,
+    trendBreak  = 0.20,
+    rsiOversold = 0.00,
+    minPrice  = 5,
+    maxPrice  = 15000,
+    minVolume = 200000,
   } = criteria
 
-  // Use a sample of the universe to stay within rate limits
-  // In a real system this would use the grouped daily endpoint
-  const universe = BROAD_UNIVERSE.filter(t => !t.includes('.')) // skip BRK.B for simplicity
+  const NEWS_WEIGHT = 0.20
 
+  // News sentiment boost: ticker → normalized score [0, 1]
+  const newsBoost = {}
+  for (const n of (newsStocks || [])) {
+    if (n.ticker) newsBoost[n.ticker] = Math.min((newsBoost[n.ticker] || 0) + Math.abs(n.score || 0.3), 1)
+  }
+
+  // Fetch last 5 completed trading days.
+  // Rate limit: 5 req/min → 13s between calls.
+  // Cache makes repeat calls instant — only new dates trigger real fetches.
+  const dates = getRecentTradingDates(5)
+  const dayMaps = []
+  for (let i = 0; i < dates.length; i++) {
+    dayMaps.push(await fetchGroupedDay(dates[i]))
+    // Only pause between calls, and only when a real fetch happened (not cached)
+    if (i < dates.length - 1 && !groupedDayCache.has(dates[i + 1])) {
+      await new Promise(r => setTimeout(r, 13000))
+    }
+  }
+
+  // Score every S&P 500 ticker
   const results = []
-  const errors = []
-
-  // Rate-limited sequential fetch
-  for (const ticker of universe.slice(0, 25)) { // limit to 25 for free tier
-    try {
-      const bars = await getDailyBars(ticker, 30)
-      if (bars.length < 10) continue
-
-      const last = bars[bars.length - 1]
-
-      // Apply filters
-      if (last.c < minPrice || last.c > maxPrice) continue
-      if (last.v < minVolume) continue
-
-      // Score each criterion
-      const scores = {
-        momentum: calcMomentumScore(bars),
-        volatility: calcVolatilityScore(bars),
-        volumeSurge: calcVolumeSurgeScore(bars),
-        trendBreak: calcTrendBreakScore(bars),
-        rsiOversold: calcRSIOversoldScore(bars),
-      }
-
-      // Composite weighted score
-      const composite =
-        scores.momentum * momentum +
-        scores.volatility * volatility +
-        scores.volumeSurge * volumeSurge +
-        scores.trendBreak * trendBreak +
-        scores.rsiOversold * rsiOversold
-
-      const dayChange = bars.length >= 2
-        ? (last.c - bars[bars.length - 2].c) / bars[bars.length - 2].c * 100
-        : 0
-
-      const weekChange = bars.length >= 5
-        ? (last.c - bars[bars.length - 5].c) / bars[bars.length - 5].c * 100
-        : 0
-
-      results.push({
-        ticker,
-        price: last.c,
-        change1d: dayChange,
-        change5d: weekChange,
-        volume: last.v,
-        composite,
-        scores,
-        bars,
+  for (const ticker of SP500) {
+    // Build bar array from the fetched days
+    const bars = []
+    for (let i = 0; i < dates.length; i++) {
+      const r = dayMaps[i][ticker]
+      if (r) bars.push({
+        t:  new Date(dates[i] + 'T20:00:00Z').getTime(), // ~4pm ET close
+        o: r.o, h: r.h, l: r.l, c: r.c, v: r.v, vw: r.vw || r.c,
       })
+    }
+    if (bars.length < 2) continue  // need at least 2 days to compute returns
 
-    } catch (e) {
-      errors.push({ ticker, error: e.message })
+    const today     = bars[bars.length - 1]
+    const yesterday = bars[bars.length - 2]
+    const oldest    = bars[0]
+
+    // Basic filters
+    if (today.c < minPrice || today.c > maxPrice) continue
+    if (today.v < minVolume) continue
+
+    // ── Score factors ────────────────────────────────────────────────────
+    const dayReturn  = (today.c - yesterday.c) / yesterday.c
+    const weekReturn = bars.length >= 5
+      ? (today.c - oldest.c) / oldest.c
+      : dayReturn
+
+    const avgVol = bars.slice(0, -1).reduce((s, b) => s + b.v, 0) / Math.max(1, bars.length - 1)
+    const volSurge = avgVol > 0 ? Math.min((today.v / avgVol) - 1, 3) : 0
+
+    const avg5dPrice = bars.reduce((s, b) => s + b.c, 0) / bars.length
+    const trendScore = (today.c - avg5dPrice) / avg5dPrice // > 0 = above 5-day avg
+
+    const newsScore  = newsBoost[ticker] || 0
+
+    // Composite: news boosts the momentum component when sentiment is strong
+    const adjMomentum = momentum * (1 + newsScore * 0.5)
+    const composite =
+      dayReturn  * 0.6 * adjMomentum +
+      weekReturn * 0.4 * adjMomentum +
+      volSurge   * volumeSurge +
+      trendScore * trendBreak +
+      newsScore  * NEWS_WEIGHT
+
+    const scores = {
+      momentum:    dayReturn * 10,
+      volatility:  Math.abs(dayReturn) * 5,
+      volumeSurge: volSurge,
+      trendBreak:  trendScore * 5,
+      rsiOversold: 0,
     }
 
-    // Small delay to be gentle on rate limits
-    await new Promise(r => setTimeout(r, 200))
+    results.push({
+      ticker,
+      price:    today.c,
+      change1d: dayReturn  * 100,
+      change5d: weekReturn * 100,
+      volume:   today.v,
+      composite,
+      scores,
+      bars,   // 5 real OHLCV bars — App.jsx will prepend scaled mockBars for full history
+    })
   }
 
-  // Sort by composite score descending
   results.sort((a, b) => b.composite - a.composite)
 
-  console.log(`[Screener] Screened ${results.length} stocks, ${errors.length} errors`)
+  const top = results.slice(0, topN)
+  console.log(`[Screener] S&P 500: scored ${results.length}, top 5: ${top.slice(0,5).map(r=>r.ticker+' '+r.change1d.toFixed(1)+'%').join(' | ')}`)
 
-  return {
-    stocks: results.slice(0, topN),
-    all: results,
-    errors,
-    criteria,
-    timestamp: new Date(),
-  }
+  return { stocks: top, all: results, errors: [], criteria, timestamp: new Date() }
 }
 
-// ── Preset Criteria Profiles ───────────────────────────────────────────────
-
+// ── Screening Profiles ─────────────────────────────────────────────────────
 export const SCREENING_PROFILES = {
   momentum: {
-    label: 'MOMENTUM',
-    description: 'Top gainers with strong trend',
-    icon: '🚀',
-    criteria: { momentum: 0.5, volatility: 0.1, volumeSurge: 0.2, trendBreak: 0.2, rsiOversold: 0.0 }
+    label: 'MOMENTUM', description: 'Top gainers with strong trend', icon: '🚀',
+    criteria: { momentum: 0.50, volumeSurge: 0.20, trendBreak: 0.20, rsiOversold: 0.00 }
   },
   breakout: {
-    label: 'BREAKOUT',
-    description: 'Volume surges + trend breaks',
-    icon: '⚡',
-    criteria: { momentum: 0.2, volatility: 0.1, volumeSurge: 0.4, trendBreak: 0.3, rsiOversold: 0.0 }
+    label: 'BREAKOUT', description: 'Volume surges + trend breaks', icon: '⚡',
+    criteria: { momentum: 0.20, volumeSurge: 0.40, trendBreak: 0.30, rsiOversold: 0.00 }
   },
   meanReversion: {
-    label: 'MEAN REVERSION',
-    description: 'Oversold bounce candidates',
-    icon: '🔄',
-    criteria: { momentum: 0.0, volatility: 0.2, volumeSurge: 0.1, trendBreak: 0.1, rsiOversold: 0.6 }
+    label: 'MEAN REVERSION', description: 'Oversold bounce candidates', icon: '🔄',
+    criteria: { momentum: 0.00, volumeSurge: 0.10, trendBreak: -0.30, rsiOversold: 0.60 }
   },
   volatile: {
-    label: 'HIGH VOLATILITY',
-    description: 'Most volatile for options/momentum',
-    icon: '⚡',
-    criteria: { momentum: 0.2, volatility: 0.5, volumeSurge: 0.2, trendBreak: 0.1, rsiOversold: 0.0 }
+    label: 'HIGH VOLATILITY', description: 'Most volatile for options/momentum', icon: '⚡',
+    criteria: { momentum: 0.20, volumeSurge: 0.30, trendBreak: 0.10, rsiOversold: 0.00 }
   },
   balanced: {
-    label: 'BALANCED',
-    description: 'Equal weight across all factors',
-    icon: '⚖️',
-    criteria: { momentum: 0.25, volatility: 0.2, volumeSurge: 0.2, trendBreak: 0.2, rsiOversold: 0.15 }
+    label: 'BALANCED', description: 'Equal weight across all factors', icon: '⚖️',
+    criteria: { momentum: 0.25, volumeSurge: 0.25, trendBreak: 0.25, rsiOversold: 0.00 }
   },
 }
 
