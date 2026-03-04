@@ -229,3 +229,18 @@ export const DEFAULT_WEIGHTS = {
   momentum:0.28, meanReversion:0.12, volume:0.18,
   volatility:0.12, trend:0.20, ffAlpha:0.05, tcnAlign:0.05,
 }
+
+/**
+ * Pre-compute signals for every bar using a fixed lookback window.
+ * Returns Array<{score, signal, factors, confidence}> aligned to bars[].
+ * O(n) instead of O(n²) — safe to call inside the backtest loop.
+ */
+export function vectorizeSignals(bars, weights = DEFAULT_WEIGHTS, lookback = 120) {
+  return bars.map((_, i) => {
+    if (i < 20) return { score: 0, signal: 'HOLD', factors: {}, confidence: 0 }
+    // Fixed window — never grows beyond `lookback` bars
+    const window = bars.slice(Math.max(0, i - lookback + 1), i + 1)
+    const { score, signal, factors, confidence } = generateSignal(window, weights)
+    return { score, signal, factors, confidence }
+  })
+}
