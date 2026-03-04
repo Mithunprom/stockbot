@@ -636,8 +636,7 @@ export default function App() {
     backtestResult.tradeLog.forEach(function(t) {
       rows.push([new Date(t.date).toISOString().split('T')[0],t.ticker,t.action,t.price,t.shares,t.reason||'',t.confidence||''].join(','))
     })
-    downloadCSV(rows.join('
-'), 'stockbot_trades_' + new Date().toISOString().split('T')[0] + '.csv')
+    downloadCSV(rows.join('\n'), 'stockbot_trades_' + new Date().toISOString().split('T')[0] + '.csv')
   }
   function downloadPaperLogCSV() {
     if (!tradeLog || !tradeLog.length) { alert('No paper trades yet'); return }
@@ -645,8 +644,7 @@ export default function App() {
     tradeLog.forEach(function(t) {
       rows.push([t.time||'',displayTicker(t.ticker||''),t.side||'',t.price||'',t.shares||'',t.pnl!=null?t.pnl.toFixed(2):'',t.capitalAfter!=null?t.capitalAfter.toFixed(2):''].join(','))
     })
-    downloadCSV(rows.join('
-'), 'stockbot_paper_' + new Date().toISOString().split('T')[0] + '.csv')
+    downloadCSV(rows.join('\n'), 'stockbot_paper_' + new Date().toISOString().split('T')[0] + '.csv')
   }
 
   // ── RL Training ───────────────────────────────────────────────────────────

@@ -206,3 +206,21 @@ export const CRYPTO_TICKERS = ['X:BTCUSD', 'X:ETHUSD', 'X:SOLUSD']
 export const ALL_TICKERS = [...STOCK_TICKERS, ...CRYPTO_TICKERS]
 
 export const REFRESH_INTERVAL = parseInt(import.meta.env.VITE_REFRESH_INTERVAL || '') || 15 * 60 * 1000
+
+/**
+ * Get recent crypto bars — free tier compatible
+ */
+export async function getCryptoBars(pair, days = 30) {
+  const to = new Date()
+  const from = new Date(Date.now() - (days + 5) * 86400000)
+  const fmtD = d => d.toISOString().split('T')[0]
+  try {
+    const data = await apiFetch(
+      `/v2/aggs/ticker/${pair}/range/1/day/${fmtD(from)}/${fmtD(to)}`,
+      { adjusted: 'true', sort: 'asc', limit: days + 5 }
+    )
+    return (data.results || []).map(r => ({ t:r.t, o:r.o, h:r.h, l:r.l, c:r.c, v:r.v, vw:r.vw||r.c }))
+  } catch(e) {
+    return []
+  }
+}
