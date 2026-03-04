@@ -218,3 +218,21 @@ function emptyResult(capital) {
     finalValue: capital
   }
 }
+
+/**
+ * Convert an equity curve array to CSV string.
+ * equityCurve: [{ date, equity, cash, positions, observationMode }, ...]
+ */
+export function equityCurveToCSV(equityCurve) {
+  const rows = ['date,equity,cash,positions,observationMode']
+  for (const pt of (equityCurve || [])) {
+    rows.push([
+      pt.date || '',
+      (pt.equity  || 0).toFixed(2),
+      (pt.cash    || 0).toFixed(2),
+      pt.positions != null ? pt.positions : '',
+      pt.observationMode ? 'true' : 'false'
+    ].join(','))
+  }
+  return rows.join('\n')
+}
