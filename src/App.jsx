@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { screenStocks, SCREENING_PROFILES, DEFAULT_CRITERIA } from './data/screener.js'
 import { fetchMarketNews, fetchTickerNews, scoreWithClaude, extractNewsStocks, clearNewsCache } from './data/news.js'
@@ -50,9 +50,31 @@ const S = {
   input:{ background:C.surface,border:`1px solid ${C.border}`,color:C.textBright,padding:'8px 12px',borderRadius:4,fontFamily:'inherit',fontSize:11,outline:'none' },
 }
 
+
+// ── Error Boundary — prevents black screen on any React crash ─────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(e) { return { error: e } }
+  componentDidCatch(e, info) { console.error('[ErrorBoundary]', e, info) }
+  render() {
+    if (this.state.error) return (
+      <div style={{padding:40,textAlign:'center',fontFamily:'monospace',background:'#0a0e1a',minHeight:'100vh',color:'#ff3366'}}>
+        <div style={{fontSize:24,marginBottom:16}}>⚠️ Render Error</div>
+        <div style={{fontSize:12,color:'#94a3b8',marginBottom:24}}>{this.state.error.message}</div>
+        <button onClick={()=>this.setState({error:null})}
+          style={{padding:'8px 24px',background:'#1e293b',color:'#00d4ff',border:'1px solid #00d4ff',borderRadius:4,cursor:'pointer',fontFamily:'monospace'}}>
+          ↺ RETRY
+        </button>
+      </div>
+    )
+    return this.props.children
+  }
+}
+
+
 const fmt = {
   price: v=>!v?'—':v>=1000?`$${(v/1000).toFixed(2)}K`:`$${v.toFixed(2)}`,
-  pct: v=>`${v>=0?'+':''}${(v*100).toFixed(2)}%`,
+  pct: v=>v==null?'—':`${v>=0?'+':''}${(v*100).toFixed(2)}%`,
   chg: v=>({ color:v>=0?C.green:C.red }),
   date: ts=>new Date(ts).toLocaleDateString(),
   ago: ts=>{ const m=Math.floor((Date.now()-new Date(ts))/60000); return m<60?`${m}m ago`:`${Math.floor(m/60)}h ago` },
@@ -94,7 +116,7 @@ function portfolioValue(port, prices) {
   return val
 }
 
-export default function App() {
+function App() {
   const [tab,setTab]=useState('screen')
   const [screenProfile,setScreenProfile]=useState(()=>loadSettings().screenProfile||'momentum')
   const [screenResult,setScreenResult]=useState(null)
@@ -626,14 +648,14 @@ export default function App() {
     if (!backtestResult || !backtestResult.equityCurve || !backtestResult.equityCurve.length) {
       alert('Run backtest or training first'); return
     }
-    downloadCSV(equityCurveToCSV(backtestResult.equityCurve), 'stockbot_equity_' + new Date().toISOString().split('T')[0] + '.csv')
+    downloadCSV(equityCurveToCSV(backtestResult.equity), 'stockbot_equity_' + new Date().toISOString().split('T')[0] + '.csv')
   }
   function downloadTradeLogCSV() {
     if (!backtestResult || !backtestResult.tradeLog || !backtestResult.tradeLog.length) {
       alert('Run backtest or training first'); return
     }
     const rows = ['date,ticker,action,price,shares,reason,confidence']
-    backtestResult.tradeLog.forEach(function(t) {
+    backtestResult.trades.forEach(function(t) {
       rows.push([new Date(t.date).toISOString().split('T')[0],t.ticker,t.action,t.price,t.shares,t.reason||'',t.confidence||''].join(','))
     })
     downloadCSV(rows.join('\n'), 'stockbot_trades_' + new Date().toISOString().split('T')[0] + '.csv')
@@ -1497,9 +1519,9 @@ export default function App() {
               <div style={S.panel}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                   <div style={S.pt}>BACKTEST RESULT — BEST WEIGHTS · <span style={{color:C.accent}}>{algoMode} mode</span></div>
-                  {backtestResult.equityCurve?.length>0&&(
+                  {backtestResult.equity?.length>0&&(
                     <button style={{...S.btn('primary'),padding:'3px 10px',fontSize:9}} onClick={()=>{
-                      const csv=equityCurveToCSV(backtestResult.equityCurve)
+                      const csv=equityCurveToCSV(backtestResult.equity)
                       const b=new Blob([csv],{type:'text/csv'})
                       const u=URL.createObjectURL(b)
                       const a=document.createElement('a');a.href=u;a.download='equity_curve.csv';a.click()
@@ -1508,11 +1530,11 @@ export default function App() {
                 </div>
                 <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:8,marginTop:8}}>
                   {[
-                    {label:'RETURN',value:fmt.pct(backtestResult.totalReturn),color:backtestResult.totalReturn>=0?C.green:C.red},
-                    {label:'SHARPE',value:backtestResult.sharpe.toFixed(2),color:C.accent},
-                    {label:'MAX DD',value:`-${(backtestResult.maxDrawdown*100).toFixed(1)}%`,color:backtestResult.maxDrawdown>0.15?C.red:C.yellow},
-                    {label:'REWARD',value:backtestResult.reward?.toFixed(3)||'—',color:C.purple},
-                    {label:'TRADES',value:backtestResult.trades||0,color:C.textDim},
+                    {label:'RETURN',value:fmt.pct(backtestResult.totalReturn||0),color:(backtestResult.totalReturn||0)>=0?C.green:C.red},
+                    {label:'SHARPE',value:(backtestResult.sharpe||0).toFixed(2),color:C.accent},
+                    {label:'MAX DD',value:`-${((backtestResult.maxDrawdown||0)*100).toFixed(1)}%`,color:(backtestResult.maxDrawdown||0)>0.15?C.red:C.yellow},
+                    {label:'REWARD',value:(backtestResult.ragScore||0).toFixed(3),color:C.purple},
+                    {label:'TRADES',value:backtestResult.tradeCount||0,color:C.textDim},
                   ].map(m=>(
                     <div key={m.label} style={{textAlign:'center',padding:10,background:C.surface,borderRadius:6}}>
                       <div style={S.pt}>{m.label}</div>
@@ -1851,4 +1873,8 @@ export default function App() {
       </nav>
     </div>
   )
+}
+
+export default function AppWithBoundary() {
+  return <ErrorBoundary><App /></ErrorBoundary>
 }
