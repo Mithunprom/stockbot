@@ -258,84 +258,180 @@ export async function runEmailVerifier({ emailConfig }) {
 
 // ─── AUTO-IMPROVEMENT ENGINE ─────────────────────────────────────────────────
 /**
- * Reads the combined verification report and generates concrete
- * parameter adjustments + training recommendations.
+ * Reads verification report + raw trade history and generates concrete
+ * parameter adjustments to maximise P/L.
  *
- * Returns: { actions: [...], settingPatches: {}, shouldRetrain: bool, retrainReason: string }
+ * Improvement layers (in order of priority):
+ *   1. Kelly criterion position sizing from actual paper trade history
+ *   2. Consecutive loss protection — tighten entry criteria during losing streaks
+ *   3. Score-bucket analysis — raise minScore if low-signal trades are net losers
+ *   4. Adaptive take-profit — widen TP when winners consistently exceed current target
+ *   5. Drawdown guard — tighten SL when backtest/paper drawdown is high
+ *   6. Portfolio gain protection — lock in gains by tightening SL when up >15%
+ *   7. Confidence threshold — raise when win rate is failing
+ *   8. RL convergence / algo mode
+ *
+ * @param {Object} report          - Full verifier report
+ * @param {Object} currentSettings - Current autoTradeSettings
+ * @param {Object} rawData         - { tradeLog, portfolio }
  */
-export function generateAutoImprovements(report, currentSettings) {
-  const actions = []
+export function generateAutoImprovements(report, currentSettings, rawData = {}) {
+  const actions        = []
   const settingPatches = {}
-  let shouldRetrain = false
-  let retrainReason = ''
+  let shouldRetrain    = false
+  let retrainReason    = ''
 
-  const rl      = report.agents?.rl
-  const strategy= report.agents?.strategy
-  const price   = report.agents?.price
+  const rl       = report.agents?.rl
+  const strategy = report.agents?.strategy
+  const price    = report.agents?.price
 
-  // ── RL not converging → retrain with more episodes ─────────────────────────
-  const rlConverging = rl?.checks.find(c=>c.id==='converging')
-  const rlPlateau    = rl?.checks.find(c=>c.id==='not_plateaued')
-  if (rlConverging?.status==='warn' || rlPlateau?.status==='warn') {
-    shouldRetrain = true
-    retrainReason = rlPlateau?.status==='warn' ? 'RL plateaued in local optimum' : 'Reward not improving — needs more episodes'
-    actions.push({ type:'retrain', severity:'warn', label:'RL Improvement', detail:retrainReason, fix:'Auto-retraining with 40 episodes' })
+  // ── Raw trade analysis ───────────────────────────────────────────────────
+  const allTrades     = (rawData.tradeLog || [])
+  const closedTrades  = allTrades.filter(t => t.pnl != null)
+  const portfolio     = rawData.portfolio || null
+
+  const wins   = closedTrades.filter(t => (t.pnl || 0) > 0)
+  const losses = closedTrades.filter(t => (t.pnl || 0) <= 0)
+  const winRate   = closedTrades.length > 0 ? wins.length / closedTrades.length : 0.5
+  const avgWinPnl = wins.length   > 0 ? wins.reduce((a,t)=>a+(t.pnl||0),0)  / wins.length   : 0
+  const avgLosPnl = losses.length > 0 ? losses.reduce((a,t)=>a+Math.abs(t.pnl||0),0) / losses.length : 0
+  // Avg win/loss as fraction of trade value (for Kelly)
+  const avgWinR = wins.length   > 0 ? wins.reduce((a,t)=>a+((t.pnl||0)/Math.max(t.value||5000,1)),0)   / wins.length   : 0.03
+  const avgLosR = losses.length > 0 ? losses.reduce((a,t)=>a+(Math.abs(t.pnl||0)/Math.max(t.value||5000,1)),0) / losses.length : 0.02
+
+  // ── 1. Kelly criterion position sizing ────────────────────────────────────
+  // Only apply when we have enough trades for statistically reliable Kelly
+  if (closedTrades.length >= 10 && avgLosR > 0) {
+    const b         = avgWinR / avgLosR                            // odds ratio
+    const fullKelly = (b * winRate - (1 - winRate)) / b           // Kelly fraction
+    const halfKelly = Math.max(0, Math.min(0.25, fullKelly * 0.5)) // Half-Kelly, cap 25%
+    const portfolioVal = portfolio
+      ? portfolio.cash + Object.values(portfolio.positions || {}).reduce((s,p)=>s+p.shares*(p.avgPrice||0),0)
+      : 100000
+    const kellySize = Math.round((halfKelly * portfolioVal) / 100) * 100
+    const currentSize = currentSettings?.tradeSize || 5000
+    if (kellySize > 0 && Math.abs(kellySize - currentSize) / currentSize > 0.15) {
+      settingPatches.tradeSize = kellySize
+      const dir = kellySize > currentSize ? 'up' : 'down'
+      actions.push({ type:'setting', severity:'ok', label:'Kelly position sizing', detail:`Win ${(winRate*100).toFixed(0)}% · R/R ${b.toFixed(2)} → Half-Kelly: ${(halfKelly*100).toFixed(1)}% of portfolio = $${kellySize} (${dir} from $${currentSize})`, fix:'Applied automatically' })
+    }
   }
 
-  // ── Win rate too low → raise confidence threshold ─────────────────────────
+  // ── 2. Consecutive loss protection ────────────────────────────────────────
+  if (closedTrades.length >= 3) {
+    const recentTrades     = closedTrades.slice(-5)
+    const consecLosses     = recentTrades.filter(t => (t.pnl || 0) < 0).length
+    if (consecLosses >= 3) {
+      const newScore = Math.min(0.60, (currentSettings?.minScore || 0.25) + 0.10)
+      const newConf  = Math.min(0.80, (currentSettings?.minConfidence || 0.55) + 0.08)
+      settingPatches.minScore      = newScore
+      settingPatches.minConfidence = newConf
+      actions.push({ type:'setting', severity:'error', label:'Losing streak protection', detail:`${consecLosses}/5 recent trades lost — tightening entry: minScore → ${newScore.toFixed(2)}, minConf → ${newConf.toFixed(2)}`, fix:'Applied automatically' })
+      shouldRetrain = true
+      retrainReason = 'Losing streak — re-optimising weights'
+    }
+  }
+
+  // ── 3. Score-bucket analysis — filter low-signal entries ──────────────────
+  if (closedTrades.length >= 8) {
+    const scoreOf = t => parseFloat(t.signal) || 0
+    const lowBucket  = closedTrades.filter(t => scoreOf(t) < 0.40)
+    const highBucket = closedTrades.filter(t => scoreOf(t) >= 0.40)
+    const lowExp  = lowBucket.reduce((a,t)=>a+(t.pnl||0),0)  / Math.max(lowBucket.length, 1)
+    const highExp = highBucket.reduce((a,t)=>a+(t.pnl||0),0) / Math.max(highBucket.length, 1)
+    if (lowBucket.length >= 4 && lowExp < 0 && highExp > lowExp) {
+      const newScore = Math.min(0.45, Math.max(0.35, currentSettings?.minScore || 0.25) + 0.05)
+      if (newScore > (currentSettings?.minScore || 0.25)) {
+        settingPatches.minScore = newScore
+        actions.push({ type:'setting', severity:'warn', label:'Skip low-signal trades', detail:`Trades with score < 0.40 avg ${lowExp < 0 ? '-' : '+'}$${Math.abs(lowExp).toFixed(0)}/trade vs +$${highExp.toFixed(0)} for score ≥ 0.40 — raising minScore → ${newScore.toFixed(2)}`, fix:'Applied automatically' })
+      }
+    }
+  }
+
+  // ── 4. Adaptive take-profit from actual winner magnitude ──────────────────
+  if (wins.length >= 5) {
+    const currentTP = currentSettings?.takeProfitPct || 0.10
+    // If average winning trade return exceeds TP × 1.4, TP is cutting winners short
+    if (avgWinR > currentTP * 1.4) {
+      const newTP = Math.min(0.30, +(avgWinR * 0.85).toFixed(2)) // capture 85% of avg win
+      if (newTP > currentTP + 0.01) {
+        settingPatches.takeProfitPct = newTP
+        actions.push({ type:'setting', severity:'ok', label:'Widen take-profit (winners exceed target)', detail:`Avg winner: ${(avgWinR*100).toFixed(1)}% but TP is ${(currentTP*100).toFixed(0)}% — raising TP → ${(newTP*100).toFixed(0)}%`, fix:'Applied automatically' })
+      }
+    }
+  }
+
+  // ── 5. Drawdown guard ─────────────────────────────────────────────────────
+  const ddCheck = rl?.checks.find(c=>c.id==='drawdown')
+  if (ddCheck?.status==='fail') {
+    const current = currentSettings?.stopLossPct || 0.07
+    const newVal  = Math.max(0.03, +(current - 0.015).toFixed(3))
+    settingPatches.stopLossPct = newVal
+    actions.push({ type:'setting', severity:'error', label:'Tighten stop-loss (drawdown exceeded)', detail:`Drawdown > 15% — reducing SL ${(current*100).toFixed(0)}% → ${(newVal*100).toFixed(0)}%`, fix:'Applied automatically' })
+  }
+
+  // ── 6. Portfolio gain protection ──────────────────────────────────────────
+  if (portfolio) {
+    const totalVal = portfolio.cash + Object.values(portfolio.positions || {}).reduce((s,p)=>s+p.shares*(p.avgPrice||0),0)
+    const gainPct  = (totalVal - 100000) / 100000
+    if (gainPct >= 0.15) {
+      const current = currentSettings?.stopLossPct || 0.07
+      const newSL   = Math.max(0.03, +(current - 0.01).toFixed(3))
+      if (newSL < current) {
+        settingPatches.stopLossPct = newSL
+        actions.push({ type:'setting', severity:'ok', label:'Protect gains (portfolio up ' + (gainPct*100).toFixed(0) + '%)', detail:`Tightening SL from ${(current*100).toFixed(0)}% → ${(newSL*100).toFixed(0)}% to lock in profits`, fix:'Applied automatically' })
+      }
+    }
+  }
+
+  // ── 7. Win rate / confidence threshold ────────────────────────────────────
   const winRateCheck = rl?.checks.find(c=>c.id==='winrate') || strategy?.checks.find(c=>c.id==='paper_winrate')
   if (winRateCheck?.status==='fail') {
     const current = currentSettings?.minConfidence || 0.55
-    const newVal  = Math.min(0.80, current + 0.05)
-    settingPatches.minConfidence = newVal
-    actions.push({ type:'setting', severity:'error', label:'Raise confidence threshold', detail:`Win rate too low — increasing minConfidence ${current} → ${newVal}`, fix:'Applied automatically' })
+    const newVal  = Math.min(0.80, +(current + 0.05).toFixed(2))
+    if (!settingPatches.minConfidence) settingPatches.minConfidence = newVal
+    actions.push({ type:'setting', severity:'error', label:'Raise confidence threshold (win rate low)', detail:`Win rate failing — minConfidence ${current} → ${newVal}`, fix:'Applied automatically' })
     shouldRetrain = true
     retrainReason = retrainReason || 'Win rate below threshold'
   }
 
-  // ── Drawdown > 15% → tighten stop-loss ────────────────────────────────────
-  const ddCheck = rl?.checks.find(c=>c.id==='drawdown')
-  if (ddCheck?.status==='fail') {
-    const current = currentSettings?.stopLossPct || 0.07
-    const newVal  = Math.max(0.03, current - 0.01)
-    settingPatches.stopLossPct = newVal
-    actions.push({ type:'setting', severity:'error', label:'Tighten stop-loss', detail:`Drawdown exceeded 15% — reducing stop-loss ${(current*100).toFixed(0)}% → ${(newVal*100).toFixed(0)}%`, fix:'Applied automatically' })
+  // ── 8. RL convergence / algo mode ─────────────────────────────────────────
+  const rlConverging = rl?.checks.find(c=>c.id==='converging')
+  const rlPlateau    = rl?.checks.find(c=>c.id==='not_plateaued')
+  if (rlConverging?.status==='warn' || rlPlateau?.status==='warn') {
+    if (!shouldRetrain) {
+      shouldRetrain = true
+      retrainReason = rlPlateau?.status==='warn' ? 'RL in local optimum — restart with wider exploration' : 'Reward not improving'
+      actions.push({ type:'retrain', severity:'warn', label:'RL improvement', detail:retrainReason, fix:'Auto-retraining' })
+    }
   }
-
-  // ── Sharpe < 0 → switch algo mode ─────────────────────────────────────────
   const sharpeCheck = rl?.checks.find(c=>c.id==='sharpe')
   if (sharpeCheck?.status==='fail') {
-    actions.push({ type:'mode', severity:'error', label:'Algo mode may be wrong for market regime', detail:'Sharpe negative — current algo mode not suited to market conditions', fix:'Retrain to auto-select PPO vs SAC' })
-    shouldRetrain = true
-    retrainReason = retrainReason || 'Sharpe negative — algo mode switch needed'
+    if (!shouldRetrain) {
+      shouldRetrain = true
+      retrainReason = retrainReason || 'Sharpe negative — algo mode switch needed'
+    }
+    actions.push({ type:'mode', severity:'error', label:'Algo mode wrong for current regime', detail:'Sharpe negative — retrain will auto-select PPO vs SAC', fix:'Triggered retrain' })
   }
-
-  // ── Risk/reward too tight → widen take-profit ─────────────────────────────
   const rrCheck = strategy?.checks.find(c=>c.id==='risk_reward')
-  if (rrCheck?.status==='fail') {
+  if (rrCheck?.status==='fail' && !settingPatches.takeProfitPct) {
     const currentTP = currentSettings?.takeProfitPct || 0.10
-    const newTP     = Math.min(0.25, currentTP + 0.02)
-    settingPatches.takeProfitPct = newTP
-    actions.push({ type:'setting', severity:'warn', label:'Widen take-profit target', detail:`R/R ratio too tight — increasing take-profit ${(currentTP*100).toFixed(0)}% → ${(newTP*100).toFixed(0)}%`, fix:'Applied automatically' })
+    settingPatches.takeProfitPct = Math.min(0.25, +(currentTP + 0.02).toFixed(2))
+    actions.push({ type:'setting', severity:'warn', label:'Widen TP (R/R too tight)', detail:`R/R ratio below 1.2 — TP ${(currentTP*100).toFixed(0)}% → ${(settingPatches.takeProfitPct*100).toFixed(0)}%`, fix:'Applied automatically' })
   }
-
-  // ── Expectancy negative → raise entry score threshold ─────────────────────
   const expectancyCheck = strategy?.checks.find(c=>c.id==='expectancy')
-  if (expectancyCheck?.status==='fail') {
+  if (expectancyCheck?.status==='fail' && !settingPatches.minScore) {
     const current = currentSettings?.minScore || 0.25
-    const newVal  = Math.min(0.50, current + 0.05)
-    settingPatches.minScore = newVal
-    actions.push({ type:'setting', severity:'error', label:'Raise entry score threshold', detail:`Negative expectancy — increasing minScore ${current} → ${newVal}`, fix:'Applied automatically' })
+    settingPatches.minScore = Math.min(0.50, +(current + 0.05).toFixed(2))
+    actions.push({ type:'setting', severity:'error', label:'Raise entry threshold (negative expectancy)', detail:`minScore ${current} → ${settingPatches.minScore}`, fix:'Applied automatically' })
   }
-
-  // ── Mock prices in use → remind about API key ─────────────────────────────
   const apiCheck = price?.checks.find(c=>c.id==='no_api_key')
   if (apiCheck?.status==='warn') {
-    actions.push({ type:'info', severity:'warn', label:'No live prices (mock data)', detail:'Add VITE_POLYGON_API_KEY to Vercel env vars for real prices in emails and signals', fix:'Manual — get free key at polygon.io' })
+    actions.push({ type:'info', severity:'warn', label:'No live prices', detail:'Add VITE_POLYGON_API_KEY for real prices', fix:'Manual — polygon.io' })
   }
 
   if (actions.length === 0) {
-    actions.push({ type:'ok', severity:'ok', label:'No improvements needed', detail:'All 5 subagents passed — strategy running optimally', fix:'—' })
+    actions.push({ type:'ok', severity:'ok', label:'No improvements needed', detail:`All 5 subagents passed · Win rate: ${(winRate*100).toFixed(0)}% · ${closedTrades.length} trades analysed`, fix:'—' })
   }
 
   return { actions, settingPatches, shouldRetrain, retrainReason }
@@ -363,7 +459,7 @@ export async function runAllVerifiers(ctx) {
 
   const report = { ts:Date.now(), overall:errors.length>0?'error':warns.length>0?'warn':'ok', agents:{price,algo,rl,strategy,email}, summary:{ errors,warns,oks, message:errors.length>0?`${errors.length} issue(s): ${errors.join(', ')}`:warns.length>0?`${warns.length} warning(s): ${warns.join(', ')}`:'✅ All 5 subagents passed' }, feedback }
 
-  // Auto-improvement recommendations
-  report.improvements = generateAutoImprovements(report, ctx.autoSettings)
+  // Auto-improvement recommendations — pass raw trade log + portfolio for Kelly/streak analysis
+  report.improvements = generateAutoImprovements(report, ctx.autoSettings, { tradeLog: ctx.tradeLog, portfolio: ctx.portfolio })
   return report
 }

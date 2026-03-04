@@ -538,6 +538,7 @@ function App() {
         apiKey:   getApiKey(),
         trainingLog, backtestResult, rlProgress, algoMode,
         tradeLog: tradeLogRef.current || [],
+        portfolio: portfolioRef.current,
         autoSettings: autoSettingsRef.current,
         emailConfig: { to: EMAIL_TO, lastBriefingSent, lastAlertSent }
       })

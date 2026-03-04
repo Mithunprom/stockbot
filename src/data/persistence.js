@@ -96,7 +96,7 @@ export function displayTicker(ticker) {
 // ── Screener Cache ─────────────────────────────────────────────────────────
 // Stores last screener result so the same stocks appear on page refresh.
 // TTL matches the 15-min refresh interval — stale cache triggers a fresh run.
-const SCREENER_CACHE_KEY = 'stockbot_screener_v1'
+const SCREENER_CACHE_KEY = 'stockbot_screener_v2'  // v2: S&P 500 grouped-bars screener
 const SCREENER_CACHE_TTL = 15 * 60 * 1000
 
 export function loadScreenerCache() { return load(SCREENER_CACHE_KEY, null) }
