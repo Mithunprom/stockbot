@@ -108,6 +108,11 @@ function getApiKey() {
   try { const k=import.meta.env.VITE_POLYGON_API_KEY; if(k&&k.length>10&&k!=='your_polygon_api_key_here') return k } catch(e){}
   return null
 }
+function getFinnhubKey() {
+  try { const k=import.meta.env.VITE_FINNHUB_API_KEY; if(k&&k.length>8) return k } catch(e){}
+  return null
+}
+function hasAnyPriceKey() { return !!(getApiKey()||getFinnhubKey()) }
 
 function portfolioValue(port, prices) {
   let val=port.cash
@@ -262,7 +267,7 @@ function App() {
     // ── PRICE GATE: verify all stock prices vs Polygon before allowing trades ──
     const stockTickers = stocks.map(s => s.ticker)
     let verifiedSet = new Set(ALL_CRYPTO) // crypto always allowed (CoinGecko verified)
-    if (apiKey && isLive) {
+    if (hasAnyPriceKey() && isLive) {
       try {
         const verifyMap = await verifyPricesViaPolygon(stockTickers, apiKey)
         stocks = applyPriceGate(stocks, verifyMap)
@@ -323,7 +328,7 @@ function App() {
     // Auto-run verifiers after each screen (non-blocking)
     setTimeout(()=>runVerify(priceMap, barsMap, newSignals), 1500)
     setWeights(agent.weights)
-    setDataStatus({ live:isLive, keyFound:!!apiKey, lastUpdate:new Date(), screened:tickers.length })
+    setDataStatus({ live:isLive, keyFound:!!(apiKey||getFinnhubKey()), lastUpdate:new Date(), screened:tickers.length })
 
     isScreeningRef.current=false
     setIsScreening(false)
@@ -770,7 +775,7 @@ function App() {
           <span style={S.logo}>STOCKBOT</span>
           {isScreening?<span style={S.badge(C.yellow)}>⟳ SCANNING</span>
             :!dataStatus.keyFound?<span style={S.badge(C.yellow)}>MOCK</span>
-            :dataStatus.live?<span style={S.badge(C.green)}>LIVE · {dataStatus.screened}</span>
+            :dataStatus.live?<span style={S.badge(C.green)}>LIVE · {dataStatus.screened} · {getFinnhubKey()?'FH':'POLY'}</span>
             :<span style={S.badge(C.yellow)}>LOADING</span>}
           <span style={S.badge(algoMode==='PPO'?C.green:algoMode==='SAC'?C.yellow:C.accent)}>{algoMode}</span>
           {observationMode&&<span style={S.badge(C.red)}>OBS MODE</span>}
@@ -892,13 +897,13 @@ function App() {
                           const hasNews = newsStocks.find(n=>n.ticker===s.ticker)
                           const isPriceOk = verifiedTickers.has(s.ticker)
                           return (
-                            <tr key={s.ticker} style={{cursor:'pointer',opacity:isPriceOk||!getApiKey()?1:0.55}} onClick={()=>{setSelectedAsset(s.ticker);setTab('signals')}}>
+                            <tr key={s.ticker} style={{cursor:'pointer',opacity:isPriceOk||!hasAnyPriceKey()?1:0.55}} onClick={()=>{setSelectedAsset(s.ticker);setTab('signals')}}>
                               <td style={{...S.td,color:C.textDim}}>{i+1}</td>
                               <td style={{...S.td,color:C.textBright,fontWeight:700}}>
                                 {s.ticker}
                                 {hasNews?<span style={{color:C.purple,fontSize:8,marginLeft:3}}>📰</span>:null}
-                                {getApiKey()&&!isPriceOk?<span title={s.priceReason||'Price not verified'} style={{color:C.red,fontSize:8,marginLeft:3}}>🔒</span>:null}
-                                {getApiKey()&&isPriceOk?<span title="Polygon verified" style={{color:C.green,fontSize:8,marginLeft:3}}>✓</span>:null}
+                                {hasAnyPriceKey()&&!isPriceOk?<span title={s.priceReason||'Price not verified'} style={{color:C.red,fontSize:8,marginLeft:3}}>🔒</span>:null}
+                                {hasAnyPriceKey()&&isPriceOk?<span title={`${s.priceSource||'price'} verified`} style={{color:C.green,fontSize:8,marginLeft:3}}>✓</span>:null}
                               </td>
                               <td style={S.td}>{fmt.price(s.price)}</td>
                               <td style={{...S.td,...fmt.chg(s.change1d)}}>{s.change1d?.toFixed(2)}%</td>
@@ -1031,11 +1036,11 @@ function App() {
                     </div>
                     <div style={{display:'flex',gap:8}}>
                       <button
-                        style={{...S.btn(verifiedTickers.has(selectedAsset)||!getApiKey()?'green':'default'),flex:1,padding:10}}
+                        style={{...S.btn(verifiedTickers.has(selectedAsset)||!hasAnyPriceKey()?'green':'default'),flex:1,padding:10}}
                         onClick={()=>executeTrade(selectedAsset,'BUY',px?.price,sig)}
-                        disabled={getApiKey()&&!verifiedTickers.has(selectedAsset)}
-                        title={getApiKey()&&!verifiedTickers.has(selectedAsset)?'🔒 Price not verified by Polygon — trade blocked':''}
-                      >▲ BUY {displayTicker(selectedAsset)}{getApiKey()&&!verifiedTickers.has(selectedAsset)?' 🔒':''}</button>
+                        disabled={hasAnyPriceKey()&&!verifiedTickers.has(selectedAsset)}
+                        title={hasAnyPriceKey()&&!verifiedTickers.has(selectedAsset)?'🔒 Price not verified — trade blocked':''}
+                      >▲ BUY {displayTicker(selectedAsset)}{hasAnyPriceKey()&&!verifiedTickers.has(selectedAsset)?' 🔒':''}</button>
                       <button style={{...S.btn('danger'),flex:1,padding:10}} onClick={()=>executeTrade(selectedAsset,'SELL',px?.price,sig)}>▼ SELL {displayTicker(selectedAsset)}</button>
                       {pos&&<button style={{...S.btn(),padding:10}} onClick={()=>closePosition(selectedAsset)}>CLOSE</button>}
                     </div>
