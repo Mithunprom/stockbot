@@ -302,9 +302,10 @@ function App() {
     // Update priceMap with gate-corrected prices
     stocks.forEach(s=>{ if(s.price) priceMap[s.ticker]={ price:s.price, changePct:s.change1d, volume:s.volume } })
 
-    // Only include price-verified stocks in the trading universe when live data is available.
-    // Unverified stocks (price unreachable) are still shown in the screener UI but excluded from signals/auto-trader.
-    const tickers=stocks.slice(0,15).filter(s=>!isLive||s.priceVerified).map(s=>s.ticker)
+    // Only stocks with a verified real price enter the trading/signals universe.
+    // When live data is unavailable (API down, no key), priceVerified is never set → tickers=[] → only crypto shows.
+    // This prevents mock-bar prices (~$100) from appearing as real stock prices.
+    const tickers=stocks.slice(0,15).filter(s=>s.priceVerified===true).map(s=>s.ticker)
     const newSignals={}
     for(const [t,b] of Object.entries(barsMap)) {
       if(b&&b.length>0) newSignals[t]=generateSignal(b,agent.weights)
@@ -962,6 +963,16 @@ function App() {
 
             {selectedAsset&&signals[selectedAsset]?(()=>{
               const sig=signals[selectedAsset],px=prices[selectedAsset],assetBars=bars[selectedAsset]||[]
+              const isVerified=verifiedTickers.has(selectedAsset)||ALL_CRYPTO.includes(selectedAsset)
+              // Block display of any stock whose real-time price couldn't be confirmed.
+              // Prevents mock-bar prices (~$100) from being shown as real prices.
+              if(!isVerified&&hasAnyPriceKey()) return (
+                <div style={{...S.panel,textAlign:'center',padding:48}}>
+                  <div style={{fontSize:16,color:C.red,marginBottom:10}}>🔒 PRICE NOT AVAILABLE</div>
+                  <div style={{fontSize:11,color:C.textDim,marginBottom:6}}>{selectedAsset} — live price could not be verified.</div>
+                  <div style={{fontSize:10,color:C.textDim}}>Trading blocked. Stock will appear once price is confirmed by Finnhub or Polygon.</div>
+                </div>
+              )
               const pos=portfolio.positions[selectedAsset]
               const curPx=px?.price||0
               const unreal=pos?(pos.side==='LONG'?(curPx-pos.avgPrice)*pos.shares:(pos.avgPrice-curPx)*pos.shares):0
