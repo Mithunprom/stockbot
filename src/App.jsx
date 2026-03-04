@@ -651,11 +651,41 @@ export default function App() {
   async function startTraining() {
     if(isTraining||Object.keys(bars).length===0) return
     setIsTraining(true)
-    await trainEpisodes(bars,30,
-      ep=>{ setTrainingLog(prev=>[...prev.slice(-50),{episode:ep.episode,score:ep.result.ragScore.toFixed(3),sharpe:ep.result.sharpe.toFixed(2),dd:(ep.result.maxDrawdown*100).toFixed(1)+'%',ret:(ep.result.totalReturn*100).toFixed(1)+'%',regime:ep.regime,algo:ep.result.algo||'CEM',news:ep.result.newsCount>0?'✓':''}]); setRlProgress(ep.agentState); setWeights({...ep.currentWeights}); setAlgoMode(ep.result.algo||'CEM'); if(ep.result.maxDrawdown>0.15) setObservationMode(true) },
-      done=>{ const finalBt=backtestPortfolio(bars,done.bestWeights); setWeights({...done.bestWeights}); setBacktestResult(finalBt); setIsTraining(false); setAlgoMode(done.currentAlgo||'CEM'); setObservationMode(finalBt.maxDrawdown>0.15) },
-      buildNewsSentimentMap(marketNewsRef.current)
-    )
+    const fmt=(v,d=2)=>v!=null&&isFinite(v)?Number(v).toFixed(d):'—'
+    try {
+      await trainEpisodes(bars,30,
+        ep=>{
+          const r=ep.result||{}
+          setTrainingLog(prev=>[...prev.slice(-49),{
+            episode:ep.episode,
+            score:fmt(r.ragScore,3),
+            sharpe:fmt(r.sharpe,2),
+            dd:fmt((r.maxDrawdown||0)*100,1)+'%',
+            ret:fmt((r.totalReturn||0)*100,1)+'%',
+            regime:ep.regime||'—',
+            algo:r.algo||'CEM',
+            news:r.newsCount>0?'✓':''
+          }])
+          setRlProgress(ep.agentState)
+          setWeights({...(ep.currentWeights||{})})
+          setAlgoMode(r.algo||'CEM')
+          if((r.maxDrawdown||0)>0.15) setObservationMode(true)
+        },
+        done=>{
+          try {
+            const finalBt=backtestPortfolio(bars,done.bestWeights)
+            setWeights({...done.bestWeights})
+            setBacktestResult(finalBt)
+            setAlgoMode(done.currentAlgo||'CEM')
+            setObservationMode((finalBt.maxDrawdown||0)>0.15)
+          } catch(e){ console.error('[Training done]',e) }
+          finally { setIsTraining(false) }
+        }
+      )
+    } catch(e){
+      console.error('[startTraining]',e)
+      setIsTraining(false)
+    }
   }
 
   // ── Computed ──────────────────────────────────────────────────────────────
