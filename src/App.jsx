@@ -1164,10 +1164,9 @@ export default function App() {
 
             <div style={S.panel}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div style={S.pt} style={{marginBottom:0}}>TRADE LOG</div>
+                <div style={{...S.pt,marginBottom:0}}>TRADE LOG ({tradeLog.length})</div>
                 <button style={{...S.btn('primary'),padding:'4px 12px',fontSize:9}} onClick={downloadPaperLogCSV}>↓ CSV</button>
               </div>
- ({tradeLog.length})</div>
               {tradeLog.length===0?<div style={{textAlign:'center',padding:24,color:C.textDim}}>No trades yet</div>:(
                 <div style={{overflowX:'auto',maxHeight:280,overflowY:'auto'}}>
                   <table style={{...S.table,minWidth:420}}>
