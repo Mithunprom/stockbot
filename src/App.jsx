@@ -15,6 +15,7 @@ import { fetchCryptoPrices, buildCryptoBars } from './data/cryptoPrices.js'
 import { equityCurveToCSV } from './backtest/backtester.js'
 import { isConfigured as alpacaConfigured, getMode as alpacaMode, syncPortfolio } from './trading/alpaca.js'
 import { runAllVerifiers, generateAutoImprovements } from './data/verifier.js'
+import { verifyPricesViaPolygon, applyPriceGate } from './data/priceGate.js'
 
 const ALL_CRYPTO = ['X:BTCUSD','X:ETHUSD','X:SOLUSD']
 const CRYPTO_DISPLAY = {'X:BTCUSD':'BTC','X:ETHUSD':'ETH','X:SOLUSD':'SOL'}
@@ -150,6 +151,8 @@ function App() {
   // Auto-trading
   const [autoTradeSettings,setAutoTradeSettings]=useState({...AUTO_TRADE_DEFAULTS,...loadSettings().autoTrade})
   const [autoTradeLog,setAutoTradeLog]=useState([])
+  const [verifiedTickers,setVerifiedTickers]=useState(new Set()) // tickers with confirmed Polygon prices
+  const verifiedRef=useRef(new Set())
   const [exitPreset,setExitPreset]=useState('moderate')
   const [exitAlerts,setExitAlerts]=useState([]) // warnings shown in UI
   // Email
@@ -204,6 +207,7 @@ function App() {
   useEffect(()=>{ marketNewsRef.current=marketNews },[marketNews])
   useEffect(()=>{ dataStatusRef.current=dataStatus },[dataStatus])
   useEffect(()=>{ autoSettingsRef.current=autoTradeSettings },[autoTradeSettings])
+  useEffect(()=>{ verifiedRef.current=verifiedTickers },[verifiedTickers])
 
   // ── Persistence ──────────────────────────────────────────────────────────
   // Settings save (not critical for positions so useEffect is fine here)
@@ -255,6 +259,23 @@ function App() {
     const priceMap={}
     stocks.forEach(s=>{ priceMap[s.ticker]={ price:s.price, changePct:s.change1d, volume:s.volume } })
 
+    // ── PRICE GATE: verify all stock prices vs Polygon before allowing trades ──
+    const stockTickers = stocks.map(s => s.ticker)
+    let verifiedSet = new Set(ALL_CRYPTO) // crypto always allowed (CoinGecko verified)
+    if (apiKey && isLive) {
+      try {
+        const verifyMap = await verifyPricesViaPolygon(stockTickers, apiKey)
+        stocks = applyPriceGate(stocks, verifyMap)
+        // Only add stocks whose price passed gate
+        for (const s of stocks) {
+          if (s.priceVerified) verifiedSet.add(s.ticker)
+        }
+      } catch(e) { console.warn('[PriceGate]', e) }
+    }
+    // Update verified ref immediately so auto-trader can use it
+    verifiedRef.current = verifiedSet
+    setVerifiedTickers(new Set(verifiedSet))
+
     // Crypto prices from live fetch
     for(const pair of ALL_CRYPTO) {
       if(cryptoPriceData[pair]) {
@@ -267,6 +288,8 @@ function App() {
         }
       }
     }
+    // Update priceMap with gate-corrected prices
+    stocks.forEach(s=>{ if(s.price) priceMap[s.ticker]={ price:s.price, changePct:s.change1d, volume:s.volume } })
 
     const tickers=stocks.slice(0,15).map(s=>s.ticker)
     const newSignals={}
@@ -330,6 +353,8 @@ function App() {
       for(const ticker of allTickers) {
         const sig=sigs[ticker], price=px[ticker]?.price
         if(!sig||!price) continue
+        // PRICE GATE: skip auto-trade if price not Polygon-verified
+        if(!verifiedRef.current.has(ticker)) continue
         const ens=ensembleRef.current[ticker]||null
         const decision=evaluateAutoTrade(ticker, sig, ens, b[ticker], port, px, autoTradeSettings)
         if(decision) {
@@ -411,6 +436,11 @@ function App() {
   // ── Paper Trading ─────────────────────────────────────────────────────────
   function executeTrade(ticker,side,price,signal,isAuto=false) {
     if(!price||price<=0) return
+    // PRICE GATE: block any trade on tickers without verified Polygon price
+    if(!verifiedRef.current.has(ticker)) {
+      console.warn(`[PriceGate] Blocked ${side} ${ticker} — price not verified by Polygon`)
+      return
+    }
     // Use ref so auto-trader setInterval always gets current tradeSize
     const effectiveSize = isAuto ? (tradeSizeRef.current || 5000) : tradeSize
     const shares=Math.floor(effectiveSize/price)
@@ -860,10 +890,16 @@ function App() {
                           const ensConf   = ens?.confidence ?? techSig.confidence ?? 0
                           const rsi = s.bars ? calcRSI(s.bars.map(b=>b.c),14) : 50
                           const hasNews = newsStocks.find(n=>n.ticker===s.ticker)
+                          const isPriceOk = verifiedTickers.has(s.ticker)
                           return (
-                            <tr key={s.ticker} style={{cursor:'pointer'}} onClick={()=>{setSelectedAsset(s.ticker);setTab('signals')}}>
+                            <tr key={s.ticker} style={{cursor:'pointer',opacity:isPriceOk||!getApiKey()?1:0.55}} onClick={()=>{setSelectedAsset(s.ticker);setTab('signals')}}>
                               <td style={{...S.td,color:C.textDim}}>{i+1}</td>
-                              <td style={{...S.td,color:C.textBright,fontWeight:700}}>{s.ticker}{hasNews?<span style={{color:C.purple,fontSize:8,marginLeft:3}}>📰</span>:null}</td>
+                              <td style={{...S.td,color:C.textBright,fontWeight:700}}>
+                                {s.ticker}
+                                {hasNews?<span style={{color:C.purple,fontSize:8,marginLeft:3}}>📰</span>:null}
+                                {getApiKey()&&!isPriceOk?<span title={s.priceReason||'Price not verified'} style={{color:C.red,fontSize:8,marginLeft:3}}>🔒</span>:null}
+                                {getApiKey()&&isPriceOk?<span title="Polygon verified" style={{color:C.green,fontSize:8,marginLeft:3}}>✓</span>:null}
+                              </td>
                               <td style={S.td}>{fmt.price(s.price)}</td>
                               <td style={{...S.td,...fmt.chg(s.change1d)}}>{s.change1d?.toFixed(2)}%</td>
                               <td style={{...S.td,color:rsi<30?C.green:rsi>70?C.red:C.textDim}}>{rsi.toFixed(0)}</td>
@@ -994,7 +1030,12 @@ function App() {
                       <span style={{fontSize:9,color:C.textDim}}>= ~{curPx>0?Math.floor(tradeSize/curPx):0} shares</span>
                     </div>
                     <div style={{display:'flex',gap:8}}>
-                      <button style={{...S.btn('green'),flex:1,padding:10}} onClick={()=>executeTrade(selectedAsset,'BUY',px?.price,sig)}>▲ BUY {displayTicker(selectedAsset)}</button>
+                      <button
+                        style={{...S.btn(verifiedTickers.has(selectedAsset)||!getApiKey()?'green':'default'),flex:1,padding:10}}
+                        onClick={()=>executeTrade(selectedAsset,'BUY',px?.price,sig)}
+                        disabled={getApiKey()&&!verifiedTickers.has(selectedAsset)}
+                        title={getApiKey()&&!verifiedTickers.has(selectedAsset)?'🔒 Price not verified by Polygon — trade blocked':''}
+                      >▲ BUY {displayTicker(selectedAsset)}{getApiKey()&&!verifiedTickers.has(selectedAsset)?' 🔒':''}</button>
                       <button style={{...S.btn('danger'),flex:1,padding:10}} onClick={()=>executeTrade(selectedAsset,'SELL',px?.price,sig)}>▼ SELL {displayTicker(selectedAsset)}</button>
                       {pos&&<button style={{...S.btn(),padding:10}} onClick={()=>closePosition(selectedAsset)}>CLOSE</button>}
                     </div>

@@ -85,11 +85,20 @@ export async function runPriceVerifier({ prices, bars, apiKey }) {
 
   const failed = checks.filter(c => c.status === 'fail').length
   const warned = checks.filter(c => c.status === 'warn').length
+  // Count tickers that are blocked (mock sentinel, stale, or live drift fail)
+  const blockedTickers = Object.entries(prices)
+    .filter(([t, p]) => !t.includes('X:') && (!p?.price || p.price === 100 || p.price === 0 || p.price === 1))
+    .map(([t]) => t)
   return {
     agent: 'PriceVerifier',
     status: failed > 0 ? 'error' : warned > 0 ? 'warn' : 'ok',
     checks,
-    summary: failed > 0 ? `${failed} price issue(s) — mock data may be leaking` : warned > 0 ? `${warned} warning(s) — may be using mock/seed prices` : 'All prices verified real',
+    blockedTickers,
+    summary: failed > 0
+      ? `${failed} price issue(s) — ${blockedTickers.length} ticker(s) blocked from trading`
+      : warned > 0
+      ? `${warned} warning(s) — check prices before trading`
+      : 'All prices Polygon-verified — trading allowed',
     ts: Date.now()
   }
 }
