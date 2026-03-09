@@ -39,14 +39,19 @@ models/sentiment/
 data/raw/
 data/features/
 
-# Reports (auto-generated at runtime)
-reports/latency/
-reports/risk/
-reports/drift/
-reports/opportunities/
+# Reports (auto-generated at runtime — keep directory structure but not content)
+reports/latency/*
+reports/risk/*
+reports/drift/*
+reports/opportunities/*
+!reports/latency/.gitkeep
+!reports/risk/.gitkeep
+!reports/drift/.gitkeep
+!reports/opportunities/.gitkeep
 
 # Staging suggestions (human-reviewed, not committed)
 config/staging/
+# config/ffsa_features.json IS committed (Railway fallback)
 
 # Test artifacts
 .pytest_cache/

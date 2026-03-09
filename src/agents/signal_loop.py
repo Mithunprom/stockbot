@@ -158,34 +158,60 @@ class SignalLoop:
         prices = await self._fetch_prices()
         self._pm.update_prices(prices)
 
-        if not features_map:
-            logger.warning("signal_loop_no_features")
-            return
+        # Check whether ML path is viable
+        _ml_viable = (
+            self._n_features >= 10
+            and _TORCH_AVAILABLE
+            and (
+                self._ensemble._transformer is not None
+                or self._ensemble._tcn is not None
+            )
+        )
 
-        # 2. Build tensors for tickers with enough data
-        universe_features: dict[str, dict[str, torch.Tensor]] = {}
-        for ticker in self._universe:
-            arr = features_map.get(ticker)
-            if arr is None or len(arr) < self.SEQ_LEN:
-                continue
-            feat_1m, feat_5m = self._to_tensors(arr)
-            universe_features[ticker] = {"1m": feat_1m, "5m": feat_5m}
+        if not _ml_viable:
+            # ── Rule-based fallback ───────────────────────────────────────────
+            logger.info(
+                "signal_loop_using_rule_based_fallback",
+                n_features=self._n_features,
+                torch_available=_TORCH_AVAILABLE,
+            )
+            signals = await self._rule_based_tick(prices)
+            if not signals:
+                logger.warning("signal_loop_rule_based_no_data")
+                return
+            self._latest_signals = signals
+            logger.info("signal_loop_tick_rule_based", n_signals=len(signals))
+        else:
+            if not features_map:
+                logger.warning("signal_loop_no_features")
+                return
 
-        if not universe_features:
-            logger.warning("signal_loop_insufficient_data", universe=len(self._universe))
-            return
+            # 2. Build tensors for tickers with enough data
+            universe_features: dict[str, dict[str, torch.Tensor]] = {}
+            for ticker in self._universe:
+                arr = features_map.get(ticker)
+                if arr is None or len(arr) < self.SEQ_LEN:
+                    continue
+                feat_1m, feat_5m = self._to_tensors(arr)
+                universe_features[ticker] = {"1m": feat_1m, "5m": feat_5m}
 
-        # 3. Compute ensemble signals
-        signals = await self._ensemble.compute_universe(universe_features)
-        self._latest_signals = signals
-        logger.info("signal_loop_tick", n_signals=len(signals))
+            if not universe_features:
+                logger.warning("signal_loop_insufficient_data", universe=len(self._universe))
+                return
+
+            # 3. Compute ensemble signals
+            signals = await self._ensemble.compute_universe(universe_features)
+            self._latest_signals = signals
+            logger.info("signal_loop_tick", n_signals=len(signals))
 
         # 4. Act on signals — RL agent uses obs from features; fallback uses threshold
+        # universe_features only exists in the ML path; rule-based path has no tensors
+        _uf: dict = locals().get("universe_features", {})
         for sig in signals:
             if abs(sig.ensemble_signal) >= self.SIGNAL_ENTRY_THRESHOLD or self._rl_agent is not None:
                 price = prices.get(sig.ticker, 0.0)
                 if price > 0:
-                    features_arr = universe_features.get(sig.ticker, {}).get("1m")
+                    features_arr = _uf.get(sig.ticker, {}).get("1m") if _uf else None
                     feat_np = (
                         features_arr.numpy() if features_arr is not None
                         else None
@@ -563,6 +589,71 @@ class SignalLoop:
                 )
         except Exception as exc:
             logger.warning("trade_exit_write_failed", ticker=ticker, error=str(exc))
+
+    # ── Rule-based signal path ────────────────────────────────────────────────
+
+    async def _rule_based_tick(self, prices: dict[str, float]) -> list[EnsembleSignal]:
+        """Generate signals via MACD + RSI when ML models/features unavailable.
+
+        Fetches last 50 1m closes from the OHLCV DB table (or uses yfinance as
+        a secondary fallback).  Computes rule-based signal for each ticker with
+        enough data.  Returns list sorted by |signal| desc.
+        """
+        from src.models.ensemble import EnsembleEngine
+
+        signals: list[EnsembleSignal] = []
+        for ticker in self._universe:
+            closes = await self._fetch_ohlcv_closes(ticker, bars=50)
+            if len(closes) < 27:
+                # Secondary fallback: try yfinance for recent 1m bars
+                closes = await self._yfinance_closes(ticker, bars=50)
+            if len(closes) < 27:
+                logger.debug("rule_based_skip_no_data", ticker=ticker, bars=len(closes))
+                continue
+            sig = EnsembleEngine.compute_signal_rule_based(ticker, closes)
+            signals.append(sig)
+
+        return sorted(signals, key=lambda s: abs(s.ensemble_signal), reverse=True)
+
+    async def _fetch_ohlcv_closes(self, ticker: str, bars: int = 50) -> list[float]:
+        """Fetch last `bars` close prices from ohlcv_1m table."""
+        from sqlalchemy import select
+
+        from src.data.db import OHLCV1m
+
+        try:
+            async with self._sf() as session:
+                rows = await session.execute(
+                    select(OHLCV1m.close)
+                    .where(OHLCV1m.ticker == ticker)
+                    .order_by(OHLCV1m.time.desc())
+                    .limit(bars)
+                )
+                closes = list(reversed([float(r) for r in rows.scalars().all() if r is not None]))
+            return closes
+        except Exception as exc:
+            logger.warning("ohlcv_closes_fetch_failed", ticker=ticker, error=str(exc))
+            return []
+
+    async def _yfinance_closes(self, ticker: str, bars: int = 50) -> list[float]:
+        """Fetch recent 1m closes from yfinance as a last-resort fallback."""
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _fetch() -> list[float]:
+                import yfinance as yf  # optional dependency
+                df = yf.download(ticker, period="1d", interval="1m", progress=False)
+                if df is None or df.empty:
+                    return []
+                return df["Close"].dropna().tolist()[-bars:]
+
+            closes = await loop.run_in_executor(None, _fetch)
+            if closes:
+                logger.info("yfinance_closes_fetched", ticker=ticker, bars=len(closes))
+            return closes
+        except Exception as exc:
+            logger.debug("yfinance_closes_failed", ticker=ticker, error=str(exc))
+            return []
 
     # ── Data fetching ─────────────────────────────────────────────────────────
 

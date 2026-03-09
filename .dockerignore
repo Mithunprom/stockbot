@@ -1,0 +1,81 @@
+# .dockerignore — controls what files are sent to the Docker build context.
+# For Railway `railway up`, this also controls what files are uploaded.
+#
+# Strategy: exclude large / sensitive files but EXPLICITLY INCLUDE model
+# checkpoints so Railway has them available at runtime.
+
+# --- Node / frontend ---
+node_modules/
+dist/
+.vercel
+frontend/node_modules/
+frontend/dist/
+
+# --- Python artifacts ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+build/
+develop-eggs/
+venv/
+.venv/
+env/
+pip-wheel-metadata/
+
+# --- Environment secrets (never in image) ---
+.env
+.env.local
+
+# --- Large data files ---
+data/raw/
+data/features/
+
+# --- Git internals ---
+.git/
+.github/
+
+# --- IDE / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# --- Test artifacts ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- RL agent checkpoint (Sharpe=-9.72, not ready for live) ---
+models/rl_agent/
+
+# --- Reports (auto-generated at runtime, no need to ship) ---
+reports/latency/
+reports/risk/
+reports/opportunities/
+# NOTE: reports/drift/ffsa_*.json IS excluded here — we ship config/ffsa_features.json instead
+
+# --- Staging proposals (human-reviewed, not auto-deployed) ---
+config/staging/
+
+# ============================================================
+# EXPLICIT INCLUDES — override any parent-level exclusions.
+# These are the trained ML model checkpoints we NEED on Railway.
+# Dockerfile COPY commands handle the actual inclusion; this file
+# just ensures they are present in the build context.
+# ============================================================
+!models/
+!models/transformer/
+!models/transformer/*.pt
+!models/tcn/
+!models/tcn/*.pt
+!models/sentiment/
+!config/
+!config/ffsa_features.json
+!config/paper.yaml
+!config/live.yaml

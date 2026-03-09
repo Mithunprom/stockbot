@@ -292,3 +292,104 @@ class EnsembleEngine:
         ]
         signals = await asyncio.gather(*tasks)
         return sorted(signals, key=lambda s: abs(s.ensemble_signal), reverse=True)
+
+    # ── Rule-based signal fallback ────────────────────────────────────────────
+
+    @staticmethod
+    def compute_signal_rule_based(
+        ticker: str,
+        closes: "list[float] | Any",
+    ) -> "EnsembleSignal":
+        """Compute a rule-based signal from a sequence of close prices.
+
+        Uses MACD crossover + RSI(14) to derive a directional signal when
+        ML models are unavailable or feature_cols is empty.
+
+        Signal rules:
+          RSI < 35 AND MACD line just crossed above signal line  → +0.50 (buy)
+          RSI > 65 AND MACD line just crossed below signal line  → -0.50 (sell)
+          Otherwise                                              →  0.00 (hold)
+
+        Args:
+            ticker: Ticker symbol.
+            closes: Sequence of close prices (at least 40 values recommended).
+
+        Returns:
+            EnsembleSignal with transformer/tcn confidences=0 and rule-based
+            ensemble_signal. Transformer/TCN weights are 0; full weight on
+            sentiment_index field (used to carry the rule signal).
+        """
+        import numpy as np
+
+        closes_arr = list(closes)
+        if len(closes_arr) < 27:
+            # Not enough data — flat signal
+            return EnsembleSignal(
+                ticker=ticker,
+                timestamp=datetime.now(timezone.utc),
+                transformer_direction=0.0,
+                transformer_confidence=0.0,
+                tcn_direction=0.0,
+                tcn_confidence=0.0,
+                sentiment_index=0.0,
+                ensemble_signal=0.0,
+                w_transformer=0.0,
+                w_tcn=0.0,
+                w_sentiment=1.0,
+            )
+
+        import pandas as pd
+
+        s = pd.Series(closes_arr, dtype=float)
+
+        # RSI(14)
+        delta = s.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+        rs = gain / loss.replace(0, float("nan"))
+        rsi = (100 - (100 / (1 + rs))).iloc[-1]
+
+        # MACD (12, 26, 9)
+        ema12 = s.ewm(span=12, adjust=False).mean()
+        ema26 = s.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+
+        # Crossover: current bar vs previous bar
+        macd_now = macd_line.iloc[-1]
+        macd_prev = macd_line.iloc[-2] if len(macd_line) >= 2 else macd_now
+        sig_now = signal_line.iloc[-1]
+        sig_prev = signal_line.iloc[-2] if len(signal_line) >= 2 else sig_now
+
+        bullish_cross = (macd_now > sig_now) and (macd_prev <= sig_prev)
+        bearish_cross = (macd_now < sig_now) and (macd_prev >= sig_prev)
+
+        if rsi < 35 and bullish_cross:
+            rule_signal = 0.50
+        elif rsi > 65 and bearish_cross:
+            rule_signal = -0.50
+        else:
+            rule_signal = 0.0
+
+        logger.info(
+            "rule_based_signal",
+            ticker=ticker,
+            rsi=round(float(rsi), 2) if not (rsi != rsi) else None,
+            bullish_cross=bullish_cross,
+            bearish_cross=bearish_cross,
+            rule_signal=rule_signal,
+        )
+
+        return EnsembleSignal(
+            ticker=ticker,
+            timestamp=datetime.now(timezone.utc),
+            transformer_direction=0.0,
+            transformer_confidence=0.0,
+            tcn_direction=0.0,
+            tcn_confidence=0.0,
+            sentiment_index=rule_signal,    # carries the rule signal
+            ensemble_signal=rule_signal,
+            w_transformer=0.0,
+            w_tcn=0.0,
+            w_sentiment=1.0,
+        )

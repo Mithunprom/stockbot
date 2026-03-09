@@ -168,6 +168,35 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("scheduler_started", jobs=len(scheduler.get_jobs()))
 
+    # ── Immediate first-run for all sub-agents (populate reports at startup) ──
+    # Scheduled jobs only fire at their next cron slot (e.g. 4:30pm).
+    # By running each agent once now, reports/risk/live.json and
+    # reports/latency/YYYY-MM-DD.json are populated right away so the
+    # /status endpoint returns real data from the very first request.
+    async def _run_startup_agents() -> None:
+        # Small delay to let broker connection settle
+        await asyncio.sleep(10)
+        logger.info("startup_agents_running")
+        try:
+            await risk_agent.run()
+            logger.info("startup_risk_agent_done")
+        except Exception as exc:
+            logger.warning("startup_risk_agent_failed", error=str(exc))
+        try:
+            await latency_agent.run()
+            logger.info("startup_latency_agent_done")
+        except Exception as exc:
+            logger.warning("startup_latency_agent_failed", error=str(exc))
+        if profit_agent is not None:
+            try:
+                await profit_agent.run(mode=settings.alpaca_mode)
+                logger.info("startup_profit_agent_done")
+            except Exception as exc:
+                logger.warning("startup_profit_agent_failed", error=str(exc))
+
+    asyncio.create_task(_run_startup_agents(), name="startup_agents")
+    logger.info("startup_agents_task_created")
+
     logger.info("stockbot_ready", universe_size=len(universe))
     yield
 
@@ -191,14 +220,30 @@ async def lifespan(app: FastAPI):
 
 
 def _load_ffsa_features() -> list[str]:
-    """Load top FFSA feature names from the most recent drift report."""
+    """Load top FFSA feature names from the most recent drift report.
+
+    Search order:
+      1. reports/drift/ffsa_*.json  (runtime-generated, most up-to-date)
+      2. config/ffsa_features.json  (committed fallback for Railway / fresh deploys)
+    """
     ffsa_files = sorted(Path("reports/drift").glob("ffsa_*.json"), reverse=True)
-    if not ffsa_files:
-        logger.warning("ffsa_report_not_found_using_empty_list")
-        return []
-    with open(ffsa_files[0]) as f:
+    if ffsa_files:
+        source = ffsa_files[0]
+        logger.info("ffsa_report_found", file=str(source))
+    else:
+        # Fallback: committed copy shipped with the repo
+        source = Path("config/ffsa_features.json")
+        if source.exists():
+            logger.info("ffsa_report_using_committed_fallback", file=str(source))
+        else:
+            logger.warning("ffsa_report_not_found_using_empty_list")
+            return []
+
+    with open(source) as f:
         data = json.load(f)
-    return data.get("selected_features", [])
+    features = data.get("selected_features", [])
+    logger.info("ffsa_features_loaded_detail", n=len(features), source=str(source))
+    return features
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────
