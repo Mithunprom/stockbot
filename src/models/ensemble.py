@@ -22,12 +22,23 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-import torch
 
-from src.models.sentiment import SentimentScorer
-from src.models.tcn import TCNSignalModel, load_best_checkpoint as load_tcn
-from src.models.transformer import TransformerSignalModel
-from src.models.transformer import load_best_checkpoint as load_transformer
+# torch and ML models are optional — server runs without them if not installed
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _TORCH_AVAILABLE = False
+
+try:
+    from src.models.sentiment import SentimentScorer
+    from src.models.tcn import TCNSignalModel, load_best_checkpoint as load_tcn
+    from src.models.transformer import TransformerSignalModel
+    from src.models.transformer import load_best_checkpoint as load_transformer
+    _MODELS_AVAILABLE = True
+except (ImportError, Exception):
+    _MODELS_AVAILABLE = False
 
 logger = structlog.get_logger(__name__)
 
@@ -144,19 +155,25 @@ class EnsembleEngine:
         device: str | None = None,
     ) -> None:
         self.weights = weights or EnsembleWeights()
-        self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self._transformer: TransformerSignalModel | None = None
-        self._tcn: TCNSignalModel | None = None
-        self._sentiment: SentimentScorer = SentimentScorer()
+        self._device = device or ("cuda" if (_TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu")
+        self._transformer: Any | None = None
+        self._tcn: Any | None = None
+        self._sentiment: Any | None = SentimentScorer() if _MODELS_AVAILABLE else None
 
     async def load(self) -> None:
-        """Load all models concurrently."""
+        """Load all models concurrently. No-op if torch is not installed."""
+        if not _MODELS_AVAILABLE:
+            logger.warning("ml_models_unavailable: torch not installed — running in signal-free mode")
+            return
         loop = asyncio.get_event_loop()
         t_load = loop.run_in_executor(None, self._load_transformer)
         tcn_load = loop.run_in_executor(None, self._load_tcn)
-        await asyncio.gather(t_load, tcn_load, self._sentiment.load())
+        sentiment_load = self._sentiment.load() if self._sentiment else asyncio.sleep(0)
+        await asyncio.gather(t_load, tcn_load, sentiment_load)
 
     def _load_transformer(self) -> None:
+        if not _MODELS_AVAILABLE:
+            return
         self._transformer = load_transformer()
         if self._transformer:
             self._transformer.eval()
@@ -165,6 +182,8 @@ class EnsembleEngine:
             logger.warning("transformer_checkpoint_not_found")
 
     def _load_tcn(self) -> None:
+        if not _MODELS_AVAILABLE:
+            return
         self._tcn = load_tcn()
         if self._tcn:
             self._tcn.eval()

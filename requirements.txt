@@ -11,10 +11,9 @@ polygon-api-client>=1.14.0
 aiohttp>=3.9.5
 httpx>=0.27.0
 
-# ML inference (training scripts run locally, not on server)
-# torch installed separately via CPU wheel — see Dockerfile
-stable-baselines3>=2.3.0
-gymnasium>=0.29.1
+# ML inference libs are optional — only needed when model checkpoints are present
+# Install locally for training: pip install torch stable-baselines3 transformers gymnasium
+# On Railway these are excluded to stay within 512MB memory limit
 
 # Feature engineering
 pandas>=2.2.2

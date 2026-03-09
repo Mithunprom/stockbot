@@ -23,7 +23,13 @@ from typing import Any, Callable, Coroutine
 
 import numpy as np
 import structlog
-import torch
+
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _TORCH_AVAILABLE = False
 
 from src.data.options_flow import get_options_flow
 from src.execution.alpaca import AlpacaOrderRouter, OrderRequest
@@ -55,10 +61,13 @@ def _load_rl_agent() -> Any | None:
 
     ckpt_path = candidates[0]
     try:
-        from stable_baselines3 import PPO
+        from stable_baselines3 import PPO  # optional dependency
         model = PPO.load(str(ckpt_path), device="cpu")
         logger.info("rl_agent_loaded", path=str(ckpt_path))
         return model
+    except ImportError:
+        logger.warning("rl_agent_stable_baselines3_not_installed")
+        return None
     except Exception as exc:
         logger.warning("rl_agent_load_failed", path=str(ckpt_path), error=str(exc))
         return None
@@ -610,10 +619,13 @@ class SignalLoop:
         """
         seq = arr[-self.SEQ_LEN :]                    # (60, n_features)
         seq_5m = seq[4::5]                            # every 5th bar (~12 bars)
-        return (
-            torch.from_numpy(seq.copy()),
-            torch.from_numpy(seq_5m.copy()),
-        )
+        if _TORCH_AVAILABLE:
+            return (
+                torch.from_numpy(seq.copy()),
+                torch.from_numpy(seq_5m.copy()),
+            )
+        # Return numpy arrays as-is if torch unavailable (ensemble will skip inference)
+        return seq.copy(), seq_5m.copy()  # type: ignore[return-value]
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

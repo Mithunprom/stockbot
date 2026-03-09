@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.npm-global/lib/node_modules/tsx/node_modules/esbuild/bin/esbuild src/main.jsx --bundle --jsx=automatic --platform=browser --target=es2020 --outfile=/tmp/test.js --external:recharts)",
+      "Bash(npx esbuild src/main.jsx --bundle --jsx=automatic --platform=browser --target=es2020 --outfile=/tmp/test.js --external:recharts)",
+      "Read(//usr/local/**)",
+      "Bash(/usr/local/lib/node_modules/vercel/node_modules/esbuild/bin/esbuild src/main.jsx --bundle --jsx=automatic --platform=browser --target=es2020 --outfile=/tmp/stockbot_test.js --external:recharts)",
+      "Bash(git push)",
+      "Bash(vercel --prod)",
+      "Bash(/usr/local/lib/node_modules/vercel/bin/vercel --prod)",
+      "Read(//opt/homebrew/**)",
+      "Bash(node /usr/local/lib/node_modules/vercel/dist/index.js --prod)",
+      "Read(//Users/mithunghosh/.nvm/versions/**)",
+      "Bash(/usr/local/bin/node /usr/local/lib/node_modules/vercel/dist/index.js --prod)"
+    ]
+  }
+}
