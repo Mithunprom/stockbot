@@ -1,0 +1,54 @@
+# Paper trading configuration — safe to modify for testing
+# Sub-agents write to config/staging/ not here
+
+mode: paper
+broker:
+  name: alpaca
+  base_url: ${ALPACA_PAPER_BASE_URL}
+
+universe:
+  max_symbols: 50
+  min_price: 5.0
+  max_price: 1000.0
+  min_avg_volume: 500000
+  market: us_equities
+
+risk:
+  max_portfolio_heat: 0.80          # max % of capital in positions
+  max_position_size: 0.25           # max single position as % of portfolio
+  daily_loss_limit: -0.03           # halt day at -3%
+  max_drawdown: -0.08               # pause at -8% from peak
+  consecutive_loss_limit: 5        # reduce sizing after N losses
+  cash_buffer: 0.10                 # always keep 10% cash
+  vix_cash_threshold: 35           # go cash-only above this VIX
+
+position_sizing:
+  method: volatility_scaled
+  target_daily_vol: 0.01            # target 1% daily vol per position
+  base_size: 0.05                   # base position: 5% of portfolio
+
+execution:
+  order_type: limit
+  limit_offset_pct: 0.001           # 0.1% from mid-price
+  slippage_model_pct: 0.00075       # 0.075% avg slippage assumption
+  commission_per_share: 0.005
+
+signals:
+  min_ensemble_threshold: 0.35      # min |ensemble| to enter
+  min_transformer_confidence: 0.60
+  min_tcn_confidence: 0.55
+
+ensemble_weights:
+  transformer: 0.45
+  tcn: 0.35
+  sentiment: 0.20
+
+schedule:
+  market_open_buffer_minutes: 15   # no trades in first 15 min
+  market_close_buffer_minutes: 15  # flatten by 15 min before close
+  trading_days: [Mon, Tue, Wed, Thu, Fri]
+
+logging:
+  level: INFO
+  trade_log: reports/trades/paper_trades.jsonl
+  signal_log: reports/signals/paper_signals.jsonl

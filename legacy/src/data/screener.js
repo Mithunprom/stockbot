@@ -92,48 +92,6 @@ function getRecentTradingDates(n) {
 // reuses this cache → 0 additional API calls, instant re-scoring.
 const groupedDayCache = new Map()
 
-/**
- * Look up close/open/high/low/volume for a ticker from the grouped bars cache.
- * Returns null if the screener hasn't fetched data yet.
- * Used by priceGate.js to verify prices without extra API calls.
- */
-export function getGroupedBarPrice(ticker) {
-  // Search cached days newest-first
-  const dates = [...groupedDayCache.keys()].sort().reverse()
-  for (const date of dates) {
-    const dayMap = groupedDayCache.get(date)
-    const r = dayMap && dayMap[ticker]
-    if (r && r.c > 0) {
-      const prev = dates[dates.indexOf(date) + 1]
-      const prevMap = prev ? groupedDayCache.get(prev) : null
-      const prevR   = prevMap && prevMap[ticker]
-      return {
-        price:     r.c,
-        open:      r.o,
-        high:      r.h,
-        low:       r.l,
-        volume:    r.v,
-        vwap:      r.vw || r.c,
-        change:    prevR ? r.c - prevR.c : 0,
-        changePct: prevR ? (r.c - prevR.c) / prevR.c * 100 : 0,
-        date,
-        source:    'grouped_bars',
-      }
-    }
-  }
-  return null
-}
-
-/**
- * Fetch (or return cached) the most recent completed trading day's grouped bars.
- * Uses 1 API call if not cached. Safe to call from priceGate.js.
- */
-export async function fetchLatestGroupedDay() {
-  const dates = getRecentTradingDates(1)
-  const date  = dates[0]
-  return fetchGroupedDay(date)
-}
-
 async function fetchGroupedDay(date) {
   if (groupedDayCache.has(date)) {
     console.log(`[Screener] Cache hit: ${date}`)

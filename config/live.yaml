@@ -1,0 +1,65 @@
+# LIVE TRADING CONFIGURATION — HUMAN-MANAGED ONLY
+# Sub-agents MUST NOT modify this file. Write proposals to config/staging/.
+# Changes here affect real money. Review before every session.
+
+mode: live
+broker:
+  name: alpaca
+  base_url: ${ALPACA_LIVE_BASE_URL}
+
+# Promotion criteria must be met before enabling (see PROJECT.md Phase 6)
+# All fields match paper.yaml but with tighter risk limits for initial rollout
+
+universe:
+  max_symbols: 30                   # Reduced from paper (50) for go-live
+  min_price: 10.0
+  max_price: 500.0
+  min_avg_volume: 1000000
+  market: us_equities
+
+risk:
+  max_portfolio_heat: 0.70          # tighter than paper
+  max_position_size: 0.10           # 10% max per position (week 1-2)
+  daily_loss_limit: -0.02           # tighter: halt at -2%
+  max_drawdown: -0.05               # tighter: pause at -5%
+  consecutive_loss_limit: 3
+  cash_buffer: 0.20                 # larger buffer for live
+  vix_cash_threshold: 30           # more conservative VIX threshold
+
+capital_deployment:
+  week_1_2_pct: 0.10
+  week_3_4_pct: 0.25
+  month_2_pct: 0.50
+  month_3_plus_pct: 1.00
+  current_deployment_pct: 0.10     # START HERE — increase only after gates pass
+
+position_sizing:
+  method: volatility_scaled
+  target_daily_vol: 0.008           # slightly tighter than paper
+  base_size: 0.03
+
+execution:
+  order_type: limit
+  limit_offset_pct: 0.001
+  slippage_model_pct: 0.00075
+  commission_per_share: 0.005
+
+signals:
+  min_ensemble_threshold: 0.40      # higher bar for live
+  min_transformer_confidence: 0.65
+  min_tcn_confidence: 0.60
+
+ensemble_weights:
+  transformer: 0.45
+  tcn: 0.35
+  sentiment: 0.20
+
+schedule:
+  market_open_buffer_minutes: 20   # longer buffer on live
+  market_close_buffer_minutes: 20
+  trading_days: [Mon, Tue, Wed, Thu, Fri]
+
+logging:
+  level: WARNING
+  trade_log: reports/trades/live_trades.jsonl
+  signal_log: reports/signals/live_signals.jsonl

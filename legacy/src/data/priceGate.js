@@ -2,27 +2,23 @@
  * priceGate.js — Price verification gate
  *
  * Priority order:
- *   1. Grouped bars cache (screener.js) — already fetched, 0 extra API calls,
- *      free tier safe. Covers entire S&P 500 universe per day.
- *   2. Finnhub — real-time quotes (VITE_FINNHUB_API_KEY), optional enhancement
- *   3. Sanity  — if both sources unavailable, accept screener price if it
- *                passes basic sanity checks (not mock sentinel, not zero)
- *
- * NOTE: The Polygon snapshot endpoint (/v2/snapshot/...) requires a paid plan
- * and caused rate-limit / 403 failures on the free tier. It has been removed.
- * The grouped bars approach (1 call = all stocks) is free and sufficient.
+ *   1. Finnhub  — real-time quotes, official API (VITE_FINNHUB_API_KEY)
+ *   2. Polygon  — 15-min delayed fallback   (VITE_POLYGON_API_KEY)
+ *   3. Sanity   — if both APIs fail/rate-limit, accept screener price
+ *                 if it passes basic sanity checks (not mock sentinel)
  *
  * A ticker is BLOCKED only if the price is clearly wrong (mock sentinel,
  * zero, or huge drift). API failures alone do NOT block trading.
  */
-
-import { getGroupedBarPrice, fetchLatestGroupedDay } from './screener.js'
 
 const DRIFT_THRESHOLD = 0.10        // 10% drift = suspicious
 const STALE_MS        = 30 * 60 * 1000
 
 function getFinnhubKey() {
   try { const k = import.meta.env.VITE_FINNHUB_API_KEY; return k?.length > 8 ? k : null } catch { return null }
+}
+function getPolygonKey() {
+  try { const k = import.meta.env.VITE_POLYGON_API_KEY; return k?.length > 8 && k !== 'your_polygon_api_key_here' ? k : null } catch { return null }
 }
 
 // ── Tier 3: sanity-check the screener price itself ────────────────────────
@@ -85,33 +81,43 @@ async function verifyViaFinnhub(tickers) {
   return results
 }
 
-// ── Tier 1b: Grouped bars cache — free, covers entire S&P 500 in 1 API call ─
-// The screener already fetches this. Here we just read from the in-memory cache.
-// If the screener hasn't run yet we trigger one fetch (costs 1 API call).
-async function verifyViaGroupedBars(tickers) {
-  if (!tickers.length) return new Map()
-
-  // Warm the cache if needed (screener.js fetchLatestGroupedDay = 1 call)
-  await fetchLatestGroupedDay()
+// ── Tier 2: Polygon batch snapshot ───────────────────────────────────────
+async function verifyViaPolygon(tickers) {
+  const key = getPolygonKey()
+  if (!key || !tickers.length) return new Map()
 
   const results = new Map()
-  for (const ticker of tickers) {
-    const bar = getGroupedBarPrice(ticker)
-    if (bar && bar.price > 0) {
-      results.set(ticker, {
-        verified:  true,
-        reason:    `Grouped bars OK (${bar.date}) $${bar.price.toFixed(2)}`,
-        livePrice: bar.price,
-        source:    'grouped_bars',
-      })
-    } else {
-      results.set(ticker, {
-        verified:  false,
-        reason:    'Not in grouped bars cache',
-        livePrice: null,
-        source:    'grouped_bars',
-        apiFailed: false,
-      })
+  for (let i = 0; i < tickers.length; i += 50) {
+    const chunk = tickers.slice(i, i + 50)
+    try {
+      const res = await fetch(
+        `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${chunk.join(',')}&apiKey=${key}`,
+        { signal: AbortSignal.timeout(8000) }
+      )
+      if (res.status === 429) {
+        chunk.forEach(t => results.set(t, { verified: false, reason: 'Polygon rate limit', livePrice: null, source: 'polygon', rateLimited: true }))
+        continue
+      }
+      if (!res.ok) {
+        chunk.forEach(t => results.set(t, { verified: false, reason: `Polygon HTTP ${res.status}`, livePrice: null, source: 'polygon' }))
+        continue
+      }
+      const data = await res.json()
+      const snapMap = {}
+      for (const s of (data.tickers || [])) snapMap[s.ticker] = s
+
+      for (const ticker of chunk) {
+        const snap = snapMap[ticker]
+        if (!snap) { results.set(ticker, { verified: false, reason: 'Not in Polygon snapshot', livePrice: null, source: 'polygon' }); continue }
+        const price     = snap.day?.c || snap.prevDay?.c || null
+        const updatedAt = snap.updated
+        const isStale   = updatedAt && (Date.now() - updatedAt) > STALE_MS
+        if (!price)        results.set(ticker, { verified: false, reason: 'No price in Polygon snapshot', livePrice: null, source: 'polygon' })
+        else if (isStale)  results.set(ticker, { verified: false, reason: 'Polygon snapshot stale', livePrice: price, source: 'polygon' })
+        else               results.set(ticker, { verified: true,  reason: 'Polygon OK', livePrice: price, source: 'polygon' })
+      }
+    } catch (e) {
+      chunk.forEach(t => results.set(t, { verified: false, reason: `Polygon: ${e.message}`, livePrice: null, source: 'polygon' }))
     }
   }
   return results
@@ -122,37 +128,32 @@ async function verifyViaGroupedBars(tickers) {
 export async function verifyPricesViaPolygon(tickers, _ignored) {
   if (!tickers.length) return new Map()
 
-  // Tier 1a: Grouped bars cache — 0 extra API calls if screener already ran,
-  // 1 call if not yet warmed. Free tier safe. Covers entire S&P 500.
-  const gbResults = await verifyViaGroupedBars(tickers)
+  // Tier 1: Finnhub
+  const fhResults  = getFinnhubKey() ? await verifyViaFinnhub(tickers) : new Map()
 
-  // Tickers not found in grouped bars (e.g. crypto, ETFs, off-universe stocks)
-  const needsFinnhub = tickers.filter(t => !gbResults.get(t)?.verified)
+  // Tier 2: Polygon — only for tickers Finnhub couldn't verify
+  const needsPoly  = tickers.filter(t => { const r = fhResults.get(t); return !r?.verified })
+  const pgResults  = getPolygonKey() && needsPoly.length ? await verifyViaPolygon(needsPoly) : new Map()
 
-  // Tier 1b: Finnhub real-time — optional, only for remaining tickers
-  const fhResults = getFinnhubKey() && needsFinnhub.length
-    ? await verifyViaFinnhub(needsFinnhub)
-    : new Map()
-
-  // Merge with Tier 2 sanity fallback
+  // Merge with Tier 3 sanity fallback
   const final = new Map()
   for (const ticker of tickers) {
-    const gb = gbResults.get(ticker)
     const fh = fhResults.get(ticker)
+    const pg = pgResults.get(ticker)
 
-    if (gb?.verified) {
-      final.set(ticker, gb)
-    } else if (fh?.verified) {
+    if (fh?.verified) {
       final.set(ticker, fh)
+    } else if (pg?.verified) {
+      final.set(ticker, pg)
     } else {
-      // No source could verify — apply sanity check on screener price
+      // Both APIs failed — ticker will be sanity-checked against screener price in applyPriceGate
       final.set(ticker, {
         verified:    false,
-        reason:      fh?.reason || gb?.reason || 'No price source available',
-        livePrice:   fh?.livePrice || gb?.livePrice || null,
+        reason:      fh?.reason || pg?.reason || 'No API response',
+        livePrice:   fh?.livePrice || pg?.livePrice || null,
         source:      'none',
-        apiFailed:   true,
-        rateLimited: fh?.rateLimited || false,
+        apiFailed:   true,   // flag: failure was API, not bad price
+        rateLimited: fh?.rateLimited || pg?.rateLimited || false,
       })
     }
   }

@@ -1,7 +1,56 @@
+# Frontend
 node_modules/
 dist/
+.vercel
+
+# Environment
 .env
 .env.local
 .DS_Store
+
+# Logs
 *.log
-.vercel
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+develop-eggs/
+venv/
+.venv/
+env/
+.env/
+pip-wheel-metadata/
+
+# PyTorch / ML model checkpoints (large binaries — don't commit to git)
+models/transformer/*.pt
+models/tcn/*.pt
+models/rl_agent/*.zip
+models/rl_agent/periodic/*.zip
+models/sentiment/
+
+# Data (raw tick data can be gigabytes)
+data/raw/
+data/features/
+
+# Reports (auto-generated at runtime)
+reports/latency/
+reports/risk/
+reports/drift/
+reports/opportunities/
+
+# Staging suggestions (human-reviewed, not committed)
+config/staging/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
