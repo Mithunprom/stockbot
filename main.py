@@ -318,6 +318,119 @@ async def get_trades(limit: int = 100, mode: str = "paper") -> JSONResponse:
     })
 
 
+@app.get("/status")
+async def get_status() -> JSONResponse:
+    """Comprehensive system status — models, agents, weights, RL, circuit breakers."""
+    import pathlib
+
+    status: dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": get_settings().alpaca_mode,
+    }
+
+    # ── Signal loop ───────────────────────────────────────────────────────────
+    if _signal_loop is not None:
+        status["signal_loop"] = {
+            "active": True,
+            "universe_size": len(_signal_loop._universe),
+            "universe": _signal_loop._universe,
+            "feature_cols": len(_signal_loop._feature_cols),
+            "consecutive_losses": _signal_loop._consecutive_losses,
+            "open_positions": len(_signal_loop._pm._positions),
+            "portfolio_value": round(_signal_loop._pm.portfolio_value, 2),
+            "portfolio_heat": round(_signal_loop._pm.portfolio_heat, 4),
+            "daily_start_value": round(_signal_loop._daily_start_value, 2),
+            "daily_pnl_pct": round(
+                (_signal_loop._pm.portfolio_value / max(_signal_loop._daily_start_value, 1) - 1) * 100, 3
+            ),
+        }
+
+        # ── Ensemble weights & model status ───────────────────────────────────
+        ens = _signal_loop._ensemble
+        status["ensemble"] = {
+            "weights": {
+                "transformer": ens.weights.transformer,
+                "tcn": ens.weights.tcn,
+                "sentiment": ens.weights.sentiment,
+            },
+            "transformer_loaded": ens._transformer is not None,
+            "tcn_loaded": ens._tcn is not None,
+            "sentiment_loaded": ens._sentiment is not None,
+        }
+
+        # ── Circuit breakers ──────────────────────────────────────────────────
+        cb = _signal_loop._cb
+        status["circuit_breakers"] = {
+            "halted": cb.is_halted,
+            "halt_reason": cb.halt_reason,
+        }
+
+        # ── RL agent ──────────────────────────────────────────────────────────
+        rl = _signal_loop._rl_agent
+        status["rl_agent"] = {"loaded": rl is not None}
+        if rl is not None:
+            status["rl_agent"]["policy"] = type(rl.policy).__name__
+    else:
+        status["signal_loop"] = {"active": False}
+
+    # ── Model checkpoints (read filenames for Sharpe scores) ──────────────────
+    def _best_checkpoint(glob_pattern: str) -> dict[str, Any]:
+        files = sorted(pathlib.Path(".").glob(glob_pattern), reverse=True)
+        if not files:
+            return {"found": False}
+        best = files[0]
+        parts = best.stem.split("sharpe_")
+        sharpe = float(parts[1]) if len(parts) > 1 else None
+        step_parts = best.stem.split("step_")
+        step = int(step_parts[1].split("_")[0]) if len(step_parts) > 1 else None
+        return {"found": True, "file": best.name, "sharpe": sharpe, "step": step}
+
+    status["model_checkpoints"] = {
+        "transformer": _best_checkpoint("models/transformer/step_*_sharpe_*.pt"),
+        "tcn":         _best_checkpoint("models/tcn/step_*_sharpe_*.pt"),
+        "rl_agent":    _best_checkpoint("models/rl_agent/best_ppo_*.zip"),
+    }
+
+    # ── FFSA feature selection ────────────────────────────────────────────────
+    ffsa_files = sorted(pathlib.Path("reports/drift").glob("ffsa_*.json"), reverse=True)
+    if ffsa_files:
+        with open(ffsa_files[0]) as f:
+            ffsa_data = json.load(f)
+        status["ffsa"] = {
+            "report": ffsa_files[0].name,
+            "n_features": len(ffsa_data.get("selected_features", [])),
+            "ic": ffsa_data.get("ic", None),
+            "features": ffsa_data.get("selected_features", []),
+        }
+    else:
+        status["ffsa"] = {"report": None, "note": "No FFSA report — run scripts/run_ffsa.py"}
+
+    # ── Sub-agent last reports ────────────────────────────────────────────────
+    def _latest_report(folder: str) -> dict[str, Any]:
+        files = sorted(pathlib.Path(f"reports/{folder}").glob("*.json"), reverse=True)
+        if not files:
+            return {"last_run": None, "file": None}
+        with open(files[0]) as f:
+            data = json.load(f)
+        return {"last_run": files[0].name, "data": data}
+
+    status["sub_agents"] = {
+        "risk_agent":    _latest_report("risk"),
+        "latency_agent": _latest_report("latency"),
+        "profit_agent":  _latest_report("opportunities"),
+    }
+
+    # ── Staging proposals (Profit Agent suggestions) ──────────────────────────
+    staging = pathlib.Path("config/staging/profit_suggestions.json")
+    if staging.exists():
+        with open(staging) as f:
+            status["staging_proposals"] = json.load(f)
+    else:
+        status["staging_proposals"] = None
+
+    return JSONResponse(content=status)
+
+
 @app.get("/reports/{report_name}")
 async def get_report(report_name: str) -> JSONResponse:
     """Return the latest JSON report by name (risk, latency, drift, opportunities)."""
