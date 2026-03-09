@@ -136,7 +136,7 @@ def _fetch_options_aggregate(ticker: str) -> dict[str, Any] | None:
             "ticker": ticker,
             "time": datetime.now(timezone.utc),
             "contract": f"{ticker}_aggregate",
-            "option_type": "aggregate",
+            "option_type": "aggr",
             "strike": 0.0,
             "expiry": None,
             "premium": float(total_vol),       # use total volume as proxy

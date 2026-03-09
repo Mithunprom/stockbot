@@ -240,8 +240,10 @@ class EnsembleEngine:
         else:
             tcn_dir, tcn_conf = 0.0, 0.0
 
-        # Sentiment rolling index
-        si = await self._sentiment.rolling_sentiment_index(ticker, lookback_hours=24)
+        # Sentiment rolling index (None when transformers not installed)
+        si = 0.0
+        if self._sentiment is not None:
+            si = await self._sentiment.rolling_sentiment_index(ticker, lookback_hours=24)
 
         # Weighted ensemble
         w = self.weights
