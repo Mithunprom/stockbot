@@ -36,7 +36,14 @@ from src.execution.alpaca import AlpacaOrderRouter, OrderRequest
 from src.execution.position_manager import PositionManager
 from src.models.ensemble import EnsembleEngine, EnsembleSignal
 from src.risk.circuit_breakers import CircuitBreakers, RiskState
-from src.rl.trading_env import ACTION_NAMES, STATE_DIM
+
+# Inline constants from trading_env to avoid importing gymnasium at startup
+ACTION_NAMES = [
+    "hold", "buy_small", "buy_medium", "buy_large",
+    "sell_25pct", "sell_50pct", "sell_all",
+    "short_small", "short_large",
+]
+STATE_DIM = 27
 
 logger = structlog.get_logger(__name__)
 
