@@ -244,9 +244,10 @@ async def _download_models_from_s3() -> None:
         return
 
     # Map S3 key → local path
+    # S3 bucket has files at transformer/ and tcn/ (no models/ prefix)
     model_files = {
-        "models/transformer/step_055314_sharpe_0.896.pt": Path("models/transformer/step_055314_sharpe_0.896.pt"),
-        "models/tcn/step_043461_sharpe_0.776.pt": Path("models/tcn/step_043461_sharpe_0.776.pt"),
+        "transformer/step_055314_sharpe_0.896.pt": Path("models/transformer/step_055314_sharpe_0.896.pt"),
+        "tcn/step_043461_sharpe_0.776.pt": Path("models/tcn/step_043461_sharpe_0.776.pt"),
     }
 
     loop = asyncio.get_event_loop()

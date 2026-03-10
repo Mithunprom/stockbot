@@ -19,7 +19,7 @@ import structlog
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import insert
 
 from src.data.db import OptionsFlow, get_session_factory
 
@@ -174,17 +174,7 @@ async def _write_flow_rows(rows: list[dict[str, Any]]) -> None:
 
     session_factory = get_session_factory()
     async with session_factory() as session:
-        stmt = insert(OptionsFlow).values(clean)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["time", "ticker"],
-            set_={
-                "net_gex": stmt.excluded.net_gex,
-                "smart_money_score": stmt.excluded.smart_money_score,
-                "unusual_flag": stmt.excluded.unusual_flag,
-                "vol_oi_ratio": stmt.excluded.vol_oi_ratio,
-            },
-        )
-        await session.execute(stmt)
+        await session.execute(insert(OptionsFlow).values(clean))
         await session.commit()
     logger.info("options_flow_written", count=len(clean))
 
