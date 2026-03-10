@@ -239,6 +239,15 @@ class NewsPoller:
 
         if all_rows:
             await _write_articles(all_rows)
+            # Score new articles via HF FinBERT API right after writing
+            try:
+                from src.models.sentiment import SentimentScorer
+                _scorer = SentimentScorer()
+                scored = await _scorer.score_unscored_articles(batch_size=20)
+                if scored:
+                    logger.info("news_sentiment_scored", count=scored)
+            except Exception as exc:
+                logger.warning("news_sentiment_score_error", error=str(exc))
 
     async def update_universe(self, new_universe: set[str]) -> None:
         """Hot-swap the ticker universe without restarting the poller."""

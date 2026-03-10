@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -451,14 +452,11 @@ async def get_status() -> JSONResponse:
             "transformer_loaded": ens._transformer is not None,
             "tcn_loaded": ens._tcn is not None,
             "sentiment_loaded": ens._sentiment is not None,
-            "finbert_active": (
-                ens._sentiment is not None
-                and getattr(ens._sentiment, "_pipeline", None) is not None
-            ),
+            "finbert_active": bool(os.environ.get("HUGGINGFACE_API_TOKEN")),
             "sentiment_note": (
-                "FinBERT scoring active"
-                if (ens._sentiment is not None and getattr(ens._sentiment, "_pipeline", None) is not None)
-                else "Sentiment SI=0 (transformers not installed — install to enable FinBERT)"
+                "FinBERT active via HF Inference API"
+                if os.environ.get("HUGGINGFACE_API_TOKEN")
+                else "Sentiment disabled — set HUGGINGFACE_API_TOKEN"
             ),
         }
 
