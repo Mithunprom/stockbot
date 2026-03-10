@@ -25,6 +25,7 @@ def create_scheduler(
     risk_agent: Any,
     latency_agent: Any,
     profit_agent: Any | None = None,
+    screener_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -87,6 +88,23 @@ def create_scheduler(
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=600,
+        )
+
+    # ── Screener Agent: nightly after market close ────────────────────────────
+    if screener_agent is not None:
+        scheduler.add_job(
+            lambda: asyncio.create_task(screener_agent.run()),
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour=18,
+                minute=0,
+                timezone="America/New_York",
+            ),
+            id="screener_agent",
+            name="Screener Agent (nightly)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
         )
 
     logger.info(

@@ -34,9 +34,20 @@ logger = structlog.get_logger(__name__)
 
 # Default trading universe — overridden by config/paper.yaml or config/live.yaml
 _DEFAULT_UNIVERSE: list[str] = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO",
-    "AMD", "ORCL", "CRM", "PLTR", "COIN", "JPM", "V", "MA",
-    "LLY", "UNH", "XOM", "CVX", "HD", "COST", "NFLX", "DIS",
+    # Core mega-cap tech
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+    # Semiconductors
+    "AVGO", "AMD", "SNDK",
+    # Defense / military
+    "LMT", "RTX", "NOC", "GD", "BA",
+    # Financials
+    "JPM", "V", "MA",
+    # AI / high-momentum
+    "PLTR", "ARM", "MSTR",
+    # Energy
+    "XOM", "CVX",
+    # Consumer / healthcare
+    "LLY", "UNH", "COST", "NFLX",
 ]
 
 # ─── Module-level singletons (populated in lifespan) ──────────────────────────
@@ -63,9 +74,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     session_factory = get_session_factory()
 
-    # ── Trading universe (load from config or use defaults) ───────────────────
-    cfg = settings.get_trading_config()
-    universe: list[str] = cfg.get("universe", {}).get("symbols", _DEFAULT_UNIVERSE)
+    # ── Trading universe (screener → config → defaults) ───────────────────────
+    universe: list[str] = _load_universe()
 
     # ── Phase 1: Real-time data ingest ────────────────────────────────────────
     alpaca_stream = AlpacaDataStreamClient(tickers=universe, feed="iex")
@@ -157,16 +167,19 @@ async def lifespan(app: FastAPI):
     from src.agents.latency_agent import LatencyAgent
     from src.agents.profit_agent import ProfitAgent
     from src.agents.risk_agent import RiskAgent
+    from src.agents.screener_agent import ScreenerAgent
     from src.agents.scheduler import create_scheduler
 
     risk_agent = RiskAgent(circuit_breakers, pos_manager, alpaca_router)
     latency_agent = LatencyAgent()
     profit_agent = ProfitAgent()
+    screener_agent = ScreenerAgent(signal_loop=_signal_loop)
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
         latency_agent=latency_agent,
-        profit_agent=profit_agent,   # enabled from Day 1 in paper mode
+        profit_agent=profit_agent,
+        screener_agent=screener_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -181,6 +194,12 @@ async def lifespan(app: FastAPI):
         # Small delay to let broker connection settle
         await asyncio.sleep(10)
         logger.info("startup_agents_running")
+        # Run screener first so universe is fresh from the very first tick
+        try:
+            await screener_agent.run()
+            logger.info("startup_screener_agent_done")
+        except Exception as exc:
+            logger.warning("startup_screener_failed", error=str(exc))
         try:
             await risk_agent.run()
             logger.info("startup_risk_agent_done")
@@ -268,6 +287,29 @@ async def _download_models_from_s3() -> None:
                 logger.error("s3_download_failed", key=s3_key, error=str(exc))
 
     await loop.run_in_executor(None, _download)
+
+
+def _load_universe() -> list[str]:
+    """Load trading universe.
+
+    Priority:
+      1. config/universe.json  — written nightly by ScreenerAgent
+      2. _DEFAULT_UNIVERSE     — hardcoded fallback (first run / no screener yet)
+    """
+    universe_file = Path("config/universe.json")
+    if universe_file.exists():
+        with open(universe_file) as f:
+            data = json.load(f)
+        symbols = data.get("symbols", [])
+        if symbols:
+            logger.info(
+                "universe_loaded_from_screener",
+                count=len(symbols),
+                updated_at=data.get("updated_at", "unknown"),
+            )
+            return symbols
+    logger.info("universe_using_default", count=len(_DEFAULT_UNIVERSE))
+    return _DEFAULT_UNIVERSE
 
 
 def _load_ffsa_features() -> list[str]:
@@ -525,10 +567,26 @@ async def get_status() -> JSONResponse:
             data = json.load(f)
         return {"last_run": files[0].name, "data": data}
 
+    # Screener last run
+    screener_files = sorted(
+        pathlib.Path("reports/opportunities").glob("screener_*.json"), reverse=True
+    )
+    screener_status: dict[str, Any] = {"last_run": None}
+    if screener_files:
+        with open(screener_files[0]) as f:
+            sc = json.load(f)
+        screener_status = {
+            "last_run": screener_files[0].name,
+            "date": sc.get("date"),
+            "universe_size": len(sc.get("universe", [])),
+            "top_5_momentum": sc.get("top_50_by_score", [])[:5],
+        }
+
     status["sub_agents"] = {
         "risk_agent":    _latest_report("risk"),
         "latency_agent": _latest_report("latency"),
         "profit_agent":  _latest_report("opportunities"),
+        "screener_agent": screener_status,
     }
 
     # ── Staging proposals (Profit Agent suggestions) ──────────────────────────
