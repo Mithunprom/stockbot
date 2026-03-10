@@ -38,14 +38,11 @@ MIN_PRICE = 5.0
 MAX_PRICE = 2000.0
 
 # These tickers are ALWAYS in the universe regardless of momentum score.
-# Includes the user's picks: defense stocks, SNDK, high-momentum names.
 ANCHOR_TICKERS: list[str] = [
     # Core mega-cap tech (high liquidity, tight spreads)
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
     # Semiconductors
     "AVGO", "AMD", "SNDK",
-    # Defense / military (user request)
-    "LMT", "RTX", "NOC", "GD", "BA",
     # Financials
     "JPM", "V", "MA",
     # High-momentum / AI
@@ -53,6 +50,9 @@ ANCHOR_TICKERS: list[str] = [
     # Energy
     "XOM", "CVX",
 ]
+
+# These tickers are NEVER added to the universe even if S&P 500 momentum qualifies them.
+EXCLUDE_TICKERS: set[str] = {"META"}
 
 # ─── S&P 500 constituent fetch ─────────────────────────────────────────────────
 
@@ -250,22 +250,23 @@ class ScreenerAgent:
         logger.info("screener_scored", eligible=len(scored))
 
         # Build universe: anchors first, then top momentum scores
-        anchor_set = set(ANCHOR_TICKERS)
         universe: list[str] = []
 
-        # Add anchors that passed the liquidity filter (or are in scored list)
-        scored_map = {s["ticker"]: s for s in scored}
+        # Add anchors (always included, never excluded)
         for ticker in ANCHOR_TICKERS:
             if len(universe) >= MAX_UNIVERSE:
                 break
             universe.append(ticker)
 
-        # Fill remaining slots with top scorers not already included
+        # Fill remaining slots with top S&P 500 scorers, skipping excluded tickers
+        universe_set = set(universe)
         for entry in scored:
             if len(universe) >= MAX_UNIVERSE:
                 break
-            if entry["ticker"] not in set(universe):
-                universe.append(entry["ticker"])
+            ticker = entry["ticker"]
+            if ticker not in universe_set and ticker not in EXCLUDE_TICKERS:
+                universe.append(ticker)
+                universe_set.add(ticker)
 
         # Write detailed report
         self._write_report(scored, universe)

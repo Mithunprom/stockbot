@@ -35,11 +35,9 @@ logger = structlog.get_logger(__name__)
 # Default trading universe — overridden by config/paper.yaml or config/live.yaml
 _DEFAULT_UNIVERSE: list[str] = [
     # Core mega-cap tech
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
     # Semiconductors
     "AVGO", "AMD", "SNDK",
-    # Defense / military
-    "LMT", "RTX", "NOC", "GD", "BA",
     # Financials
     "JPM", "V", "MA",
     # AI / high-momentum
