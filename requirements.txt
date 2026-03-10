@@ -11,9 +11,13 @@ polygon-api-client>=1.14.0
 aiohttp>=3.9.5
 httpx>=0.27.0
 
-# ML inference libs are optional — only needed when model checkpoints are present
-# Install locally for training: pip install torch stable-baselines3 transformers gymnasium
-# On Railway these are excluded to stay within 512MB memory limit
+# ML inference — CPU-only torch for model inference on Railway
+# Full training deps (stable-baselines3, transformers, gymnasium) install locally only
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
+
+# Model storage — S3 download at startup
+boto3>=1.34.0
 
 # Feature engineering
 pandas>=2.2.2

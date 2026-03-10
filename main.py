@@ -102,6 +102,9 @@ async def lifespan(app: FastAPI):
     _live_feature_computer = LiveFeatureComputer(feature_cols)
     logger.info("live_feature_computer_ready")
 
+    # ── Download ML checkpoints from S3 (if not already present) ────────────
+    await _download_models_from_s3()
+
     # ── Phase 3+5: Load ML models ─────────────────────────────────────────────
     from src.models.ensemble import EnsembleEngine, EnsembleWeights
 
@@ -217,6 +220,52 @@ async def lifespan(app: FastAPI):
 
 
 # ─── FFSA feature loader ──────────────────────────────────────────────────────
+
+
+async def _download_models_from_s3() -> None:
+    """Download Transformer and TCN checkpoints from S3 at startup.
+
+    Only downloads if the file doesn't already exist locally (idempotent).
+    Requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET env vars.
+    Silently skips if boto3 is not installed or credentials are missing.
+    """
+    import os
+
+    bucket = os.environ.get("AWS_S3_BUCKET")
+    if not bucket:
+        logger.info("s3_download_skipped_no_bucket")
+        return
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError:
+        logger.warning("s3_download_skipped_boto3_not_installed")
+        return
+
+    # Map S3 key → local path
+    model_files = {
+        "models/transformer/step_055314_sharpe_0.896.pt": Path("models/transformer/step_055314_sharpe_0.896.pt"),
+        "models/tcn/step_043461_sharpe_0.776.pt": Path("models/tcn/step_043461_sharpe_0.776.pt"),
+    }
+
+    loop = asyncio.get_event_loop()
+
+    def _download() -> None:
+        s3 = boto3.client("s3")
+        for s3_key, local_path in model_files.items():
+            if local_path.exists():
+                logger.info("s3_model_already_present", path=str(local_path))
+                continue
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                logger.info("s3_downloading", bucket=bucket, key=s3_key)
+                s3.download_file(bucket, s3_key, str(local_path))
+                logger.info("s3_download_complete", path=str(local_path), size=local_path.stat().st_size)
+            except (BotoCoreError, ClientError) as exc:
+                logger.error("s3_download_failed", key=s3_key, error=str(exc))
+
+    await loop.run_in_executor(None, _download)
 
 
 def _load_ffsa_features() -> list[str]:
