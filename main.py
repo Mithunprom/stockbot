@@ -244,10 +244,10 @@ async def _download_models_from_s3() -> None:
         return
 
     # Map S3 key → local path
-    # S3 bucket has files at transformer/ and tcn/ (no models/ prefix)
     model_files = {
         "transformer/step_055314_sharpe_0.896.pt": Path("models/transformer/step_055314_sharpe_0.896.pt"),
         "tcn/step_043461_sharpe_0.776.pt": Path("models/tcn/step_043461_sharpe_0.776.pt"),
+        "rl_agent/ppo_500000_steps.zip": Path("models/rl_agent/periodic/ppo_500000_steps.zip"),
     }
 
     loop = asyncio.get_event_loop()
@@ -451,6 +451,15 @@ async def get_status() -> JSONResponse:
             "transformer_loaded": ens._transformer is not None,
             "tcn_loaded": ens._tcn is not None,
             "sentiment_loaded": ens._sentiment is not None,
+            "finbert_active": (
+                ens._sentiment is not None
+                and getattr(ens._sentiment, "_pipeline", None) is not None
+            ),
+            "sentiment_note": (
+                "FinBERT scoring active"
+                if (ens._sentiment is not None and getattr(ens._sentiment, "_pipeline", None) is not None)
+                else "Sentiment SI=0 (transformers not installed — install to enable FinBERT)"
+            ),
         }
 
         # ── Circuit breakers ──────────────────────────────────────────────────
@@ -488,13 +497,22 @@ async def get_status() -> JSONResponse:
 
     # ── FFSA feature selection ────────────────────────────────────────────────
     ffsa_files = sorted(pathlib.Path("reports/drift").glob("ffsa_*.json"), reverse=True)
+    _ffsa_fallback = pathlib.Path("config/ffsa_features.json")
     if ffsa_files:
-        with open(ffsa_files[0]) as f:
+        ffsa_source = ffsa_files[0]
+    elif _ffsa_fallback.exists():
+        ffsa_source = _ffsa_fallback
+    else:
+        ffsa_source = None
+
+    if ffsa_source:
+        with open(ffsa_source) as f:
             ffsa_data = json.load(f)
         status["ffsa"] = {
-            "report": ffsa_files[0].name,
+            "report": ffsa_source.name,
+            "source": "drift_report" if ffsa_files else "committed_fallback",
             "n_features": len(ffsa_data.get("selected_features", [])),
-            "ic": ffsa_data.get("ic", None),
+            "validation_ic": ffsa_data.get("validation_ic", ffsa_data.get("ic", None)),
             "features": ffsa_data.get("selected_features", []),
         }
     else:
