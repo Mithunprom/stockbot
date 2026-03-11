@@ -208,7 +208,10 @@ class SignalLoop:
         # universe_features only exists in the ML path; rule-based path has no tensors
         _uf: dict = locals().get("universe_features", {})
         for sig in signals:
-            if abs(sig.ensemble_signal) >= self.SIGNAL_ENTRY_THRESHOLD or self._rl_agent is not None:
+            # Always require a minimum signal strength — even when RL agent is loaded.
+            # The RL agent (500k steps, Sharpe=-9.7) is not yet reliable; gating on
+            # signal strength prevents it from overtrading on weak/flat signals.
+            if abs(sig.ensemble_signal) >= self.SIGNAL_ENTRY_THRESHOLD:
                 price = prices.get(sig.ticker, 0.0)
                 if price > 0:
                     features_arr = _uf.get(sig.ticker, {}).get("1m") if _uf else None
@@ -231,6 +234,7 @@ class SignalLoop:
             daily_start_value=self._daily_start_value,
             vix=20.0,   # TODO: wire real VIX feed (Phase 6)
             consecutive_losses=self._consecutive_losses,
+            portfolio_heat=self._pm.portfolio_heat,
         )
         await self._cb.check(state)
 
@@ -366,6 +370,8 @@ class SignalLoop:
 
     # ── Order execution ───────────────────────────────────────────────────────
 
+    MAX_PORTFOLIO_HEAT: float = 0.80   # circuit breaker: no new entries above 80%
+
     async def _act_on_signal(
         self,
         sig: EnsembleSignal,
@@ -378,6 +384,17 @@ class SignalLoop:
 
         ticker = sig.ticker
         has_position = ticker in self._pm._positions
+
+        # Portfolio heat circuit breaker — no new entries when > 80% deployed.
+        # Sell orders are always allowed (they reduce heat).
+        if not has_position and self._pm.portfolio_heat > self.MAX_PORTFOLIO_HEAT:
+            logger.warning(
+                "new_entry_blocked_portfolio_heat",
+                ticker=ticker,
+                heat=round(self._pm.portfolio_heat, 3),
+                limit=self.MAX_PORTFOLIO_HEAT,
+            )
+            return
 
         # ── RL-driven decision ────────────────────────────────────────────────
         if self._rl_agent is not None:
@@ -544,7 +561,7 @@ class SignalLoop:
                 await session.commit()
                 logger.debug("trade_entry_written", ticker=ticker, trade_id=trade.id)
         except Exception as exc:
-            logger.warning("trade_entry_write_failed", ticker=ticker, error=str(exc))
+            logger.error("trade_entry_write_failed", ticker=ticker, error=str(exc), exc_info=True)
 
     async def _write_trade_exit(
         self,

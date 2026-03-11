@@ -45,6 +45,7 @@ class RiskState:
     pdt_round_trips_5d: int = 0
     account_size: float = 100_000.0
     proposed_position_pct: float = 0.0    # for max position check
+    portfolio_heat: float = 0.0           # fraction of portfolio deployed (0–1)
 
     @property
     def daily_pnl_pct(self) -> float:
@@ -99,6 +100,7 @@ class CircuitBreakers:
         checks = [
             self._check_daily_loss(state),
             self._check_max_drawdown(state),
+            self._check_portfolio_heat(state),
             self._check_vix(state),
             self._check_consecutive_losses(state),
             self._check_earnings_blackout(state),
@@ -153,6 +155,18 @@ class CircuitBreakers:
             threshold=threshold,
             action="halt_day" if triggered else "ok",
             message=f"Daily P&L: {state.daily_pnl_pct:.2%}",
+        )
+
+    def _check_portfolio_heat(self, state: RiskState) -> BreachResult:
+        threshold = 0.80
+        triggered = state.portfolio_heat > threshold
+        return BreachResult(
+            breaker_name="portfolio_heat",
+            triggered=triggered,
+            value=state.portfolio_heat,
+            threshold=threshold,
+            action="no_new_entries" if triggered else "ok",
+            message=f"Portfolio heat: {state.portfolio_heat:.1%}",
         )
 
     def _check_max_drawdown(self, state: RiskState) -> BreachResult:

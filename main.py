@@ -143,6 +143,19 @@ async def lifespan(app: FastAPI):
 
     pos_manager = PositionManager(initial_portfolio=initial_portfolio)
 
+    # Sync existing broker positions into pos_manager BEFORE signal loop starts.
+    # Without this, if the broker already has open positions from a previous session,
+    # the signal loop would see "no position" and double-buy on the first tick.
+    try:
+        await pos_manager.sync_from_broker(alpaca_router)
+        logger.info(
+            "startup_positions_synced",
+            count=len(pos_manager._positions),
+            heat=round(pos_manager.portfolio_heat, 3),
+        )
+    except Exception as exc:
+        logger.warning("startup_position_sync_failed", error=str(exc))
+
     # ── Phase 5: Signal loop ──────────────────────────────────────────────────
     from src.agents.signal_loop import SignalLoop
 
