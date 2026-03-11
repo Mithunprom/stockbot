@@ -524,7 +524,13 @@ async def get_status() -> JSONResponse:
 
         # ── RL agent ──────────────────────────────────────────────────────────
         rl = _signal_loop._rl_agent
-        status["rl_agent"] = {"loaded": rl is not None}
+        status["rl_agent"] = {
+            "loaded": rl is not None,
+            "steps_trained": 500_000,
+            "target_steps": 2_000_000,
+            "ready_for_live": False,  # needs 2M+ steps + Sharpe ≥ 0.5
+            "note": "500k steps trained (Sharpe=-9.7). Threshold fallback active. Retrain trigger: ≥500 paper trades logged.",
+        }
         if rl is not None:
             status["rl_agent"]["policy"] = type(rl.policy).__name__
     else:
@@ -545,7 +551,11 @@ async def get_status() -> JSONResponse:
     status["model_checkpoints"] = {
         "transformer": _best_checkpoint("models/transformer/step_*_sharpe_*.pt"),
         "tcn":         _best_checkpoint("models/tcn/step_*_sharpe_*.pt"),
-        "rl_agent":    _best_checkpoint("models/rl_agent/best_ppo_*.zip"),
+        # Check both best_ppo_* (trainer output) and periodic/ppo_* (S3 download)
+        "rl_agent":    (
+            _best_checkpoint("models/rl_agent/best_ppo_*.zip")
+            or _best_checkpoint("models/rl_agent/periodic/ppo_*.zip")
+        ),
     }
 
     # ── FFSA feature selection ────────────────────────────────────────────────

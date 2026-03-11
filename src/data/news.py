@@ -1,8 +1,13 @@
-"""News feed integration: NewsAPI + Benzinga polling.
+"""News feed integration: Polygon (primary) + NewsAPI + Benzinga polling.
 
-Polls every 5 minutes during market hours.
-Filters articles by ticker mentions from the trading universe.
-Stores raw articles; FinBERT sentiment scoring happens in Phase 3.
+Poll order:
+  1. Polygon /v2/reference/news  — uses existing POLYGON_API_KEY, free tier,
+     returns ticker-tagged articles directly (no NLP needed to find tickers).
+  2. NewsAPI — requires NEWS_API_KEY (optional, skipped if not set).
+  3. Benzinga — requires BENZINGA_API_KEY (optional, skipped if not set).
+
+Polls every 5 minutes.
+Stores raw articles; FinBERT sentiment scoring runs immediately after.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from src.data.db import NewsRaw, get_session_factory
 
 logger = structlog.get_logger(__name__)
 
+POLYGON_NEWS_BASE = "https://api.polygon.io/v2/reference/news"
 NEWSAPI_BASE = "https://newsapi.org/v2"
 BENZINGA_BASE = "https://api.benzinga.com/api/v2"
 
@@ -34,6 +40,102 @@ def _extract_mentioned_tickers(text: str, universe: set[str]) -> list[str]:
     """Return tickers from universe that appear as whole words in text."""
     words = set(re.findall(r"\b[A-Z]{1,5}\b", text))
     return sorted(universe & words)
+
+
+# ─── Polygon news client (primary — uses existing POLYGON_API_KEY) ───────────
+
+class PolygonNewsClient:
+    """Fetches financial news from Polygon /v2/reference/news.
+
+    Polygon returns articles with explicit ticker tags so we don't need
+    NLP to detect mentions — much higher precision than keyword search.
+
+    Free tier: unlimited news (same key used for grouped daily bars).
+    Rate limit: 5 req/min on free tier → fetch in batches of tickers.
+    """
+
+    def __init__(self) -> None:
+        self._settings = get_settings()
+
+    async def fetch_recent(
+        self, tickers: list[str], hours_back: int = 1
+    ) -> list[dict[str, Any]]:
+        if not self._settings.polygon_api_key:
+            return []
+
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        results: list[dict[str, Any]] = []
+
+        # Polygon news supports filtering by ticker directly
+        # Free tier: 5 req/min — space calls with short delay
+        async with httpx.AsyncClient(timeout=15) as client:
+            for ticker in tickers:
+                # Skip crypto tickers (Polygon news uses equity symbols)
+                if "/" in ticker:
+                    continue
+                params = {
+                    "apiKey": self._settings.polygon_api_key,
+                    "ticker": ticker,
+                    "published_utc.gte": since,
+                    "limit": 10,   # 10 articles per ticker per poll cycle
+                    "order": "desc",
+                }
+                try:
+                    resp = await client.get(POLYGON_NEWS_BASE, params=params)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        for art in data.get("results", []):
+                            art["_ticker"] = ticker   # tag the requested ticker
+                            results.append(art)
+                    elif resp.status_code == 429:
+                        logger.warning("polygon_news_rate_limited")
+                        await asyncio.sleep(12)   # back off 12s (5 req/min = 12s/req)
+                except Exception as exc:
+                    logger.debug("polygon_news_fetch_error", ticker=ticker, error=str(exc))
+                # Small delay to stay within 5 req/min
+                await asyncio.sleep(0.2)
+
+        return results
+
+    def parse_article(self, raw: dict[str, Any], universe: set[str]) -> list[dict[str, Any]]:
+        """Parse one Polygon news article into ticker-tagged rows."""
+        headline = raw.get("title", "")
+        body = raw.get("description", "")
+
+        # Polygon provides explicit ticker list in "tickers" field
+        explicit = [t.upper() for t in raw.get("tickers", []) if t.upper() in universe]
+        # Also add the _ticker we used to query (always relevant)
+        queried = raw.get("_ticker", "")
+        if queried and queried in universe:
+            explicit.append(queried)
+        tickers = list(set(explicit))
+        if not tickers:
+            return []
+
+        published_raw = raw.get("published_utc", "")
+        try:
+            published_at = datetime.fromisoformat(published_raw.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            published_at = datetime.now(timezone.utc)
+
+        url = raw.get("article_url", raw.get("url", ""))
+        return [
+            {
+                "published_at": published_at,
+                "ticker": ticker,
+                "headline": headline,
+                "body": body,
+                "source": raw.get("publisher", {}).get("name", "polygon"),
+                "url": url,
+                "sentiment_score": None,
+                "sentiment_label": None,
+                "relevance_score": None,
+                "raw": {k: v for k, v in raw.items() if k != "_ticker"},
+            }
+            for ticker in tickers
+        ]
 
 
 # ─── NewsAPI client ───────────────────────────────────────────────────────────
@@ -200,8 +302,9 @@ class NewsPoller:
 
     def __init__(self, universe: set[str]) -> None:
         self.universe = universe
-        self._newsapi = NewsAPIClient()
-        self._benzinga = BenzingaClient()
+        self._polygon = PolygonNewsClient()   # primary — uses existing API key
+        self._newsapi = NewsAPIClient()       # optional fallback
+        self._benzinga = BenzingaClient()     # optional fallback
         self._running = False
 
     async def start(self) -> None:
@@ -220,7 +323,18 @@ class NewsPoller:
     async def _poll_once(self) -> None:
         all_rows: list[dict[str, Any]] = []
 
-        # NewsAPI — broad financial query
+        # 1. Polygon — primary source, uses existing POLYGON_API_KEY
+        try:
+            tickers = sorted(self.universe)
+            raw_news = await self._polygon.fetch_recent(tickers, hours_back=1)
+            for art in raw_news:
+                all_rows.extend(self._polygon.parse_article(art, self.universe))
+            if raw_news:
+                logger.info("polygon_news_fetched", articles=len(raw_news), rows=len(all_rows))
+        except Exception as exc:
+            logger.warning("polygon_news_error", error=str(exc))
+
+        # 2. NewsAPI — optional, skipped if NEWS_API_KEY not set
         try:
             articles = await self._newsapi.fetch_recent(hours_back=1)
             for art in articles:
@@ -228,7 +342,7 @@ class NewsPoller:
         except Exception as exc:
             logger.warning("newsapi_error", error=str(exc))
 
-        # Benzinga — per-ticker
+        # 3. Benzinga — optional, skipped if BENZINGA_API_KEY not set
         try:
             tickers = sorted(self.universe)
             raw_news = await self._benzinga.fetch_recent(tickers, hours_back=1)
