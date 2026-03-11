@@ -98,6 +98,9 @@ class SignalLoop:
     BASE_SIZE_PCT: float = 0.05            # 5% base position before vol scaling
     SEQ_LEN: int = 60                      # 1m bars per inference window
 
+    # Crypto tickers trade 24/7 — exempt from equity market-hours gate
+    CRYPTO_TICKERS: frozenset[str] = frozenset({"BTC/USD", "ETH/USD", "SOL/USD"})
+
     def __init__(
         self,
         universe: list[str],
@@ -150,7 +153,10 @@ class SignalLoop:
     # ── Main tick ────────────────────────────────────────────────────────────
 
     async def _tick(self) -> None:
-        if not self._is_market_hours():
+        market_open = self._is_market_hours()
+        # If market is closed and we have no crypto, skip entirely
+        has_crypto = any(t in self.CRYPTO_TICKERS for t in self._universe)
+        if not market_open and not has_crypto:
             return
 
         # 1. Fetch latest features + prices from DB
@@ -208,6 +214,9 @@ class SignalLoop:
         # universe_features only exists in the ML path; rule-based path has no tensors
         _uf: dict = locals().get("universe_features", {})
         for sig in signals:
+            # Gate equity tickers on market hours; crypto runs 24/7
+            if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
+                continue
             # Always require a minimum signal strength — even when RL agent is loaded.
             # The RL agent (500k steps, Sharpe=-9.7) is not yet reliable; gating on
             # signal strength prevents it from overtrading on weak/flat signals.

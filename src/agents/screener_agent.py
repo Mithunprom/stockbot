@@ -49,7 +49,13 @@ ANCHOR_TICKERS: list[str] = [
     "PLTR", "ARM", "MSTR",
     # Energy
     "XOM", "CVX",
+    # Crypto — 24/7, fractional, not in S&P 500 so always anchored
+    "BTC/USD", "ETH/USD", "SOL/USD",
 ]
+
+# Crypto tickers are never scored by the S&P 500 screener (they're not in the index).
+# They are always kept in the universe via ANCHOR_TICKERS.
+CRYPTO_TICKERS: frozenset[str] = frozenset({"BTC/USD", "ETH/USD", "SOL/USD"})
 
 # These tickers are NEVER added to the universe even if S&P 500 momentum qualifies them.
 EXCLUDE_TICKERS: set[str] = {"META"}
@@ -258,13 +264,14 @@ class ScreenerAgent:
                 break
             universe.append(ticker)
 
-        # Fill remaining slots with top S&P 500 scorers, skipping excluded tickers
+        # Fill remaining slots with top S&P 500 scorers, skipping excluded/crypto tickers
+        # (Crypto anchors are already included above; they don't come from S&P 500 scoring)
         universe_set = set(universe)
         for entry in scored:
             if len(universe) >= MAX_UNIVERSE:
                 break
             ticker = entry["ticker"]
-            if ticker not in universe_set and ticker not in EXCLUDE_TICKERS:
+            if ticker not in universe_set and ticker not in EXCLUDE_TICKERS and ticker not in CRYPTO_TICKERS:
                 universe.append(ticker)
                 universe_set.add(ticker)
 

@@ -46,6 +46,8 @@ _DEFAULT_UNIVERSE: list[str] = [
     "XOM", "CVX",
     # Consumer / healthcare
     "LLY", "UNH", "COST", "NFLX",
+    # Crypto (24/7, fractional, always anchored)
+    "BTC/USD", "ETH/USD", "SOL/USD",
 ]
 
 # ─── Module-level singletons (populated in lifespan) ──────────────────────────

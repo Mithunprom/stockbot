@@ -164,11 +164,19 @@ async def _write_bars(table_cls: Any, rows: list[dict[str, Any]]) -> None:
 
 # ─── Alpaca data stream client ────────────────────────────────────────────────
 
+def _is_crypto(ticker: str) -> bool:
+    return "/" in ticker
+
+
 class AlpacaDataStreamClient:
-    """Streams real-time minute bars from Alpaca's free IEX feed.
+    """Streams real-time minute bars from Alpaca's free IEX feed (equities)
+    and Alpaca's crypto feed (BTC/USD, ETH/USD, SOL/USD).
+
+    Crypto tickers (those containing "/") are routed to CryptoDataStream;
+    equity tickers go to StockDataStream (IEX feed, free).
 
     Args:
-        tickers: List of ticker symbols to subscribe to.
+        tickers: List of ticker symbols (mix of equity and crypto is fine).
         feed: "iex" (free) or "sip" (paid). Default: "iex".
     """
 
@@ -182,22 +190,51 @@ class AlpacaDataStreamClient:
         # Signature: async (ticker: str, bar_time: datetime) -> None
         self.on_1m_bar: Callable[[str, datetime], Coroutine] | None = None
 
+    @property
+    def _equity_tickers(self) -> list[str]:
+        return [t for t in self.tickers if not _is_crypto(t)]
+
+    @property
+    def _crypto_tickers(self) -> list[str]:
+        return [t for t in self.tickers if _is_crypto(t)]
+
     async def start(self) -> None:
         """Start streaming. Reconnects automatically on disconnect."""
         self._running = True
-        while self._running:
-            try:
-                await self._stream()
-            except Exception as exc:
-                logger.error("alpaca_ws_error: %s", exc)
-                if self._running:
-                    logger.info("alpaca_ws_reconnecting in 5s")
-                    await asyncio.sleep(5)
+        tasks = []
+        if self._equity_tickers:
+            tasks.append(asyncio.create_task(self._stream_equities(), name="equity_stream"))
+        if self._crypto_tickers:
+            tasks.append(asyncio.create_task(self._stream_crypto(), name="crypto_stream"))
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def stop(self) -> None:
         self._running = False
 
+    async def _stream_equities(self) -> None:
+        """Stream equity bars (IEX feed). Reconnects on error."""
+        while self._running:
+            try:
+                await self._stream()
+            except Exception as exc:
+                logger.error("alpaca_equity_ws_error: %s", exc)
+                if self._running:
+                    await asyncio.sleep(5)
+
+    async def _stream_crypto(self) -> None:
+        """Stream crypto bars (Alpaca crypto feed). Reconnects on error."""
+        while self._running:
+            try:
+                await self._stream_crypto_inner()
+            except Exception as exc:
+                logger.error("alpaca_crypto_ws_error: %s", exc)
+                if self._running:
+                    await asyncio.sleep(5)
+
     async def _stream(self) -> None:
+        if not self._equity_tickers:
+            return
         try:
             from alpaca.data.live import StockDataStream
         except ImportError:
@@ -216,10 +253,35 @@ class AlpacaDataStreamClient:
         async def on_bar(bar: Any) -> None:
             await self._handle_bar(bar)
 
-        stream.subscribe_bars(on_bar, *self.tickers)
+        stream.subscribe_bars(on_bar, *self._equity_tickers)
         logger.info(
-            "alpaca_ws_started: feed=%s tickers=%d (free IEX feed — ~70%% market volume)",
-            self.feed, len(self.tickers),
+            "alpaca_equity_ws_started: feed=%s tickers=%d",
+            self.feed, len(self._equity_tickers),
+        )
+        await stream._run_forever()
+
+    async def _stream_crypto_inner(self) -> None:
+        if not self._crypto_tickers:
+            return
+        try:
+            from alpaca.data.live import CryptoDataStream
+        except ImportError:
+            logger.warning("CryptoDataStream not available — skipping crypto stream")
+            return
+
+        settings = get_settings()
+        stream = CryptoDataStream(
+            api_key=settings.alpaca_api_key,
+            secret_key=settings.alpaca_secret_key,
+        )
+
+        async def on_bar(bar: Any) -> None:
+            await self._handle_bar(bar)
+
+        stream.subscribe_bars(on_bar, *self._crypto_tickers)
+        logger.info(
+            "alpaca_crypto_ws_started: tickers=%s",
+            self._crypto_tickers,
         )
         await stream._run_forever()
 

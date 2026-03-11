@@ -130,9 +130,19 @@ class AlpacaOrderRouter:
                 error=str(exc),
             )
 
+    @staticmethod
+    def _is_crypto(ticker: str) -> bool:
+        """Return True for crypto symbols (e.g. BTC/USD)."""
+        return "/" in ticker
+
     def _submit_sync(self, req: OrderRequest) -> OrderResult:
         client = self._get_client()
         side = OrderSide.BUY if req.side == "buy" else OrderSide.SELL
+        is_crypto = self._is_crypto(req.ticker)
+
+        # Crypto uses GTC (Good Till Canceled) — DAY is rejected for crypto.
+        # Equities use DAY so limit orders expire at close.
+        tif = TimeInForce.GTC if is_crypto else TimeInForce.DAY
 
         if req.limit_price:
             order_req = LimitOrderRequest(
@@ -140,7 +150,7 @@ class AlpacaOrderRouter:
                 qty=req.qty,
                 side=side,
                 type=OrderType.LIMIT,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=tif,
                 limit_price=round(req.limit_price, 2),
             )
         else:
@@ -149,7 +159,7 @@ class AlpacaOrderRouter:
                 qty=req.qty,
                 side=side,
                 type=OrderType.MARKET,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=tif,
             )
 
         order = client.submit_order(order_req)
@@ -222,16 +232,25 @@ class AlpacaOrderRouter:
             return {"bid": 0.0, "ask": 0.0, "mid": 0.0}
 
     def _get_quote_sync(self, ticker: str) -> dict[str, float]:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.requests import StockLatestQuoteRequest
-
         settings = get_settings()
-        data_client = StockHistoricalDataClient(
-            api_key=settings.alpaca_api_key,
-            secret_key=settings.alpaca_secret_key,
-        )
-        req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
-        quote = data_client.get_stock_latest_quote(req)[ticker]
+        if self._is_crypto(ticker):
+            from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+            from alpaca.data.requests import CryptoLatestQuoteRequest
+            data_client = CryptoHistoricalDataClient(
+                api_key=settings.alpaca_api_key,
+                secret_key=settings.alpaca_secret_key,
+            )
+            req = CryptoLatestQuoteRequest(symbol_or_symbols=ticker)
+            quote = data_client.get_crypto_latest_quote(req)[ticker]
+        else:
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestQuoteRequest
+            data_client = StockHistoricalDataClient(
+                api_key=settings.alpaca_api_key,
+                secret_key=settings.alpaca_secret_key,
+            )
+            req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
+            quote = data_client.get_stock_latest_quote(req)[ticker]
         bid = float(quote.bid_price or 0)
         ask = float(quote.ask_price or 0)
         mid = (bid + ask) / 2 if bid and ask else 0.0
