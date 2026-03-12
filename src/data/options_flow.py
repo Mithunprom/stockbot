@@ -169,6 +169,7 @@ async def _write_flow_rows(rows: list[dict[str, Any]]) -> None:
         "time", "ticker", "contract", "option_type", "strike", "expiry",
         "premium", "volume", "open_interest", "vol_oi_ratio", "implied_volatility",
         "delta", "gamma", "net_gex", "smart_money_score", "unusual_flag",
+        "put_call_ratio", "iv_rank",
     }
     clean = [{k: v for k, v in r.items() if k in _schema_keys} for r in rows]
 

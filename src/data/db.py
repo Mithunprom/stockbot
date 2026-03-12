@@ -152,6 +152,8 @@ class OptionsFlow(Base):
     net_gex = Column(Float)               # Gamma Exposure contribution
     smart_money_score = Column(Float)     # premium-weighted directional score
     unusual_flag = Column(Boolean, default=False)
+    put_call_ratio = Column(Float)        # total put vol / total call vol
+    iv_rank = Column(Float)               # put IV - call IV skew (positive = fear)
     raw = Column(JSONB)                   # original API payload
 
 
@@ -332,6 +334,18 @@ async def init_db() -> None:
     # ── Step 2: Create all ORM tables (always runs) ───────────────────────────
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # ── Step 2b: Additive column migrations (idempotent, IF NOT EXISTS) ───────
+    _migrations = [
+        "ALTER TABLE options_flow ADD COLUMN IF NOT EXISTS put_call_ratio FLOAT",
+        "ALTER TABLE options_flow ADD COLUMN IF NOT EXISTS iv_rank FLOAT",
+    ]
+    async with engine.begin() as conn:
+        for stmt in _migrations:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as exc:
+                logger.warning("migration_skipped: %s — %s", stmt, exc)
 
     # ── Step 3: Convert to hypertables (skipped if TimescaleDB unavailable) ─────
     if not timescaledb_available:
