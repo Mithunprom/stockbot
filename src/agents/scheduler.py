@@ -26,6 +26,7 @@ def create_scheduler(
     latency_agent: Any,
     profit_agent: Any | None = None,
     screener_agent: Any | None = None,
+    critique_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -105,6 +106,23 @@ def create_scheduler(
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,
+        )
+
+    # ── Critique Agent: daily at 17:00 ET (30 min after profit_agent) ─────────
+    if critique_agent is not None:
+        scheduler.add_job(
+            lambda: asyncio.create_task(critique_agent.run()),
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour=17,
+                minute=0,
+                timezone="America/New_York",
+            ),
+            id="critique_agent",
+            name="Critique Agent (daily)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=1800,
         )
 
     logger.info(

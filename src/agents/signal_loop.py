@@ -160,7 +160,7 @@ class SignalLoop:
             return
 
         # 1. Fetch latest features + prices from DB
-        features_map = await self._fetch_features()
+        features_map, regime_map = await self._fetch_features()
         prices = await self._fetch_prices()
         self._pm.update_prices(prices)
 
@@ -217,10 +217,11 @@ class SignalLoop:
             # Gate equity tickers on market hours; crypto runs 24/7
             if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
                 continue
-            # Always require a minimum signal strength — even when RL agent is loaded.
-            # The RL agent (500k steps, Sharpe=-9.7) is not yet reliable; gating on
-            # signal strength prevents it from overtrading on weak/flat signals.
-            if abs(sig.ensemble_signal) >= self.SIGNAL_ENTRY_THRESHOLD:
+            regime = regime_map.get(sig.ticker, 1)  # default: choppy
+            # Regime-aware threshold: choppy/high-vol require stronger signal
+            from src.features.regime import REGIME_GATE
+            threshold, _size_scale = REGIME_GATE.get(regime, (self.SIGNAL_ENTRY_THRESHOLD, 1.0))
+            if abs(sig.ensemble_signal) >= threshold:
                 price = prices.get(sig.ticker, 0.0)
                 if price > 0:
                     features_arr = _uf.get(sig.ticker, {}).get("1m") if _uf else None
@@ -228,7 +229,7 @@ class SignalLoop:
                         features_arr.numpy() if features_arr is not None
                         else None
                     )
-                    await self._act_on_signal(sig, price, feat_np)
+                    await self._act_on_signal(sig, price, feat_np, regime=regime)
 
         # 5. Sync position state from broker (catches fills we missed)
         try:
@@ -273,6 +274,7 @@ class SignalLoop:
         sig: EnsembleSignal,
         ticker: str,
         features_arr: np.ndarray | None,
+        regime: int = 0,
     ) -> np.ndarray:
         """Build a 27-dim RL observation from signal + position + FFSA features.
 
@@ -296,14 +298,13 @@ class SignalLoop:
         portfolio_heat = self._pm.portfolio_heat
         drawdown = max(0.0, 1.0 - self._pm.portfolio_value / max(self._daily_start_value, 1.0))
 
-        # Options flow for VIX proxy and regime signal
+        # Options flow for VIX proxy
         flow = get_options_flow(ticker)
         iv_rank = float(flow.get("iv_rank", 0.0))
-        smart_money = float(flow.get("smart_money_score", 0.0))
         # Approximate VIX proxy from IV rank (clamp 0–1)
         vix_proxy = min(max(abs(iv_rank), 0.0), 1.0)
-        # Regime: use smart_money_score magnitude as trending vs choppy proxy
-        regime_proxy = float(abs(smart_money))
+        # Real regime from feature_matrix (0=trending,1=choppy,2=high_vol)
+        regime_proxy = float(regime) / 2.0   # normalize to [0,1] for RL obs
 
         state = [
             float(sig.ensemble_signal),
@@ -386,6 +387,7 @@ class SignalLoop:
         sig: EnsembleSignal,
         price: float,
         features_arr: np.ndarray | None = None,
+        regime: int = 0,
     ) -> None:
         """Use RL agent (or threshold fallback) to decide and execute an action."""
         if self._cb.is_halted:
@@ -405,9 +407,20 @@ class SignalLoop:
             )
             return
 
+        # Regime-based position size scale (0.5× in high_vol, 0.7× in choppy)
+        from src.features.regime import REGIME_GATE, regime_label
+        _, size_scale = REGIME_GATE.get(regime, (0.40, 1.0))
+        if size_scale < 1.0 and not has_position:
+            logger.info(
+                "regime_size_scaled",
+                ticker=ticker,
+                regime=regime_label(regime),
+                size_scale=size_scale,
+            )
+
         # ── RL-driven decision ────────────────────────────────────────────────
         if self._rl_agent is not None:
-            obs = self._build_rl_obs(sig, ticker, features_arr)
+            obs = self._build_rl_obs(sig, ticker, features_arr, regime=regime)
             action, _ = self._rl_agent.predict(obs, deterministic=True)
             action = int(action)
             action_name = ACTION_NAMES[action]
@@ -683,13 +696,19 @@ class SignalLoop:
 
     # ── Data fetching ─────────────────────────────────────────────────────────
 
-    async def _fetch_features(self) -> dict[str, np.ndarray]:
-        """Fetch last SEQ_LEN feature rows per ticker from DB (most recent first)."""
+    async def _fetch_features(self) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+        """Fetch last SEQ_LEN feature rows per ticker from DB.
+
+        Returns:
+            features_map: ticker → (SEQ_LEN, n_features) float32 array
+            regime_map:   ticker → latest regime int (0=trending,1=choppy,2=high_vol)
+        """
         from sqlalchemy import select
 
         from src.data.db import FeatureMatrix
 
         result: dict[str, np.ndarray] = {}
+        regime_map: dict[str, int] = {}
         async with self._sf() as session:
             for ticker in self._universe:
                 rows = await session.execute(
@@ -709,7 +728,10 @@ class SignalLoop:
                     dtype=np.float32,
                 )
                 result[ticker] = arr
-        return result
+                # Latest regime from most-recent row (last after reversing)
+                latest_row = feat_rows[-1] or {}
+                regime_map[ticker] = int(latest_row.get("regime", 1) or 1)
+        return result, regime_map
 
     async def _fetch_prices(self) -> dict[str, float]:
         """Fetch latest close price per ticker from the 1m OHLCV table."""

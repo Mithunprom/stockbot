@@ -177,6 +177,7 @@ async def lifespan(app: FastAPI):
     logger.info("signal_loop_started")
 
     # ── Phase 6: Sub-agent scheduler ─────────────────────────────────────────
+    from src.agents.critique_agent import CritiqueAgent
     from src.agents.latency_agent import LatencyAgent
     from src.agents.profit_agent import ProfitAgent
     from src.agents.risk_agent import RiskAgent
@@ -187,12 +188,14 @@ async def lifespan(app: FastAPI):
     latency_agent = LatencyAgent()
     profit_agent = ProfitAgent()
     screener_agent = ScreenerAgent(signal_loop=_signal_loop)
+    critique_agent = CritiqueAgent(session_factory=session_factory)
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
         latency_agent=latency_agent,
         profit_agent=profit_agent,
         screener_agent=screener_agent,
+        critique_agent=critique_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()

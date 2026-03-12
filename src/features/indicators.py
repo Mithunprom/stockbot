@@ -238,6 +238,10 @@ def compute_indicators(df: pd.DataFrame, shift: bool = True) -> pd.DataFrame:
     else:
         out["vol_seasonal_ratio"] = np.nan
 
+    # ── Regime ─────────────────────────────────────────────────────────────────
+    from src.features.regime import compute_regime
+    out["regime"] = compute_regime(out).astype(float)
+
     # ── Prevent lookahead ──────────────────────────────────────────────────────
     if shift:
         indicator_cols = [c for c in out.columns if c not in df.columns]
@@ -279,4 +283,5 @@ FEATURE_COLUMNS: list[str] = [
     "is_open_window", "is_close_window", "is_lunch", "time_to_close",
     "vol_seasonal_ratio",
     "gex_net", "gex_zscore", "gex_call_pct",
+    "regime",
 ]

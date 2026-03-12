@@ -41,6 +41,9 @@ redis>=5.0.4
 prometheus-client>=0.20.0
 structlog>=24.1.0
 
+# Claude API (critique agent)
+anthropic>=0.30.0
+
 # Config & utils
 pydantic>=2.7.0
 pydantic-settings>=2.2.1
