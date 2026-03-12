@@ -49,7 +49,23 @@ def _get_device() -> torch.device:
 
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
-async def load_training_data(top_n: int) -> tuple[pd.DataFrame, list[str]]:
+# Top 50 S&P 500 stocks by avg daily volume — broadest regime diversity for training.
+# Model learns generalizable indicator patterns rather than tech-sector-specific ones.
+SP500_TOP50: list[str] = [
+    # Mega-cap tech
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA", "AVGO", "AMD", "ORCL", "ADBE",
+    # Financials
+    "JPM", "V", "MA", "GS", "BAC", "WFC", "BLK", "AXP", "SCHW", "MS",
+    # Healthcare
+    "LLY", "UNH", "JNJ", "MRK", "ABBV", "TMO", "ABT", "ISRG", "AMGN", "PFE",
+    # Consumer / retail
+    "COST", "WMT", "MCD", "HD", "NKE", "SBUX", "TGT", "LOW", "PG", "KO",
+    # Industrials / energy / other
+    "XOM", "CVX", "CAT", "RTX", "LMT", "GE", "NEE", "SO", "DUK", "CL",
+]
+
+
+async def load_training_data(top_n: int, tickers: list[str] | None = None, max_rows: int = 100_000) -> tuple[pd.DataFrame, list[str]]:
     """Load feature matrix + close prices, compute forward return, merge.
 
     Loads one ticker at a time to avoid OOM on 3.7M rows of JSONB data.
@@ -74,24 +90,34 @@ async def load_training_data(top_n: int) -> tuple[pd.DataFrame, list[str]]:
 
     # ── Get universe ──────────────────────────────────────────────────────────
     from main import _DEFAULT_UNIVERSE
-    tickers = _DEFAULT_UNIVERSE
+    if tickers is None:
+        tickers = _DEFAULT_UNIVERSE
+    # Skip crypto tickers — no historical data in DB yet (need 30+ days of live streaming)
+    tickers = [t for t in tickers if "/" not in t]
+    logger.info("  Training universe: %d tickers | max %d rows each", len(tickers), max_rows)
 
     # ── Per-ticker loading to keep peak memory low ────────────────────────────
     all_frames: list[pd.DataFrame] = []
 
     for ticker in tickers:
         # 1. Load features for this ticker only (one ticker's JSONB at a time)
+        # Cap at max_rows most-recent rows to keep memory bounded when training
+        # on many tickers (e.g. 50 tickers × 100k rows = 5M rows manageable)
         async with session_factory() as session:
             result = await session.execute(
                 select(FeatureMatrix.time, FeatureMatrix.features)
                 .where(FeatureMatrix.ticker == ticker)
-                .order_by(FeatureMatrix.time)
+                .order_by(FeatureMatrix.time.desc())
+                .limit(max_rows)
             )
             feat_rows = result.all()
 
         if not feat_rows:
             logger.warning("  %s: no feature rows — skipping", ticker)
             continue
+
+        # Re-sort ascending (we fetched desc to get the most-recent max_rows)
+        feat_rows = list(reversed(feat_rows))
 
         # 2. Extract only the FFSA features — discard full JSONB dict after extraction
         records = []
@@ -266,11 +292,11 @@ def train_one_model(
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-async def main(epochs: int, batch_size: int, top_n: int, lr: float) -> None:
+async def main(epochs: int, batch_size: int, top_n: int, lr: float, tickers: list[str] | None, max_rows: int) -> None:
     device = _get_device()
     logger.info("Device: %s", device)
 
-    merged, feature_cols = await load_training_data(top_n)
+    merged, feature_cols = await load_training_data(top_n, tickers=tickers, max_rows=max_rows)
     n_features = len(feature_cols)
     logger.info("Features (%d): %s", n_features, feature_cols[:5])
 
@@ -338,10 +364,32 @@ async def main(epochs: int, batch_size: int, top_n: int, lr: float) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs",     type=int,   default=10)
-    parser.add_argument("--batch-size", type=int,   default=256)
-    parser.add_argument("--top-n",      type=int,   default=30)
-    parser.add_argument("--lr",         type=float, default=1e-4)
+    parser = argparse.ArgumentParser(description="Train Transformer + TCN signal models")
+    parser.add_argument("--epochs",       type=int,   default=10)
+    parser.add_argument("--batch-size",   type=int,   default=256)
+    parser.add_argument("--top-n",        type=int,   default=30,    help="FFSA top-N features")
+    parser.add_argument("--lr",           type=float, default=1e-4)
+    parser.add_argument("--max-rows",     type=int,   default=100_000,
+                        help="Max rows per ticker (most recent). Default 100k (~6mo 1m bars).")
+    parser.add_argument("--tickers",      nargs="*",  default=None,
+                        help="Ticker list override. Use 'sp500-top50' for broad training set. "
+                             "Default: _DEFAULT_UNIVERSE from main.py")
     args = parser.parse_args()
-    asyncio.run(main(epochs=args.epochs, batch_size=args.batch_size, top_n=args.top_n, lr=args.lr))
+
+    # Resolve ticker set
+    ticker_list: list[str] | None = None
+    if args.tickers:
+        if args.tickers == ["sp500-top50"]:
+            ticker_list = SP500_TOP50
+            logger.info("Using SP500_TOP50 training universe (%d tickers)", len(ticker_list))
+        else:
+            ticker_list = args.tickers
+
+    asyncio.run(main(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        top_n=args.top_n,
+        lr=args.lr,
+        tickers=ticker_list,
+        max_rows=args.max_rows,
+    ))
