@@ -134,10 +134,13 @@ class TCNSignalModel(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
         )
-        self.return_head = nn.Linear(n_channels, 1)     # next-bar return
-        self.direction_head = nn.Sequential(             # direction probability
-            nn.Linear(n_channels, 3),
-        )
+        self.return_head = nn.Linear(n_channels, 1)       # next-bar return
+
+        # Multi-task direction heads: PRIMARY 15m + AUX 5m, 30m
+        self.direction_head    = nn.Linear(n_channels, 3)  # PRIMARY: 15m
+        self.direction_head_5m  = nn.Linear(n_channels, 3) # AUX: 5m
+        self.direction_head_30m = nn.Linear(n_channels, 3) # AUX: 30m
+
         self.confidence_head = nn.Sequential(
             nn.Linear(n_channels, 1),
             nn.Sigmoid(),
@@ -147,42 +150,43 @@ class TCNSignalModel(nn.Module):
         self,
         x_1m: torch.Tensor,   # (B, n_features_1m, seq_len)
         x_5m: torch.Tensor,   # (B, n_features_5m, seq_len_5m)
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            return_pred: (B, 1) scalar return prediction
-            dir_logits:  (B, 3) class logits (down/flat/up)
-            confidence:  (B, 1) scalar in [0, 1]
+            return_pred:    (B, 1) scalar return prediction
+            dir_logits_15m: (B, 3) PRIMARY — 15m direction logits
+            dir_logits_5m:  (B, 3) AUX — 5m direction logits
+            dir_logits_30m: (B, 3) AUX — 30m direction logits
+            confidence:     (B, 1) scalar in [0, 1]
         """
-        # Normalize features before first conv (LayerNorm over feature dim)
-        # x_1m is (B, C, T) — permute to (B, T, C) for LayerNorm, then back
         x_1m = self.input_norm_1m(x_1m.permute(0, 2, 1)).permute(0, 2, 1)
         x_5m = self.input_norm_5m(x_5m.permute(0, 2, 1)).permute(0, 2, 1)
 
-        # TCN streams expect (B, C, T) format
-        h_1m = self.tcn_1m(x_1m)[:, :, -1]   # last time step
+        h_1m = self.tcn_1m(x_1m)[:, :, -1]
         h_5m = self.tcn_5m(x_5m)[:, :, -1]
 
         fused = torch.cat([h_1m, h_5m], dim=-1)
         h = self.fusion(fused)
 
-        return_pred = self.return_head(h)
-        dir_logits = self.direction_head(h)
-        confidence = self.confidence_head(h)
-        return return_pred, dir_logits, confidence
+        return_pred     = self.return_head(h)
+        dir_logits_15m  = self.direction_head(h)
+        dir_logits_5m   = self.direction_head_5m(h)
+        dir_logits_30m  = self.direction_head_30m(h)
+        confidence      = self.confidence_head(h)
+        return return_pred, dir_logits_15m, dir_logits_5m, dir_logits_30m, confidence
 
     def predict(
         self,
         x_1m: torch.Tensor,
         x_5m: torch.Tensor,
     ) -> tuple[float, float]:
-        """Single-sample inference. Returns (direction, confidence)."""
+        """Single-sample inference using PRIMARY 15m head. Returns (direction, confidence)."""
         self.eval()
         with torch.no_grad():
-            ret, dir_logits, conf = self.forward(
+            _, dir_logits_15m, _, _, conf = self.forward(
                 x_1m.unsqueeze(0), x_5m.unsqueeze(0)
             )
-            probs = F.softmax(dir_logits, dim=-1).squeeze(0)
+            probs = F.softmax(dir_logits_15m, dim=-1).squeeze(0)
             class_idx = probs.argmax().item()
             direction_map = {0: -1.0, 1: 0.0, 2: 1.0}
             return direction_map[class_idx], float(conf.squeeze())

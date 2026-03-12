@@ -93,15 +93,24 @@ class TransformerSignalModel(nn.Module):
         )
         self.cross_attn_norm = nn.LayerNorm(d_model)
 
-        # Classification head
-        self.pool = nn.AdaptiveAvgPool1d(1)   # mean over time dimension
-        self.classifier = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model // 2, N_CLASSES),
-        )
-        # Separate confidence head (single logit → sigmoid)
+        # ── Multi-task classification heads ──────────────────────────────────
+        # PRIMARY: 15m direction (most predictable, drives trading signal)
+        # AUX:     5m and 30m directions (regularize shared representation)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+
+        def _cls_head() -> nn.Sequential:
+            return nn.Sequential(
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model // 2, N_CLASSES),
+            )
+
+        self.classifier    = _cls_head()   # PRIMARY: 15m
+        self.classifier_5m = _cls_head()   # AUX: 5m
+        self.classifier_30m = _cls_head()  # AUX: 30m
+
+        # Confidence head (scalar in [0,1])
         self.confidence_head = nn.Sequential(
             nn.Linear(d_model, d_model // 4),
             nn.GELU(),
@@ -113,29 +122,31 @@ class TransformerSignalModel(nn.Module):
         self,
         features: torch.Tensor,      # (B, seq_len, n_features)
         options: torch.Tensor | None = None,  # (B, seq_len, n_options) or None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            logits: (B, 3) raw class logits
-            confidence: (B, 1) scalar in [0, 1]
+            logits_15m:  (B, 3) PRIMARY — 15m direction logits
+            logits_5m:   (B, 3) AUX — 5m direction logits
+            logits_30m:  (B, 3) AUX — 30m direction logits
+            confidence:  (B, 1) scalar in [0, 1]
         """
         B, T, _ = features.shape
 
-        x = self.pos_enc(self.feature_proj(self.input_norm(features)))   # (B, T, d_model)
-        x = self.encoder(x)                              # (B, T, d_model)
+        x = self.pos_enc(self.feature_proj(self.input_norm(features)))
+        x = self.encoder(x)
 
-        # Cross-attention with options flow
         if options is not None:
-            o = self.pos_enc(self.options_proj(options))  # (B, T, d_model)
+            o = self.pos_enc(self.options_proj(options))
             attn_out, _ = self.cross_attn(query=x, key=o, value=o)
             x = self.cross_attn_norm(x + attn_out)
 
-        # Pool over time → (B, d_model)
-        pooled = self.pool(x.transpose(1, 2)).squeeze(-1)
+        pooled = self.pool(x.transpose(1, 2)).squeeze(-1)   # (B, d_model)
 
-        logits = self.classifier(pooled)         # (B, 3)
-        confidence = self.confidence_head(pooled)  # (B, 1)
-        return logits, confidence
+        logits_15m  = self.classifier(pooled)
+        logits_5m   = self.classifier_5m(pooled)
+        logits_30m  = self.classifier_30m(pooled)
+        confidence  = self.confidence_head(pooled)
+        return logits_15m, logits_5m, logits_30m, confidence
 
     def predict(
         self,
@@ -144,13 +155,14 @@ class TransformerSignalModel(nn.Module):
     ) -> tuple[float, float]:
         """Single-sample inference. Returns (direction, confidence).
 
+        Uses the PRIMARY 15m head — same interface as before.
         direction: +1 (up), 0 (flat), -1 (down)
         confidence: float in [0, 1]
         """
         self.eval()
         with torch.no_grad():
-            logits, conf = self.forward(features.unsqueeze(0), options)
-            probs = F.softmax(logits, dim=-1).squeeze(0)
+            logits_15m, _, _, conf = self.forward(features.unsqueeze(0), options)
+            probs = F.softmax(logits_15m, dim=-1).squeeze(0)
             class_idx = probs.argmax().item()
             direction_map = {0: -1.0, 1: 0.0, 2: 1.0}
             return direction_map[class_idx], float(conf.squeeze())

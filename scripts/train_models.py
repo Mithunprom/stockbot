@@ -137,7 +137,7 @@ async def load_training_data(top_n: int, tickers: list[str] | None = None, max_r
                 ticker_df[col] = ticker_df[col].astype(np.float32)
         del records
 
-        # 3. Load close prices for this ticker and compute 5-bar forward return
+        # 3. Load close prices and compute multi-horizon forward returns
         async with session_factory() as session:
             result = await session.execute(
                 select(OHLCV1m.time, OHLCV1m.close)
@@ -150,17 +150,25 @@ async def load_training_data(top_n: int, tickers: list[str] | None = None, max_r
             {r.time: float(r.close) for r in price_rows}, name="close"
         )
         close_s.index = pd.to_datetime(close_s.index, utc=True)
-        fwd = close_s.pct_change(FORWARD_N).shift(-FORWARD_N).rename("forward_return")
+
+        # PRIMARY: 15m forward return; AUX: 5m and 30m
+        fwd_15 = close_s.pct_change(FORWARD_N).shift(-FORWARD_N).rename("forward_return")
+        fwd_5  = close_s.pct_change(5).shift(-5).rename("forward_return_5m")
+        fwd_30 = close_s.pct_change(30).shift(-30).rename("forward_return_30m")
         del price_rows, close_s
 
-        # 4. Merge features + forward return (time-aligned)
+        # 4. Merge features + all forward returns (time-aligned)
         ticker_df = ticker_df.set_index("time").sort_index()
-        ticker_df = ticker_df.join(fwd, how="inner")
+        ticker_df = ticker_df.join(fwd_15, how="inner")
+        ticker_df = ticker_df.join(fwd_5,  how="left")
+        ticker_df = ticker_df.join(fwd_30, how="left")
         ticker_df = ticker_df.dropna(subset=["forward_return"])
         ticker_df = ticker_df.reset_index()
         ticker_df["ticker"] = ticker
-        ticker_df["forward_return"] = ticker_df["forward_return"].astype(np.float32)
-        del fwd
+        for col in ["forward_return", "forward_return_5m", "forward_return_30m"]:
+            if col in ticker_df.columns:
+                ticker_df[col] = ticker_df[col].astype(np.float32)
+        del fwd_15, fwd_5, fwd_30
 
         all_frames.append(ticker_df)
         logger.info("  %s: %d rows", ticker, len(ticker_df))
@@ -189,6 +197,22 @@ def walk_forward_split(df: pd.DataFrame, val_frac: float = 0.20) -> tuple[pd.Dat
 
 # ─── Metrics ─────────────────────────────────────────────────────────────────
 
+def _multi_loss(
+    loss_fn: nn.Module,
+    logits_15m: torch.Tensor,
+    logits_5m: torch.Tensor,
+    logits_30m: torch.Tensor,
+    lbl_15m: torch.Tensor,
+    lbl_5m: torch.Tensor,
+    lbl_30m: torch.Tensor,
+) -> torch.Tensor:
+    """Weighted multi-horizon loss: primary + 0.5×aux5m + 0.3×aux30m."""
+    l15 = loss_fn(logits_15m, lbl_15m)
+    l5  = loss_fn(logits_5m,  lbl_5m)
+    l30 = loss_fn(logits_30m, lbl_30m)
+    return l15 + 0.5 * l5 + 0.3 * l30
+
+
 @torch.no_grad()
 def eval_epoch(
     model: nn.Module,
@@ -197,25 +221,25 @@ def eval_epoch(
     device: torch.device,
     model_type: str,
 ) -> tuple[float, float]:
-    """Return (avg_loss, accuracy)."""
+    """Return (avg_loss, accuracy) on the PRIMARY 15m head."""
     model.eval()
     total_loss, correct, total = 0.0, 0, 0
-    for x_1m, x_5m, labels in loader:
+    for x_1m, x_5m, lbl_15, lbl_5, lbl_30 in loader:
         x_1m   = x_1m.to(device)
         x_5m   = x_5m.to(device)
-        labels = labels.to(device)
+        lbl_15 = lbl_15.to(device)
+        lbl_5  = lbl_5.to(device)
+        lbl_30 = lbl_30.to(device)
 
         if model_type == "transformer":
-            logits, _ = model(x_1m)
-        else:  # tcn
-            _, logits, _ = model(
-                x_1m.transpose(1, 2),  # (B, n_feat, seq_len)
-                x_5m.transpose(1, 2),  # (B, n_feat, seq_5m)
-            )
-        loss = loss_fn(logits, labels)
-        total_loss += loss.item() * len(labels)
-        correct += (logits.argmax(dim=-1) == labels).sum().item()
-        total += len(labels)
+            l15, l5, l30, _ = model(x_1m)
+        else:
+            _, l15, l5, l30, _ = model(x_1m.transpose(1, 2), x_5m.transpose(1, 2))
+
+        loss = _multi_loss(loss_fn, l15, l5, l30, lbl_15, lbl_5, lbl_30)
+        total_loss += loss.item() * len(lbl_15)
+        correct += (l15.argmax(dim=-1) == lbl_15).sum().item()
+        total += len(lbl_15)
 
     return total_loss / max(total, 1), correct / max(total, 1)
 
@@ -248,20 +272,22 @@ def train_one_model(
         epoch_loss, n_batches = 0.0, 0
         t0 = time.time()
 
-        for x_1m, x_5m, labels in train_loader:
+        for x_1m, x_5m, lbl_15, lbl_5, lbl_30 in train_loader:
             x_1m   = x_1m.to(device)
             x_5m   = x_5m.to(device)
-            labels = labels.to(device)
+            lbl_15 = lbl_15.to(device)
+            lbl_5  = lbl_5.to(device)
+            lbl_30 = lbl_30.to(device)
 
             optimizer.zero_grad()
             if model_type == "transformer":
-                logits, _ = model(x_1m)
+                l15, l5, l30, _ = model(x_1m)
             else:
-                _, logits, _ = model(
+                _, l15, l5, l30, _ = model(
                     x_1m.transpose(1, 2),
                     x_5m.transpose(1, 2),
                 )
-            loss = loss_fn(logits, labels)
+            loss = _multi_loss(loss_fn, l15, l5, l30, lbl_15, lbl_5, lbl_30)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
