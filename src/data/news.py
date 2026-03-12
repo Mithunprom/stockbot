@@ -60,57 +60,57 @@ class PolygonNewsClient:
     async def fetch_recent(
         self, tickers: list[str], hours_back: int = 1
     ) -> list[dict[str, Any]]:
+        """Fetch recent financial news in a SINGLE API call.
+
+        Uses one request for all news, then filters client-side by our universe.
+        Polygon free tier is 5 req/min — per-ticker loops would hit rate limits
+        immediately. One call every 5 min = well within any Polygon plan.
+        """
         if not self._settings.polygon_api_key:
             return []
 
         since = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        results: list[dict[str, Any]] = []
+        # Equity tickers only (crypto uses different news sources)
+        equity_universe = {t for t in tickers if "/" not in t}
 
-        # Polygon news supports filtering by ticker directly
-        # Free tier: 5 req/min — space calls with short delay
-        async with httpx.AsyncClient(timeout=15) as client:
-            for ticker in tickers:
-                # Skip crypto tickers (Polygon news uses equity symbols)
-                if "/" in ticker:
-                    continue
-                params = {
-                    "apiKey": self._settings.polygon_api_key,
-                    "ticker": ticker,
-                    "published_utc.gte": since,
-                    "limit": 10,   # 10 articles per ticker per poll cycle
-                    "order": "desc",
-                }
-                try:
-                    resp = await client.get(POLYGON_NEWS_BASE, params=params)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        for art in data.get("results", []):
-                            art["_ticker"] = ticker   # tag the requested ticker
-                            results.append(art)
-                    elif resp.status_code == 429:
-                        logger.warning("polygon_news_rate_limited")
-                        await asyncio.sleep(12)   # back off 12s (5 req/min = 12s/req)
-                except Exception as exc:
-                    logger.debug("polygon_news_fetch_error", ticker=ticker, error=str(exc))
-                # Small delay to stay within 5 req/min
-                await asyncio.sleep(0.2)
-
-        return results
+        async with httpx.AsyncClient(timeout=20) as client:
+            try:
+                resp = await client.get(
+                    POLYGON_NEWS_BASE,
+                    params={
+                        "apiKey": self._settings.polygon_api_key,
+                        "published_utc.gte": since,
+                        "limit": 100,   # max per call — enough for 1h of market news
+                        "order": "desc",
+                    },
+                )
+                if resp.status_code == 429:
+                    logger.warning("polygon_news_rate_limited")
+                    return []
+                if resp.status_code != 200:
+                    logger.warning("polygon_news_http_error", status=resp.status_code)
+                    return []
+                articles = resp.json().get("results", [])
+                # Filter: keep only articles mentioning at least one ticker in our universe
+                relevant = [
+                    a for a in articles
+                    if any(t.upper() in equity_universe for t in a.get("tickers", []))
+                ]
+                logger.info("polygon_news_fetched", total=len(articles), relevant=len(relevant))
+                return relevant
+            except Exception as exc:
+                logger.warning("polygon_news_fetch_error", error=str(exc))
+                return []
 
     def parse_article(self, raw: dict[str, Any], universe: set[str]) -> list[dict[str, Any]]:
-        """Parse one Polygon news article into ticker-tagged rows."""
+        """Parse one Polygon news article into one row per relevant ticker."""
         headline = raw.get("title", "")
         body = raw.get("description", "")
 
-        # Polygon provides explicit ticker list in "tickers" field
-        explicit = [t.upper() for t in raw.get("tickers", []) if t.upper() in universe]
-        # Also add the _ticker we used to query (always relevant)
-        queried = raw.get("_ticker", "")
-        if queried and queried in universe:
-            explicit.append(queried)
-        tickers = list(set(explicit))
+        # Polygon provides explicit ticker list — intersect with our universe
+        tickers = [t.upper() for t in raw.get("tickers", []) if t.upper() in universe]
         if not tickers:
             return []
 
@@ -121,18 +121,19 @@ class PolygonNewsClient:
             published_at = datetime.now(timezone.utc)
 
         url = raw.get("article_url", raw.get("url", ""))
+        source = raw.get("publisher", {}).get("name", "polygon")
         return [
             {
                 "published_at": published_at,
                 "ticker": ticker,
                 "headline": headline,
                 "body": body,
-                "source": raw.get("publisher", {}).get("name", "polygon"),
+                "source": source,
                 "url": url,
                 "sentiment_score": None,
                 "sentiment_label": None,
                 "relevance_score": None,
-                "raw": {k: v for k, v in raw.items() if k != "_ticker"},
+                "raw": raw,
             }
             for ticker in tickers
         ]

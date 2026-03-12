@@ -25,10 +25,10 @@ SEQ_LEN = 60          # 60 bars of history (1-hour at 1m resolution)
 N_FEATURE_COLS = 30   # FFSA top-30
 N_OPTIONS_COLS = 6    # iv_rank, put_call_ratio, unusual_flow_flag, net_gex, smart_money_score, vol_oi
 N_CLASSES = 3         # 0=down, 1=flat, 2=up
-D_MODEL = 64
-N_HEADS = 4
-N_LAYERS = 3
-D_FF = 256
+D_MODEL = 128         # was 64 — doubles representational capacity
+N_HEADS = 8           # d_model/n_heads = 128/8 = 16 per head (must divide evenly; 6 heads would give 128/6=21.3 — invalid)
+N_LAYERS = 5          # was 3 — deeper temporal reasoning
+D_FF = 512            # was 256 — wider FFN
 DROPOUT = 0.1
 
 CHECKPOINT_DIR = Path("models/transformer")
@@ -188,6 +188,7 @@ def save_checkpoint(model: TransformerSignalModel, step: int, sharpe: float) -> 
                 "d_model": D_MODEL,
                 "n_heads": N_HEADS,
                 "n_layers": N_LAYERS,
+                "d_ff": D_FF,
             },
         },
         path,

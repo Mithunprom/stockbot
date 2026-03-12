@@ -20,9 +20,9 @@ import torch.nn.functional as F
 CHECKPOINT_DIR = Path("models/tcn")
 N_FEATURES_1M = 30   # FFSA top-30 at 1m
 N_FEATURES_5M = 30   # Same features at 5m resolution
-N_CHANNELS = 64
+N_CHANNELS = 128      # was 64 — doubles feature width
 KERNEL_SIZE = 3
-DILATIONS = [1, 2, 4, 8, 16]
+DILATIONS = [1, 2, 4, 8, 16, 32]   # was [1,2,4,8,16] — receptive field: ~126 bars (was ~62)
 DROPOUT = 0.1
 
 
