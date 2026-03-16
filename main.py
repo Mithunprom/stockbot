@@ -180,6 +180,7 @@ async def lifespan(app: FastAPI):
     from src.agents.critique_agent import CritiqueAgent
     from src.agents.latency_agent import LatencyAgent
     from src.agents.profit_agent import ProfitAgent
+    from src.agents.retrain_agent import RetrainAgent
     from src.agents.risk_agent import RiskAgent
     from src.agents.screener_agent import ScreenerAgent
     from src.agents.scheduler import create_scheduler
@@ -189,6 +190,11 @@ async def lifespan(app: FastAPI):
     profit_agent = ProfitAgent()
     screener_agent = ScreenerAgent(signal_loop=_signal_loop)
     critique_agent = CritiqueAgent(session_factory=session_factory)
+    retrain_agent = RetrainAgent(
+        ensemble=ensemble,
+        session_factory=session_factory,
+        universe=universe,
+    )
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -196,6 +202,7 @@ async def lifespan(app: FastAPI):
         profit_agent=profit_agent,
         screener_agent=screener_agent,
         critique_agent=critique_agent,
+        retrain_agent=retrain_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
