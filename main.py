@@ -259,7 +259,7 @@ async def lifespan(app: FastAPI):
 
 
 async def _download_models_from_s3() -> None:
-    """Download Transformer and TCN checkpoints from S3 at startup.
+    """Download ML model checkpoints from S3 at startup.
 
     Only downloads if the file doesn't already exist locally (idempotent).
     Requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET env vars.
@@ -280,10 +280,16 @@ async def _download_models_from_s3() -> None:
         return
 
     # Map S3 key → local path
+    # Priority order: LightGBM + sizing RL first (critical), then secondary models
     model_files = {
+        # Primary: LightGBM signal model (gates RL entry/exit)
+        "lgbm/lgbm_ic_0.1117.pkl": Path("models/lgbm/lgbm_ic_0.1117.pkl"),
+        "lgbm/lgbm_ic_0.1117.json": Path("models/lgbm/lgbm_ic_0.1117.json"),
+        # Primary: Position-sizing RL agent (Sharpe 18.4)
+        "rl_agent/best_sizing_ppo.zip": Path("models/rl_agent/best_sizing_ppo.zip"),
+        # Secondary: Transformer + TCN (IC ≈ 0, low weight in ensemble)
         "transformer/step_055314_sharpe_0.896.pt": Path("models/transformer/step_055314_sharpe_0.896.pt"),
         "tcn/step_043461_sharpe_0.776.pt": Path("models/tcn/step_043461_sharpe_0.776.pt"),
-        "rl_agent/ppo_500000_steps.zip": Path("models/rl_agent/periodic/ppo_500000_steps.zip"),
     }
 
     loop = asyncio.get_event_loop()
@@ -303,6 +309,47 @@ async def _download_models_from_s3() -> None:
                 logger.error("s3_download_failed", key=s3_key, error=str(exc))
 
     await loop.run_in_executor(None, _download)
+
+
+async def upload_models_to_s3() -> dict[str, str]:
+    """Upload current model checkpoints to S3 for backup.
+
+    Call manually or from a scheduled job. Returns a dict of
+    {s3_key: status} for each file.
+    """
+    import os
+
+    bucket = os.environ.get("AWS_S3_BUCKET")
+    if not bucket:
+        return {"error": "AWS_S3_BUCKET not set"}
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError:
+        return {"error": "boto3 not installed"}
+
+    upload_files = {
+        Path("models/lgbm/lgbm_ic_0.1117.pkl"): "lgbm/lgbm_ic_0.1117.pkl",
+        Path("models/lgbm/lgbm_ic_0.1117.json"): "lgbm/lgbm_ic_0.1117.json",
+        Path("models/rl_agent/best_sizing_ppo.zip"): "rl_agent/best_sizing_ppo.zip",
+    }
+
+    s3 = boto3.client("s3")
+    results: dict[str, str] = {}
+    for local_path, s3_key in upload_files.items():
+        if not local_path.exists():
+            results[s3_key] = "skipped (not found)"
+            continue
+        try:
+            s3.upload_file(str(local_path), bucket, s3_key)
+            results[s3_key] = f"uploaded ({local_path.stat().st_size} bytes)"
+            logger.info("s3_upload_complete", bucket=bucket, key=s3_key)
+        except (BotoCoreError, ClientError) as exc:
+            results[s3_key] = f"failed: {exc}"
+            logger.error("s3_upload_failed", key=s3_key, error=str(exc))
+
+    return results
 
 
 def _load_universe() -> list[str]:
@@ -403,6 +450,13 @@ async def health() -> dict[str, Any]:
         "mode": get_settings().alpaca_mode,
         "signal_loop_active": _signal_loop is not None,
     }
+
+
+@app.post("/admin/upload-models-s3")
+async def upload_models_s3() -> JSONResponse:
+    """Upload current model checkpoints to S3 as backup."""
+    results = await upload_models_to_s3()
+    return JSONResponse(content=results)
 
 
 @app.get("/signals")
