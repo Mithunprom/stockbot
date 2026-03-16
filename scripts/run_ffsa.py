@@ -1,12 +1,13 @@
 """Run FFSA — LightGBM + SHAP feature selection.
 
 Reads pre-computed features from the feature_matrix table, trains a LightGBM
-model to predict 5-bar forward returns, and uses SHAP to rank all 52 features
-by predictive power. Saves top-30 to reports/drift/.
+model to predict N-bar forward returns, and uses SHAP to rank all features
+by predictive power. Saves top-N to reports/drift/.
 
 Usage:
     python scripts/run_ffsa.py
-    python scripts/run_ffsa.py --top-n 25
+    python scripts/run_ffsa.py --top-n 30 --forward-n 15
+    python scripts/run_ffsa.py --forward-n 15 --sample-pct 15
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_ffsa")
 
-FORWARD_BARS = 5        # predict 5-bar (~5 min) forward return
+FORWARD_BARS = 15       # default: 15-bar (~15 min) forward return — matches training horizon
 MIN_SAMPLES  = 5_000    # minimum rows to proceed
 
 
@@ -150,11 +151,14 @@ def build_Xy(feat_df: pd.DataFrame, close_df: pd.DataFrame) -> tuple[pd.DataFram
 
 # ─── FFSA ─────────────────────────────────────────────────────────────────────
 
-def run_ffsa(X: pd.DataFrame, y: pd.Series, top_n: int) -> dict:
-    """Train LightGBM + compute SHAP importances. Returns ranked feature dict."""
+def run_ffsa(X: pd.DataFrame, y: pd.Series, top_n: int, feat_df: pd.DataFrame | None = None) -> dict:
+    """Train LightGBM + compute SHAP importances. Returns ranked feature dict.
+
+    Uses per-ticker walk-forward validation (last 20% of each ticker's bars)
+    to match the training pipeline and avoid ticker-level leakage.
+    """
     import shap
     from lightgbm import LGBMRegressor
-    from sklearn.model_selection import TimeSeriesSplit
 
     logger.info("Training LightGBM on %d samples, %d features ...", len(X), X.shape[1])
 
@@ -172,19 +176,36 @@ def run_ffsa(X: pd.DataFrame, y: pd.Series, top_n: int) -> dict:
         verbose=-1,
     )
 
-    tscv = TimeSeriesSplit(n_splits=5)
-    splits = list(tscv.split(X))
-    train_idx, val_idx = splits[-1]   # use most recent split
+    # Per-ticker walk-forward split (matches training pipeline)
+    # Old approach used TimeSeriesSplit on ticker-sorted rows — leaked info
+    if feat_df is not None and "ticker" in feat_df.columns and "time" in feat_df.columns:
+        train_mask = pd.Series(False, index=X.index)
+        val_mask = pd.Series(False, index=X.index)
+        for ticker, grp in feat_df.groupby("ticker"):
+            grp_sorted = grp.sort_values("time")
+            grp_idx = grp_sorted.index.intersection(X.index)
+            cutoff = int(len(grp_idx) * 0.80)
+            train_mask.loc[grp_idx[:cutoff]] = True
+            val_mask.loc[grp_idx[cutoff:]] = True
+        train_idx = X.index[train_mask]
+        val_idx = X.index[val_mask]
+        logger.info("  Walk-forward split: train=%d, val=%d (per-ticker 80/20)", len(train_idx), len(val_idx))
+    else:
+        # Fallback: simple 80/20 split by row order
+        cutoff = int(len(X) * 0.80)
+        train_idx = X.index[:cutoff]
+        val_idx = X.index[cutoff:]
+        logger.info("  Fallback split: train=%d, val=%d (no ticker info)", len(train_idx), len(val_idx))
 
     model.fit(
-        X.iloc[train_idx], y.iloc[train_idx],
-        eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
+        X.loc[train_idx], y.loc[train_idx],
+        eval_set=[(X.loc[val_idx], y.loc[val_idx])],
         callbacks=[],
     )
 
-    # Validation IC (Information Coefficient) — drop NaN targets before correlating
-    val_y    = y.iloc[val_idx].reset_index(drop=True)
-    val_pred = pd.Series(model.predict(X.iloc[val_idx]))
+    # Validation IC (Information Coefficient) — per-ticker temporal validation
+    val_y    = y.loc[val_idx].reset_index(drop=True)
+    val_pred = pd.Series(model.predict(X.loc[val_idx]))
     mask     = val_y.notna() & val_pred.notna()
     ic       = val_pred[mask].corr(val_y[mask]) if mask.sum() > 10 else float("nan")
     logger.info("  Validation IC: %.4f (target > 0.05)", ic)
@@ -210,7 +231,11 @@ def run_ffsa(X: pd.DataFrame, y: pd.Series, top_n: int) -> dict:
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-async def main(top_n: int, sample_pct: float = 8.0) -> None:
+async def main(top_n: int, sample_pct: float = 8.0, forward_n: int = FORWARD_BARS) -> None:
+    global FORWARD_BARS
+    FORWARD_BARS = forward_n
+    logger.info("FFSA target: %d-bar forward return (~%d min)", forward_n, forward_n)
+
     feat_df  = await load_feature_matrix(sample_pct=sample_pct)
     close_df = await load_close_prices()
 
@@ -220,7 +245,7 @@ async def main(top_n: int, sample_pct: float = 8.0) -> None:
         logger.error("Only %d samples — need %d. Run backfill first.", len(X), MIN_SAMPLES)
         return
 
-    result = run_ffsa(X, y, top_n)
+    result = run_ffsa(X, y, top_n, feat_df=feat_df)
 
     # ── Print ranked features ─────────────────────────────────────────────────
     print("\n" + "═" * 60)
@@ -244,7 +269,7 @@ async def main(top_n: int, sample_pct: float = 8.0) -> None:
 
     payload = {
         "version":           datetime.now(timezone.utc).isoformat(),
-        "forward_bars":      FORWARD_BARS,
+        "forward_bars":      forward_n,
         "validation_ic":     result["ic"],
         "top_n":             top_n,
         "selected_features": result["selected"],
@@ -260,8 +285,11 @@ async def main(top_n: int, sample_pct: float = 8.0) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--top-n",      type=int,   default=30)
+    parser.add_argument("--top-n",      type=int,   default=30,
+                        help="Number of features to select (default 30)")
     parser.add_argument("--sample-pct", type=float, default=8.0,
                         help="Percentage of feature_matrix rows to sample (default 8%%)")
+    parser.add_argument("--forward-n",  type=int,   default=FORWARD_BARS,
+                        help=f"Forward return horizon in bars (default {FORWARD_BARS} = ~{FORWARD_BARS}min)")
     args = parser.parse_args()
-    asyncio.run(main(top_n=args.top_n, sample_pct=args.sample_pct))
+    asyncio.run(main(top_n=args.top_n, sample_pct=args.sample_pct, forward_n=args.forward_n))

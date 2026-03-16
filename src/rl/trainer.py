@@ -24,6 +24,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 
 from src.rl.trading_env import EnvConfig, TradingEnv
+from src.rl.position_sizing_env import PositionSizingEnv, SizingEnvConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -39,12 +40,14 @@ class SharpeCheckpointCallback(BaseCallback):
     def __init__(
         self,
         val_bars: list[dict[str, Any]],
+        env_class: type = TradingEnv,
         eval_freq: int = 10_000,
         n_eval_episodes: int = 5,
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose)
         self.val_bars = val_bars
+        self.env_class = env_class
         self.eval_freq = eval_freq
         self.n_eval_episodes = n_eval_episodes
         self.best_sharpe = -float("inf")
@@ -67,20 +70,21 @@ class SharpeCheckpointCallback(BaseCallback):
         return True
 
     def _evaluate_sharpe(self) -> float:
-        """Run one full episode and compute annualized Sharpe from per-step PnL."""
-        env = TradingEnv(self.val_bars)
-        obs, _ = env.reset()
-        done = False
-        step_pnls: list[float] = []
-        while not done:
-            action, _ = self.model.predict(obs, deterministic=True)
-            obs, _reward, done, _, info = env.step(int(action))
-            step_pnls.append(info.get("step_pnl", 0.0))
+        """Run multiple daily episodes and compute annualized Sharpe from per-step PnL."""
+        env = self.env_class(self.val_bars, shuffle_days=False)
+        all_pnls: list[float] = []
+        n_episodes = min(10, len(env._days))
+        for _ in range(n_episodes):
+            obs, _ = env.reset()
+            done = False
+            while not done:
+                action, _ = self.model.predict(obs, deterministic=True)
+                obs, _reward, done, _, info = env.step(int(action))
+                all_pnls.append(info.get("step_pnl", 0.0))
 
-        if not step_pnls:
+        if not all_pnls:
             return 0.0
-        arr = np.array(step_pnls)
-        # Annualized Sharpe (390 1m bars/day, 252 trading days)
+        arr = np.array(all_pnls)
         return float(arr.mean() / (arr.std() + 1e-9) * np.sqrt(252 * 390))
 
 
@@ -111,10 +115,12 @@ class RLTrainer:
         bars_train: list[dict[str, Any]],
         bars_val: list[dict[str, Any]],
         cfg: EnvConfig | None = None,
+        env_class: type = TradingEnv,
     ) -> None:
         self.bars_train = bars_train
         self.bars_val = bars_val
         self.cfg = cfg or EnvConfig()
+        self.env_class = env_class
         CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
     def run(
@@ -127,41 +133,49 @@ class RLTrainer:
 
         Returns the best PPO model by validation Sharpe.
         """
-        # ── Behavioral cloning ────────────────────────────────────────────────
-        logger.info("behavioral_cloning_start")
-        from src.rl.behavioral_cloning import BehavioralCloningTrainer, MACDExpertPolicy
+        # ── Create environment ─────────────────────────────────────────────────
+        is_sizing = self.env_class is PositionSizingEnv
+        env = self.env_class(self.bars_train, cfg=self.cfg)
 
-        expert = MACDExpertPolicy()
-        trajectories = expert.generate(self.bars_train[:5000])   # first 5k bars
+        # ── Behavioral cloning (skip for sizing env) ──────────────────────────
+        if not is_sizing and bc_epochs > 0:
+            logger.info("behavioral_cloning_start")
+            from src.rl.behavioral_cloning import BehavioralCloningTrainer, MACDExpertPolicy
 
-        # Create PPO model first so we can BC-pretrain its policy
-        env = TradingEnv(self.bars_train, cfg=self.cfg)
+            expert = MACDExpertPolicy()
+            trajectories = expert.generate(self.bars_train[:5000])
+
+        # PPO hyperparams: tuned for sizing env (sparser decisions)
+        lr = 1e-4 if is_sizing else 3e-4
+        n_steps = 4096 if is_sizing else 2048
+        ent_coef = 0.02 if is_sizing else 0.01
+
         model = PPO(
             "MlpPolicy",
             env,
-            learning_rate=3e-4,
-            n_steps=2048,
+            learning_rate=lr,
+            n_steps=n_steps,
             batch_size=64,
             n_epochs=10,
             gamma=0.99,
             gae_lambda=0.95,
             clip_range=0.2,
-            ent_coef=0.01,
+            ent_coef=ent_coef,
             vf_coef=0.5,
             max_grad_norm=0.5,
             verbose=1,
             tensorboard_log=None,
         )
 
-        # Pre-train the policy network via the action-logit wrapper
-        from src.rl.behavioral_cloning import PolicyActionWrapper
-        policy_wrapper = PolicyActionWrapper(model.policy)
-        bc_trainer = BehavioralCloningTrainer(policy_wrapper)
-        bc_trainer.train(trajectories, epochs=bc_epochs)
-        logger.info("behavioral_cloning_complete")
+        if not is_sizing and bc_epochs > 0:
+            from src.rl.behavioral_cloning import PolicyActionWrapper
+            policy_wrapper = PolicyActionWrapper(model.policy)
+            bc_trainer = BehavioralCloningTrainer(policy_wrapper)
+            bc_trainer.train(trajectories, epochs=bc_epochs)
+            logger.info("behavioral_cloning_complete")
 
         # ── PPO training ──────────────────────────────────────────────────────
-        sharpe_cb = SharpeCheckpointCallback(self.bars_val)
+        sharpe_cb = SharpeCheckpointCallback(self.bars_val, env_class=self.env_class)
         checkpoint_cb = CheckpointCallback(
             save_freq=10_000,
             save_path=str(CHECKPOINT_DIR / "periodic"),
@@ -177,7 +191,8 @@ class RLTrainer:
 
         # ── Load best by Sharpe ───────────────────────────────────────────────
         if sharpe_cb.best_model_path:
-            best_model = PPO.load(sharpe_cb.best_model_path, env=env)
+            reload_env = self.env_class(self.bars_train, cfg=self.cfg)
+            best_model = PPO.load(sharpe_cb.best_model_path, env=reload_env)
             logger.info(
                 "ppo_best_loaded: path=%s sharpe=%.4f",
                 str(sharpe_cb.best_model_path), sharpe_cb.best_sharpe,
@@ -187,18 +202,21 @@ class RLTrainer:
         return model
 
     def backtest(self, model: PPO) -> dict[str, float]:
-        """Run a full backtest on validation bars and return performance metrics."""
-        env = TradingEnv(self.bars_val, cfg=self.cfg)
-        obs, _ = env.reset()
-        done = False
+        """Run a full backtest on all validation days and return performance metrics."""
+        env = self.env_class(self.bars_val, cfg=self.cfg, shuffle_days=False)
         returns: list[float] = []
         portfolio_values: list[float] = [env.cfg.initial_portfolio]
 
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, _, info = env.step(int(action))
-            returns.append(info.get("step_pnl", 0.0))
-            portfolio_values.append(info.get("portfolio", portfolio_values[-1]))
+        # Run through all validation days
+        for day_idx in range(len(env._days)):
+            env._day_idx = day_idx - 1  # reset() will advance by 1
+            obs, _ = env.reset()
+            done = False
+            while not done:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, reward, done, _, info = env.step(int(action))
+                returns.append(info.get("step_pnl", 0.0))
+                portfolio_values.append(info.get("portfolio", portfolio_values[-1]))
 
         if not returns:
             return {}

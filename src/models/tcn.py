@@ -1,12 +1,16 @@
-"""Temporal Convolutional Network (TCN) signal model.
+"""TCN signal model (v3 — Hybrid: Regression + Binary Direction).
 
 Architecture:
   - Dilated causal convolutions with residual connections
-  - Dilations: 1, 2, 4, 8, 16 (receptive field: ~62 bars)
+  - Dilations: 1, 2, 4, 8, 16, 32 (receptive field: ~126 bars)
   - Dual-stream input: 1m features + 5m features
-  - Output: next-bar return regression + direction probability
+  - Learned ticker embedding fused before output heads
+  - Dual output heads:
+      Head A (Regression): predicts raw 15m forward return
+      Head B (Direction):  binary logit — sign(return) > epsilon → 1, else 0
+  - Dropout raised to 0.3 to combat memorization.
 
-Faster inference than Transformer — complements it on short-term momentum.
+Training: HuberLoss(Head A) + λ * BCEWithLogitsLoss(Head B).
 """
 
 from __future__ import annotations
@@ -17,32 +21,33 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.models.dataset import TRADING_THRESHOLD
+
 CHECKPOINT_DIR = Path("models/tcn")
-N_FEATURES_1M = 30   # FFSA top-30 at 1m
-N_FEATURES_5M = 30   # Same features at 5m resolution
-N_CHANNELS = 128      # was 64 — doubles feature width
+N_FEATURES_1M = 30
+N_FEATURES_5M = 30
+N_CHANNELS = 128
 KERNEL_SIZE = 3
-DILATIONS = [1, 2, 4, 8, 16, 32]   # was [1,2,4,8,16] — receptive field: ~126 bars (was ~62)
-DROPOUT = 0.1
+DILATIONS = [1, 2, 4, 8, 16, 32]
+DROPOUT = 0.3          # raised from 0.1
+N_TICKERS = 64
 
 
 # ─── Temporal block ───────────────────────────────────────────────────────────
 
 class TemporalBlock(nn.Module):
-    """Causal dilated conv block with residual connection."""
-
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
         kernel_size: int,
         dilation: int,
-        dropout: float = 0.1,
+        dropout: float = 0.3,
     ) -> None:
         super().__init__()
-        padding = (kernel_size - 1) * dilation   # causal: only pad left
+        padding = (kernel_size - 1) * dilation
 
-        self.conv1 = nn.utils.parametrize.register_parametrization if False else nn.Conv1d(
+        self.conv1 = nn.Conv1d(
             in_channels, out_channels, kernel_size,
             padding=padding, dilation=dilation,
         )
@@ -55,7 +60,6 @@ class TemporalBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.GELU()
 
-        # Residual projection if channel dims differ
         self.downsample = (
             nn.Conv1d(in_channels, out_channels, 1)
             if in_channels != out_channels
@@ -64,7 +68,6 @@ class TemporalBlock(nn.Module):
         self._padding = padding
 
     def _causal_trim(self, x: torch.Tensor, length: int) -> torch.Tensor:
-        """Remove right-padding to preserve causality."""
         return x[:, :, :length]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -87,7 +90,7 @@ class TemporalBlock(nn.Module):
 # ─── TCN model ────────────────────────────────────────────────────────────────
 
 class TCNSignalModel(nn.Module):
-    """Dual-stream TCN: 1m and 5m features fused before output heads."""
+    """Dual-stream TCN with dual heads: regression + binary direction."""
 
     def __init__(
         self,
@@ -97,15 +100,14 @@ class TCNSignalModel(nn.Module):
         kernel_size: int = KERNEL_SIZE,
         dilations: list[int] | None = None,
         dropout: float = DROPOUT,
+        n_tickers: int = N_TICKERS,
     ) -> None:
         super().__init__()
         dilations = dilations or DILATIONS
 
-        # Input normalization — LayerNorm over feature dim before 1x1 conv
-        # prevents raw financial feature scales (OBV ~10^7, returns ~0.001) from
-        # blowing up the first TemporalBlock and causing NaN losses.
         self.input_norm_1m = nn.LayerNorm(n_features_1m)
         self.input_norm_5m = nn.LayerNorm(n_features_5m)
+        self.ticker_embed = nn.Embedding(n_tickers, n_channels)
 
         # ── 1m stream ─────────────────────────────────────────────────────────
         layers_1m: list[nn.Module] = [
@@ -127,20 +129,26 @@ class TCNSignalModel(nn.Module):
             )
         self.tcn_5m = nn.Sequential(*layers_5m)
 
-        # ── Fusion & heads ─────────────────────────────────────────────────────
-        fused = n_channels * 2
+        # ── Fusion ─────────────────────────────────────────────────────────────
+        fused = n_channels * 3   # 1m + 5m + ticker
         self.fusion = nn.Sequential(
             nn.Linear(fused, n_channels),
             nn.GELU(),
             nn.Dropout(dropout),
         )
-        self.return_head = nn.Linear(n_channels, 1)       # next-bar return
 
-        # Multi-task direction heads: PRIMARY 15m + AUX 5m, 30m
-        self.direction_head    = nn.Linear(n_channels, 3)  # PRIMARY: 15m
-        self.direction_head_5m  = nn.Linear(n_channels, 3) # AUX: 5m
-        self.direction_head_30m = nn.Linear(n_channels, 3) # AUX: 30m
+        # ── Head A: Regression (15m return) ────────────────────────────────────
+        self.return_head = nn.Linear(n_channels, 1)
 
+        # ── Head B: Binary direction (forcing function) ────────────────────────
+        self.direction_head = nn.Sequential(
+            nn.Linear(n_channels, n_channels // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(n_channels // 2, 1),
+        )
+
+        # Confidence
         self.confidence_head = nn.Sequential(
             nn.Linear(n_channels, 1),
             nn.Sigmoid(),
@@ -148,16 +156,15 @@ class TCNSignalModel(nn.Module):
 
     def forward(
         self,
-        x_1m: torch.Tensor,   # (B, n_features_1m, seq_len)
-        x_5m: torch.Tensor,   # (B, n_features_5m, seq_len_5m)
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x_1m: torch.Tensor,                      # (B, n_features_1m, seq_len)
+        x_5m: torch.Tensor,                      # (B, n_features_5m, seq_len_5m)
+        ticker_ids: torch.Tensor | None = None,   # (B,) int tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            return_pred:    (B, 1) scalar return prediction
-            dir_logits_15m: (B, 3) PRIMARY — 15m direction logits
-            dir_logits_5m:  (B, 3) AUX — 5m direction logits
-            dir_logits_30m: (B, 3) AUX — 30m direction logits
-            confidence:     (B, 1) scalar in [0, 1]
+            pred_return:  (B, 1) — Head A: predicted 15m return
+            dir_logit:    (B, 1) — Head B: binary direction logit (pre-sigmoid)
+            confidence:   (B, 1) — scalar in [0, 1]
         """
         x_1m = self.input_norm_1m(x_1m.permute(0, 2, 1)).permute(0, 2, 1)
         x_5m = self.input_norm_5m(x_5m.permute(0, 2, 1)).permute(0, 2, 1)
@@ -165,31 +172,45 @@ class TCNSignalModel(nn.Module):
         h_1m = self.tcn_1m(x_1m)[:, :, -1]
         h_5m = self.tcn_5m(x_5m)[:, :, -1]
 
-        fused = torch.cat([h_1m, h_5m], dim=-1)
+        if ticker_ids is not None:
+            tick_emb = self.ticker_embed(ticker_ids)
+        else:
+            tick_emb = torch.zeros_like(h_1m)
+
+        fused = torch.cat([h_1m, h_5m, tick_emb], dim=-1)
         h = self.fusion(fused)
 
-        return_pred     = self.return_head(h)
-        dir_logits_15m  = self.direction_head(h)
-        dir_logits_5m   = self.direction_head_5m(h)
-        dir_logits_30m  = self.direction_head_30m(h)
-        confidence      = self.confidence_head(h)
-        return return_pred, dir_logits_15m, dir_logits_5m, dir_logits_30m, confidence
+        pred_return = self.return_head(h)        # Head A
+        dir_logit   = self.direction_head(h)      # Head B
+        confidence  = self.confidence_head(h)
+        return pred_return, dir_logit, confidence
 
     def predict(
         self,
         x_1m: torch.Tensor,
         x_5m: torch.Tensor,
+        ticker_id: int | None = None,
     ) -> tuple[float, float]:
-        """Single-sample inference using PRIMARY 15m head. Returns (direction, confidence)."""
+        """Single-sample inference. Returns (direction, confidence).
+
+        Uses binary head for direction, regression head for threshold gate.
+        """
         self.eval()
         with torch.no_grad():
-            _, dir_logits_15m, _, _, conf = self.forward(
-                x_1m.unsqueeze(0), x_5m.unsqueeze(0)
+            tid = None
+            if ticker_id is not None:
+                tid = torch.tensor([ticker_id], device=x_1m.device)
+            pred_return, dir_logit, conf = self.forward(
+                x_1m.unsqueeze(0), x_5m.unsqueeze(0), ticker_ids=tid
             )
-            probs = F.softmax(dir_logits_15m, dim=-1).squeeze(0)
-            class_idx = probs.argmax().item()
-            direction_map = {0: -1.0, 1: 0.0, 2: 1.0}
-            return direction_map[class_idx], float(conf.squeeze())
+            pred_ret = pred_return.squeeze().item()
+            dir_prob = torch.sigmoid(dir_logit).squeeze().item()
+            confidence = float(conf.squeeze())
+
+            if abs(pred_ret) < TRADING_THRESHOLD:
+                return 0.0, confidence
+            direction = 1.0 if dir_prob > 0.5 else -1.0
+            return direction, confidence
 
 
 # ─── Checkpoint helpers ───────────────────────────────────────────────────────
@@ -197,7 +218,17 @@ class TCNSignalModel(nn.Module):
 def save_checkpoint(model: TCNSignalModel, step: int, sharpe: float) -> Path:
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     path = CHECKPOINT_DIR / f"step_{step:06d}_sharpe_{sharpe:.3f}.pt"
-    torch.save({"step": step, "sharpe": sharpe, "model_state": model.state_dict()}, path)
+    torch.save({
+        "step": step,
+        "sharpe": sharpe,
+        "model_state": model.state_dict(),
+        "config": {
+            "n_features_1m": model.input_norm_1m.normalized_shape[0],
+            "n_features_5m": model.input_norm_5m.normalized_shape[0],
+            "n_channels": model.return_head.in_features,
+            "n_tickers": model.ticker_embed.num_embeddings,
+        },
+    }, path)
     return path
 
 
@@ -208,6 +239,7 @@ def load_best_checkpoint(checkpoint_dir: Path | None = None) -> TCNSignalModel |
         return None
     best = max(checkpoints, key=lambda p: float(p.stem.split("sharpe_")[1]))
     state = torch.load(best, map_location="cpu")
-    model = TCNSignalModel()
+    cfg = state["config"]
+    model = TCNSignalModel(**cfg)
     model.load_state_dict(state["model_state"])
     return model

@@ -1,11 +1,11 @@
 {
   "ticker": "AAPL",
-  "timesteps": 500000,
-  "sharpe": -9.721,
-  "win_rate": 0.455,
-  "profit_factor": 0.901,
-  "max_drawdown": 0.208,
-  "final_portfolio": 79336.65,
-  "total_return_pct": -20.66,
-  "n_bars": 38514
+  "timesteps": 2000000,
+  "sharpe": 13.063,
+  "win_rate": 0.041,
+  "profit_factor": 1.677,
+  "max_drawdown": 0.013,
+  "final_portfolio": 100055.66,
+  "total_return_pct": 0.06,
+  "n_bars": 38648
 }

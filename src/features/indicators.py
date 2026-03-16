@@ -133,8 +133,90 @@ def _keltner(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 20, mul
 
 
 def _vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    """Legacy cumulative VWAP (no daily reset) — kept for backward compat."""
     tp = (high + low + close) / 3
     return (tp * volume).cumsum() / volume.cumsum().replace(0, np.nan)
+
+
+def _to_et_index(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Convert a DatetimeIndex to US/Eastern, handling both aware and naive."""
+    if idx.tz is None:
+        return idx.tz_localize("UTC").tz_convert("America/New_York")
+    return idx.tz_convert("America/New_York")
+
+
+def _vwap_daily(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    """VWAP with proper daily reset using ET calendar dates.
+
+    Groups by ET date so the daily accumulation resets at 9:30 AM ET, not
+    at midnight UTC. The legacy _vwap() above accumulates from the start of
+    the entire DataFrame which contaminates cross-session signal.
+
+    Lookahead: none (cumulative within day, shifted at pipeline level).
+    """
+    tp = (high + low + close) / 3
+    tpv = tp * volume
+    # ET date guarantees the reset aligns with the trading session, not midnight UTC
+    idx_et = _to_et_index(close.index)
+    date_key = pd.Series(idx_et.date, index=close.index)
+    cum_tpv = tpv.groupby(date_key).cumsum()
+    cum_vol = volume.groupby(date_key).cumsum().replace(0, np.nan)
+    return cum_tpv / cum_vol
+
+
+def _orb_features(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    atr_14: pd.Series,
+    orb_bars: int = 30,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Opening Range Breakout (ORB) features — first 30 bars of each session.
+
+    Bug fix: must convert to ET timezone before computing minutes-since-open.
+    DB timestamps are UTC (9:30 AM ET = 13:30 UTC). Using raw UTC hours
+    would look for bars at 5:30 AM ET which don't exist → all NaN.
+
+    Returns:
+        orb_range_atr : (ORB_high − ORB_low) / ATR14  — daily volatility regime [0,∞)
+        orb_dev       : (close − ORB_low) / (ORB_high − ORB_low)  — position in range [0,1]
+        orb_break_up  : 1.0 if close > ORB_high else 0.0
+        orb_break_dn  : 1.0 if close < ORB_low  else 0.0
+    """
+    idx_et = _to_et_index(close.index)
+    min_since_open = (idx_et.hour * 60 + idx_et.minute) - (9 * 60 + 30)
+    is_orb = pd.Series((min_since_open >= 0) & (min_since_open < orb_bars), index=close.index)
+
+    # Group by ET date so ORB resets correctly each session
+    date_key = pd.Series(idx_et.date, index=close.index)
+
+    # transform('max'/'min') on masked series: NaN (outside ORB) excluded,
+    # so each bar of the day gets the ORB high/low as a day-constant value.
+    orb_high = high.where(is_orb).groupby(date_key).transform("max")
+    orb_low  = low.where(is_orb).groupby(date_key).transform("min")
+
+    orb_range     = (orb_high - orb_low).clip(lower=0)
+    orb_range_atr = orb_range / atr_14.replace(0, np.nan)
+    orb_dev       = (close - orb_low) / (orb_range + 1e-9)
+    orb_break_up  = (close > orb_high).astype(float)
+    orb_break_dn  = (close < orb_low).astype(float)
+
+    return orb_range_atr, orb_dev, orb_break_up, orb_break_dn
+
+
+def _vwap_slope(vwap: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """VWAP rate-of-change over 5 and 15 bars, normalized by VWAP level.
+
+    Dividing by the lagged VWAP converts the slope to fractional units (≈ %/bar)
+    so that a +0.001 reading means the same intraday trend strength regardless
+    of whether the stock trades at $10 or $500.
+
+    Returns (slope_5, slope_15).
+    Lookahead: none (uses only past VWAP values).
+    """
+    slope_5  = vwap.diff(5)  / vwap.shift(5).replace(0, np.nan)
+    slope_15 = vwap.diff(15) / vwap.shift(15).replace(0, np.nan)
+    return slope_5, slope_15
 
 
 # ─── Main indicator pipeline ──────────────────────────────────────────────────
@@ -188,8 +270,24 @@ def compute_indicators(df: pd.DataFrame, shift: bool = True) -> pd.DataFrame:
 
     out["kc_upper"], out["kc_mid"], out["kc_lower"] = _keltner(h, l, c)
 
-    # ── Volume ─────────────────────────────────────────────────────────────────
-    out["vwap"] = _vwap(h, l, c, v)
+    # ── Volume & VWAP ──────────────────────────────────────────────────────────
+    # Daily-reset VWAP: resets each session, no cross-day contamination
+    out["vwap"] = _vwap(h, l, c, v)            # legacy (kept for compat)
+    vwap_d = _vwap_daily(h, l, c, v)
+    out["vwap_daily"] = vwap_d
+
+    # VWAP deviation: (close − VWAP) / VWAP → %-units, comparable across tickers
+    out["vwap_dev"] = (c - vwap_d) / vwap_d.replace(0, np.nan)
+    out["vwap_above"] = (c > vwap_d).astype(float)
+
+    # VWAP slope: fractional change over 5 and 15 bars (intraday trend strength)
+    out["vwap_slope_5"], out["vwap_slope_15"] = _vwap_slope(vwap_d)
+
+    # ORB: opening-range features — normalized by ATR so signal is cross-ticker
+    out["orb_range_atr"], out["orb_dev"], out["orb_break_up"], out["orb_break_dn"] = (
+        _orb_features(h, l, c, out["atr_14"])
+    )
+
     out["obv"] = _obv(c, v)
     out["obv_pct"] = out["obv"].pct_change(5)
     out["mfi_14"] = _mfi(h, l, c, v)
@@ -242,6 +340,21 @@ def compute_indicators(df: pd.DataFrame, shift: bool = True) -> pd.DataFrame:
     from src.features.regime import compute_regime
     out["regime"] = compute_regime(out).astype(float)
 
+    # ── Regime-Time interaction ───────────────────────────────────────────────
+    # ATR percentile × time_to_close: a volatility spike at 9:30 AM has very
+    # different predictive value than the same spike at 3:55 PM.
+    # Rolling ATR percentile over 200 bars gives [0, 1] regime strength.
+    _atr_pctile = out["atr_pct"].rolling(200, min_periods=20).rank(pct=True)
+    out["regime_time"] = _atr_pctile * out["time_to_close"]
+
+    # ── Composite interaction features ────────────────────────────────────────
+    # Informed breakout intensity: ORB breakout conviction × informed flow
+    out["orb_vpin_interact"] = out["orb_dev"] * out["vpin_50"]
+    # Mean-reversion urgency: VWAP deviation that persists late in day
+    out["vwap_time_interact"] = out["vwap_dev"] * out["time_to_close"]
+    # Volatility confirmation: high ATR with high relative volume = real move
+    out["atr_vol_interact"] = out["atr_pct"] * out["vol_ratio"]
+
     # ── Prevent lookahead ──────────────────────────────────────────────────────
     if shift:
         indicator_cols = [c for c in out.columns if c not in df.columns]
@@ -254,7 +367,18 @@ def compute_indicators(df: pd.DataFrame, shift: bool = True) -> pd.DataFrame:
 def compute_indicators_for_universe(
     bars: dict[str, pd.DataFrame], shift: bool = True
 ) -> dict[str, pd.DataFrame]:
-    """Compute indicators for a dict of {ticker: ohlcv_df}."""
+    """Compute indicators for a dict of {ticker: ohlcv_df}.
+
+    After per-ticker indicators are computed, adds cross-sectional relative
+    strength features that require the full universe:
+        rs_15m : ticker 15m return − universe-mean 15m return
+        rs_1m  : ticker 1m  return − universe-mean 1m  return
+
+    These capture idiosyncratic alpha (e.g. NVDA outrunning the group on
+    earnings day) and are among the strongest short-term IC features in
+    the literature.  The universe-mean is computed from the same already-
+    shifted returns_15b column, so no lookahead is introduced.
+    """
     results: dict[str, pd.DataFrame] = {}
     for ticker, df in bars.items():
         if len(df) < 60:
@@ -264,24 +388,101 @@ def compute_indicators_for_universe(
             results[ticker] = compute_indicators(df, shift=shift)
         except Exception as exc:
             logger.error("indicator_error: %s: %s", ticker, exc)
+
+    if len(results) < 2:
+        return results
+
+    # ── Cross-sectional relative strength ─────────────────────────────────────
+    # Align all tickers on a common timestamp index, take universe average,
+    # then subtract from each ticker's own shifted returns.
+    # Weight of self in universe mean: 1/N — negligible for N≥10.
+    try:
+        ret15 = {t: df["returns_15b"] for t, df in results.items() if "returns_15b" in df.columns}
+        ret1  = {t: df["returns_1b"]  for t, df in results.items() if "returns_1b"  in df.columns}
+        vdev  = {t: df["vwap_dev"]    for t, df in results.items() if "vwap_dev"    in df.columns}
+
+        if ret15:
+            univ15 = pd.concat(ret15, axis=1).mean(axis=1)   # NaN-safe mean per timestamp
+            for ticker, df in results.items():
+                if "returns_15b" in df.columns:
+                    results[ticker]["rs_15m"] = df["returns_15b"] - univ15.reindex(df.index)
+
+        if ret1:
+            univ1  = pd.concat(ret1,  axis=1).mean(axis=1)
+            for ticker, df in results.items():
+                if "returns_1b" in df.columns:
+                    results[ticker]["rs_1m"]  = df["returns_1b"]  - univ1.reindex(df.index)
+
+        # Cross-sectional VWAP deviation: isolates idiosyncratic mean-reversion
+        # from market-wide VWAP drift (e.g. NVDA pulling away while SPY flat)
+        if vdev:
+            univ_vwap = pd.concat(vdev, axis=1).mean(axis=1)
+            for ticker, df in results.items():
+                if "vwap_dev" in df.columns:
+                    results[ticker]["rs_vwap_dev"] = df["vwap_dev"] - univ_vwap.reindex(df.index)
+    except Exception as exc:
+        logger.warning("relative_strength_failed: %s", exc)
+
     return results
 
 
 FEATURE_COLUMNS: list[str] = [
-    "ema_9", "ema_21", "ema_50", "ema_cross_9_21", "ema_cross_21_50",
+    # ── Trend ──────────────────────────────────────────────────────────────────
+    # EMAs excluded: raw price level, not cross-ticker comparable.
+    # Binary ema_cross signals PRUNED (SHAP < 1e-6 in FFSA W10 report).
+    "ema_cross_21_50",                     # kept: SHAP 6.5e-6, barely above threshold
     "macd", "macd_signal", "macd_hist",
     "adx", "dmp", "dmn",
-    "rsi_14", "stoch_k", "stoch_d", "willr_14", "cci_20", "mom_10", "roc_10",
-    "bb_upper", "bb_mid", "bb_lower", "bb_width", "bb_pct",
-    "atr_14", "atr_pct",
-    "kc_upper", "kc_mid", "kc_lower",
-    "vwap", "obv", "obv_pct", "mfi_14", "vol_ratio",
+
+    # ── Momentum ───────────────────────────────────────────────────────────────
+    "rsi_14", "stoch_k", "stoch_d", "willr_14", "cci_20", "roc_10",
+
+    # ── Volatility ─────────────────────────────────────────────────────────────
+    "bb_width", "bb_pct",
+    "atr_pct",
+
+    # ── VWAP features (intraday mean-reversion signal) ─────────────────────────
+    "vwap_dev",                            # (close − daily VWAP) / VWAP → %-units
+    "vwap_slope_5",                        # 5-bar VWAP rate-of-change (fractional)
+    "vwap_slope_15",                       # 15-bar VWAP rate-of-change (fractional)
+    # PRUNED: vwap_above (SHAP 1.6e-6, binary — near zero signal)
+
+    # ── Opening Range Breakout (daily volatility regime) ───────────────────────
+    "orb_range_atr",                       # (ORB high − low) / ATR14 — regime width
+    "orb_dev",                             # position within ORB range [0, 1]
+    # PRUNED: orb_break_up (1.4e-6), orb_break_dn (1.3e-6) — binary, near-zero SHAP
+
+    # ── Volume ─────────────────────────────────────────────────────────────────
+    "obv_pct",
+    "mfi_14", "vol_ratio",
+
+    # ── Price action ───────────────────────────────────────────────────────────
     "returns_1b", "returns_5b", "returns_15b",
-    "high_low_range", "close_vs_high", "gap_pct",
+    "high_low_range", "gap_pct",
+    # PRUNED: close_vs_high (SHAP 4.8e-6)
+
+    # ── Relative strength (cross-sectional alpha isolation) ────────────────────
+    "rs_15m",                              # ticker 15m ret − universe mean 15m ret
+    "rs_1m",                               # ticker 1m  ret − universe mean 1m  ret
+    "rs_vwap_dev",                         # ticker VWAP dev − universe mean VWAP dev
+
+    # ── Microstructure ─────────────────────────────────────────────────────────
     "vpin_50", "vpin_zscore",
-    "min_since_open", "day_of_week",
-    "is_open_window", "is_close_window", "is_lunch", "time_to_close",
+
+    # ── Intraday seasonality ───────────────────────────────────────────────────
+    "min_since_open", "day_of_week", "time_to_close",
     "vol_seasonal_ratio",
+    # PRUNED: is_open_window (0.0), is_close_window (1.7e-6), is_lunch (0.0)
+
+    # ── Options flow (non-zero after ~90 days of collection) ───────────────────
     "gex_net", "gex_zscore", "gex_call_pct",
+
+    # ── Market regime ──────────────────────────────────────────────────────────
     "regime",
+    "regime_time",                         # ATR_percentile × time_to_close interaction
+
+    # ── Composite interaction features ────────────────────────────────────────
+    "orb_vpin_interact",                   # orb_dev × vpin_50 — informed breakout intensity
+    "vwap_time_interact",                  # vwap_dev × time_to_close — mean-reversion urgency
+    "atr_vol_interact",                    # atr_pct × vol_ratio — volatility confirmation
 ]

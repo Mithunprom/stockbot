@@ -1,7 +1,8 @@
 """Custom Gymnasium trading environment for RL training.
 
-State space (27-dim):
+State space (29-dim):
   ensemble_signal, transformer_conf, tcn_conf, sentiment_index,
+  lgbm_pred_return, lgbm_dir_prob,
   current_position, unrealized_pnl, time_in_trade, portfolio_heat,
   vix_level, regime_label, recent_drawdown + top-10 FFSA features (padded)
 
@@ -56,7 +57,7 @@ _ACTION_DELTAS: dict[int, float] = {
     8: -0.15,
 }
 
-STATE_DIM = 27
+STATE_DIM = 29
 N_ACTIONS = len(ACTION_NAMES)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -109,11 +110,15 @@ class PDTTracker:
 class TradingEnv(gym.Env):
     """Intraday trading environment for one ticker.
 
+    Episodes are split by trading day (~390 bars each).
+    On each reset(), the env advances to the next day (or random day).
+
     Args:
         bars: List of bar dicts with keys:
               time, close, features (FFSA top-10 values), ensemble_signal,
               transformer_conf, tcn_conf, sentiment_index, vix, regime
         cfg: Environment configuration.
+        shuffle_days: If True, sample days randomly. If False, cycle sequentially.
     """
 
     metadata = {"render_modes": []}
@@ -122,10 +127,18 @@ class TradingEnv(gym.Env):
         self,
         bars: list[dict[str, Any]],
         cfg: EnvConfig | None = None,
+        shuffle_days: bool = True,
     ) -> None:
         super().__init__()
-        self.bars = bars
         self.cfg = cfg or EnvConfig()
+        self._shuffle_days = shuffle_days
+
+        # Split bars into daily episodes
+        self._days = self._split_days(bars)
+        if not self._days:
+            self._days = [bars]  # fallback: use all bars as one episode
+        self._day_idx = 0
+        self.bars = self._days[0]
 
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(STATE_DIM,), dtype=np.float32
@@ -133,6 +146,29 @@ class TradingEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(N_ACTIONS)
 
         self._reset_state()
+
+    @staticmethod
+    def _split_days(bars: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        """Split bars into per-day chunks (min 50 bars/day to filter partial days)."""
+        days: list[list[dict[str, Any]]] = []
+        current_day: list[dict[str, Any]] = []
+        current_date: date | None = None
+        for bar in bars:
+            try:
+                bar_date = datetime.fromisoformat(str(bar["time"])).date()
+            except (ValueError, TypeError):
+                continue
+            if current_date is None:
+                current_date = bar_date
+            if bar_date != current_date:
+                if len(current_day) >= 50:
+                    days.append(current_day)
+                current_day = []
+                current_date = bar_date
+            current_day.append(bar)
+        if len(current_day) >= 50:
+            days.append(current_day)
+        return days
 
     def _reset_state(self) -> None:
         self._step_idx = 0
@@ -167,6 +203,8 @@ class TradingEnv(gym.Env):
             float(bar.get("transformer_conf", 0.0)),
             float(bar.get("tcn_conf", 0.0)),
             float(bar.get("sentiment_index", 0.0)),
+            float(bar.get("lgbm_pred_return", 0.0)) * 100.0,  # scale up for RL
+            float(bar.get("lgbm_dir_prob", 0.5)),
             float(self._position_pct),
             float(unrealized_pnl),
             float(self._bars_held) / 100.0,     # normalized
@@ -238,6 +276,7 @@ class TradingEnv(gym.Env):
     # ── Reward ───────────────────────────────────────────────────────────────
 
     def _compute_step_reward(self, step_pnl: float, trade_cost: float) -> float:
+        bar = self.bars[self._step_idx]
         rolling_vol = float(np.std(self._returns_history[-20:]) + 1e-9)
         drawdown = (self._peak_portfolio - self._portfolio) / self._peak_portfolio
         return compute_reward(
@@ -246,6 +285,8 @@ class TradingEnv(gym.Env):
             current_drawdown=drawdown,
             trade_cost=trade_cost,
             bars_held=self._bars_held,
+            position_pct=self._position_pct,
+            lgbm_pred_return=float(bar.get("lgbm_pred_return", 0.0)),
             cfg=self.cfg.reward_cfg,
         )
 
@@ -318,6 +359,12 @@ class TradingEnv(gym.Env):
         self, *, seed: int | None = None, options: dict | None = None
     ) -> tuple[np.ndarray, dict]:
         super().reset(seed=seed)
+        # Pick next day's bars
+        if self._shuffle_days:
+            self._day_idx = self.np_random.integers(0, len(self._days))
+        else:
+            self._day_idx = (self._day_idx + 1) % len(self._days)
+        self.bars = self._days[self._day_idx]
         self._reset_state()
         return self._build_obs(), {}
 

@@ -43,7 +43,19 @@ ACTION_NAMES = [
     "sell_25pct", "sell_50pct", "sell_all",
     "short_small", "short_large",
 ]
-STATE_DIM = 27
+STATE_DIM = 29
+
+# Position-sizing env constants (from position_sizing_env.py)
+SIZING_ACTION_NAMES = ["skip", "tiny", "small", "medium", "large"]
+SIZING_ACTION_PCTS = {0: 0.0, 1: 0.02, 2: 0.05, 3: 0.10, 4: 0.20}
+SIZING_STATE_DIM = 18
+SIZING_COST_THRESHOLD = 0.0015
+SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)
+SIZING_REVERSAL_BARS = 2
+SIZING_STOP_LOSS = 0.02
+SIZING_TRAILING_STOP = 0.025
+SIZING_TAKE_PROFIT = 0.035
+SIZING_MAX_HOLD_BARS = 45
 
 logger = structlog.get_logger(__name__)
 
@@ -77,6 +89,31 @@ def _load_rl_agent() -> Any | None:
         return None
     except Exception as exc:
         logger.warning("rl_agent_load_failed", path=str(ckpt_path), error=str(exc))
+        return None
+
+
+def _load_sizing_agent() -> Any | None:
+    """Load the position-sizing PPO model (best_sizing_ppo.zip).
+
+    Returns the loaded model or None if not available.
+    """
+    from pathlib import Path
+
+    ckpt_path = Path("models/rl_agent/best_sizing_ppo.zip")
+    if not ckpt_path.exists():
+        logger.info("sizing_agent_not_found")
+        return None
+
+    try:
+        from stable_baselines3 import PPO
+        model = PPO.load(str(ckpt_path), device="cpu")
+        logger.info("sizing_agent_loaded", path=str(ckpt_path))
+        return model
+    except ImportError:
+        logger.warning("sizing_agent_sb3_not_installed")
+        return None
+    except Exception as exc:
+        logger.warning("sizing_agent_load_failed", error=str(exc))
         return None
 
 
@@ -129,6 +166,21 @@ class SignalLoop:
 
         # RL agent (optional — falls back to threshold logic if unavailable)
         self._rl_agent: Any | None = _load_rl_agent()
+
+        # Position-sizing RL agent (preferred over full RL when available)
+        self._sizing_agent: Any | None = _load_sizing_agent()
+        self._sizing_mode = self._sizing_agent is not None
+
+        # Sizing mode state tracking (per-ticker)
+        self._entry_directions: dict[str, int] = {}      # +1 long, -1 short
+        self._entry_prices: dict[str, float] = {}
+        self._peak_prices: dict[str, float] = {}
+        self._bars_held: dict[str, int] = {}
+        self._reversal_counts: dict[str, int] = {}
+        self._sizing_returns_history: list[float] = [0.0] * 20
+        self._sizing_recent_outcomes: list[float] = []
+        self._sizing_n_trades_today: int = 0
+        self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -213,15 +265,49 @@ class SignalLoop:
         # 4. Act on signals — RL agent uses obs from features; fallback uses threshold
         # universe_features only exists in the ML path; rule-based path has no tensors
         _uf: dict = locals().get("universe_features", {})
+
+        # Build a signal lookup for sizing mode exit checks
+        sig_by_ticker: dict[str, EnsembleSignal] = {s.ticker: s for s in signals}
+
+        # Sizing mode: check exits for ALL open positions (even without signal threshold)
+        if self._sizing_mode:
+            for ticker in list(self._pm._positions.keys()):
+                if not market_open and ticker not in self.CRYPTO_TICKERS:
+                    continue
+                price = prices.get(ticker, 0.0)
+                if price <= 0:
+                    continue
+                sig = sig_by_ticker.get(ticker)
+                if sig is None:
+                    # Create a minimal signal for exit checking
+                    sig = EnsembleSignal(
+                        ticker=ticker,
+                        timestamp=datetime.now(timezone.utc),
+                    )
+                features_arr = _uf.get(ticker, {}).get("1m") if _uf else None
+                feat_np = (
+                    features_arr.numpy() if features_arr is not None
+                    else None
+                )
+                await self._act_on_signal(sig, price, feat_np, regime=regime_map.get(ticker, 1))
+
         for sig in signals:
             # Gate equity tickers on market hours; crypto runs 24/7
             if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
+                continue
+            # Skip tickers already handled by sizing exit above
+            if self._sizing_mode and sig.ticker in self._pm._positions:
                 continue
             regime = regime_map.get(sig.ticker, 1)  # default: choppy
             # Regime-aware threshold: choppy/high-vol require stronger signal
             from src.features.regime import REGIME_GATE
             threshold, _size_scale = REGIME_GATE.get(regime, (self.SIGNAL_ENTRY_THRESHOLD, 1.0))
-            if abs(sig.ensemble_signal) >= threshold:
+            # In sizing mode, use LightGBM entry gate instead of ensemble threshold
+            should_act = (
+                self._sizing_mode
+                or abs(sig.ensemble_signal) >= threshold
+            )
+            if should_act:
                 price = prices.get(sig.ticker, 0.0)
                 if price > 0:
                     features_arr = _uf.get(sig.ticker, {}).get("1m") if _uf else None
@@ -311,6 +397,8 @@ class SignalLoop:
             float(sig.transformer_confidence),
             float(sig.tcn_confidence),
             float(sig.sentiment_index),
+            float(sig.lgbm_pred_return) * 100.0,  # scale up for RL
+            float(sig.lgbm_dir_prob),
             float(position_pct),
             float(unrealized_pnl),
             float(time_in_trade),
@@ -332,6 +420,145 @@ class SignalLoop:
         # Replace NaN/Inf with 0
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
         return obs
+
+    # ── Sizing-mode observation builder ──────────────────────────────────────
+
+    def _build_sizing_obs(
+        self,
+        sig: EnsembleSignal,
+        ticker: str,
+        features_arr: np.ndarray | None,
+    ) -> np.ndarray:
+        """Build 18-dim observation for position-sizing RL agent.
+
+        Matches PositionSizingEnv._build_obs() state space.
+        """
+        pred_ret = float(sig.lgbm_pred_return)
+        dir_prob = float(sig.lgbm_dir_prob)
+        drawdown = max(0.0, 1.0 - self._pm.portfolio_value / max(self._daily_start_value, 1.0))
+        rolling_vol = float(np.std(self._sizing_returns_history[-20:]) + 1e-9)
+
+        # Position state for this ticker
+        pos = self._pm._positions.get(ticker)
+        position_pct = 0.0
+        unrealized_pnl = 0.0
+        bars_held = 0
+
+        if pos is not None:
+            position_pct = (pos.qty * pos.entry_price) / max(self._pm.portfolio_value, 1.0)
+            if pos.side == "short":
+                position_pct = -position_pct
+            unrealized_pnl = getattr(pos, "unrealized_pnl_pct", 0.0)
+            bars_held = self._bars_held.get(ticker, 0)
+
+        recent_wr = 0.5
+        if self._sizing_recent_outcomes:
+            recent_wr = sum(1 for x in self._sizing_recent_outcomes if x > 0) / len(self._sizing_recent_outcomes)
+
+        state = [
+            pred_ret * 100.0,                                       # [0] scaled pred return
+            dir_prob,                                                # [1] direction probability
+            abs(pred_ret) / max(SIZING_COST_THRESHOLD, 1e-6),       # [2] signal-to-cost ratio
+            float(position_pct),                                     # [3] current position
+            float(unrealized_pnl),                                   # [4] unrealized PnL
+            float(bars_held) / 60.0,                                 # [5] normalized bars held
+            float(abs(position_pct)),                                # [6] portfolio heat
+            float(drawdown),                                         # [7] drawdown
+            float(rolling_vol) * 100.0,                              # [8] scaled rolling vol
+            20.0 / 100.0,                                            # [9] VIX placeholder
+            0.0,                                                     # [10] regime
+            float(recent_wr),                                        # [11] recent win rate
+            float(self._sizing_n_trades_today) / 10.0,              # [12] trades today
+        ]
+
+        # Top-5 FFSA features from most recent row
+        if features_arr is not None and len(features_arr) > 0:
+            last_row = features_arr[-1][:5].tolist()
+        else:
+            last_row = []
+        ffsa_padded = last_row + [0.0] * (5 - len(last_row))
+        state.extend(ffsa_padded[:5])
+
+        obs = np.array(state[:SIZING_STATE_DIM], dtype=np.float32)
+        return np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
+
+    # ── Sizing-mode entry/exit gating ────────────────────────────────────────
+
+    def _sizing_entry_gate_open(self, sig: EnsembleSignal) -> bool:
+        """Check if LightGBM signal warrants entry (sizing mode)."""
+        pred_ret = float(sig.lgbm_pred_return)
+        dir_prob = float(sig.lgbm_dir_prob)
+        lo, hi = SIZING_DIR_PROB_DEAD_ZONE
+        return abs(pred_ret) > SIZING_COST_THRESHOLD and not (lo < dir_prob < hi)
+
+    def _sizing_signal_direction(self, sig: EnsembleSignal) -> int:
+        """Get entry direction from LightGBM: +1 long, -1 short."""
+        pred_ret = float(sig.lgbm_pred_return)
+        if pred_ret > 0:
+            return 1
+        elif pred_ret < 0:
+            return -1
+        return 0
+
+    def _check_sizing_exit(
+        self, ticker: str, price: float, sig: EnsembleSignal
+    ) -> str | None:
+        """Check exit conditions for a position in sizing mode.
+
+        Returns exit reason string or None to continue holding.
+        """
+        entry_price = self._entry_prices.get(ticker)
+        entry_dir = self._entry_directions.get(ticker, 0)
+        if entry_price is None or entry_dir == 0:
+            return None
+
+        # Unrealized PnL
+        unrealized = (price - entry_price) / entry_price
+        if entry_dir < 0:
+            unrealized = -unrealized
+
+        # Stop loss
+        if unrealized < -SIZING_STOP_LOSS:
+            return "stop_loss"
+
+        # Take profit
+        if unrealized > SIZING_TAKE_PROFIT:
+            return "take_profit"
+
+        # Trailing stop
+        peak = self._peak_prices.get(ticker, price)
+        if entry_dir > 0:
+            drop = (peak - price) / peak if peak > 0 else 0.0
+            if drop > SIZING_TRAILING_STOP:
+                return "trailing_stop"
+        else:
+            rise = (price - peak) / peak if peak > 0 else 0.0
+            if rise > SIZING_TRAILING_STOP:
+                return "trailing_stop"
+
+        # Max hold
+        bars = self._bars_held.get(ticker, 0)
+        if bars >= SIZING_MAX_HOLD_BARS:
+            return "max_hold"
+
+        # Signal reversal (2 consecutive bars of opposite direction)
+        current_dir = self._sizing_signal_direction(sig)
+        if current_dir != 0 and current_dir != entry_dir:
+            self._reversal_counts[ticker] = self._reversal_counts.get(ticker, 0) + 1
+        else:
+            self._reversal_counts[ticker] = 0
+        if self._reversal_counts.get(ticker, 0) >= SIZING_REVERSAL_BARS:
+            return "signal_reversal"
+
+        return None
+
+    def _clear_sizing_state(self, ticker: str) -> None:
+        """Clear per-ticker sizing state after position close."""
+        self._entry_directions.pop(ticker, None)
+        self._entry_prices.pop(ticker, None)
+        self._peak_prices.pop(ticker, None)
+        self._bars_held.pop(ticker, None)
+        self._reversal_counts.pop(ticker, None)
 
     def _rl_action_to_side_and_size(
         self, action: int, ticker: str, price: float
@@ -418,8 +645,85 @@ class SignalLoop:
                 size_scale=size_scale,
             )
 
-        # ── RL-driven decision ────────────────────────────────────────────────
-        if self._rl_agent is not None:
+        # ── Position-sizing mode (LightGBM gates entry/exit, RL sizes) ────────
+        if self._sizing_mode:
+            if has_position:
+                # Check exit conditions
+                exit_reason = self._check_sizing_exit(ticker, price, sig)
+                if exit_reason:
+                    side = "sell"
+                    pos = self._pm._positions[ticker]
+                    qty = pos.qty
+                    notional = qty * price
+                    self._pending_exit_reasons[ticker] = exit_reason
+                    logger.info(
+                        "sizing_exit",
+                        ticker=ticker,
+                        reason=exit_reason,
+                        bars_held=self._bars_held.get(ticker, 0),
+                    )
+                else:
+                    # Still holding — update tracking state
+                    self._bars_held[ticker] = self._bars_held.get(ticker, 0) + 1
+                    if ticker in self._peak_prices:
+                        entry_dir = self._entry_directions.get(ticker, 1)
+                        if entry_dir > 0:
+                            self._peak_prices[ticker] = max(self._peak_prices[ticker], price)
+                        else:
+                            self._peak_prices[ticker] = min(self._peak_prices[ticker], price)
+                    self._sizing_returns_history.append(0.0)
+                    return
+            else:
+                # Check entry gate
+                if not self._sizing_entry_gate_open(sig):
+                    return
+
+                # Ask RL for position size
+                obs = self._build_sizing_obs(sig, ticker, features_arr)
+                action, _ = self._sizing_agent.predict(obs, deterministic=True)
+                action = int(action)
+                size_pct = SIZING_ACTION_PCTS.get(action, 0.0)
+                action_name = SIZING_ACTION_NAMES[action]
+
+                if size_pct == 0.0:
+                    logger.debug("sizing_skip", ticker=ticker, action=action_name)
+                    return
+
+                # Apply regime scaling
+                size_pct *= size_scale
+
+                direction = self._sizing_signal_direction(sig)
+                if direction == 0:
+                    return
+                # Phase 5: no shorts
+                if direction < 0:
+                    return
+
+                side = "buy"
+                notional = self._pm.compute_position_size(
+                    ticker, base_size_pct=size_pct
+                )
+                qty = round(notional / max(price, 0.01), 2)
+
+                # Track entry state
+                self._entry_directions[ticker] = direction
+                self._entry_prices[ticker] = price
+                self._peak_prices[ticker] = price
+                self._bars_held[ticker] = 0
+                self._reversal_counts[ticker] = 0
+                self._sizing_n_trades_today += 1
+
+                logger.info(
+                    "sizing_entry",
+                    ticker=ticker,
+                    action=action_name,
+                    size_pct=round(size_pct, 3),
+                    direction="long" if direction > 0 else "short",
+                    lgbm_pred=round(sig.lgbm_pred_return, 5),
+                )
+
+        # ── RL-driven decision (full 9-action mode) ──────────────────────────
+        elif self._rl_agent is not None:
             obs = self._build_rl_obs(sig, ticker, features_arr, regime=regime)
             action, _ = self._rl_agent.predict(obs, deterministic=True)
             action = int(action)
@@ -517,13 +821,22 @@ class SignalLoop:
                     self._consecutive_losses + 1 if pnl < 0 else 0
                 )
                 self._pm.record_return(pnl / max(notional, 1.0))
+                # Determine exit reason for sizing mode
+                exit_reason = "signal_reversal"
+                if self._sizing_mode:
+                    exit_reason = self._pending_exit_reasons.pop(ticker, "signal_reversal")
+                    # Track outcome for recent win rate
+                    self._sizing_recent_outcomes.append(pnl)
+                    if len(self._sizing_recent_outcomes) > 10:
+                        self._sizing_recent_outcomes = self._sizing_recent_outcomes[-10:]
+                    self._clear_sizing_state(ticker)
                 await self._write_trade_exit(
                     ticker=ticker,
                     fill_price=fill_price,
                     qty=result.filled_qty,
                     pnl=pnl,
                     exit_time=filled_at,
-                    exit_reason="signal_reversal",
+                    exit_reason=exit_reason,
                 )
 
             logger.info(
@@ -799,6 +1112,7 @@ class SignalLoop:
         now = datetime.now(ZoneInfo("America/New_York"))
         if now.hour == 9 and now.minute == 30:
             self._daily_start_value = self._pm.portfolio_value
+            self._sizing_n_trades_today = 0
             logger.info(
                 "daily_start_value_reset",
                 value=self._daily_start_value,

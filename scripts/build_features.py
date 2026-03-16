@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.db import FeatureMatrix, OHLCV1m, get_session_factory, init_db
 from src.features.gex import attach_gex_to_features
-from src.features.indicators import compute_indicators
+from src.features.indicators import compute_indicators, compute_indicators_for_universe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -154,11 +154,40 @@ async def process_ticker(ticker: str, since: datetime | None) -> None:
 async def run(tickers: list[str], since: datetime | None) -> None:
     await init_db()
 
+    # ── Pass 1: Load OHLCV + compute per-ticker indicators ────────────────────
+    logger.info("Pass 1: Computing per-ticker indicators ...")
+    bars: dict[str, pd.DataFrame] = {}
     for ticker in tickers:
-        await process_ticker(ticker, since)
+        df = await load_ohlcv(ticker, since)
+        if df.empty:
+            logger.warning("%s: no OHLCV data — skipping", ticker)
+            continue
+        logger.info("  %s: %d bars (%s → %s)", ticker, len(df), df.index[0].date(), df.index[-1].date())
+        bars[ticker] = df
+
+    if not bars:
+        logger.error("No data loaded for any ticker.")
+        return
+
+    # ── Pass 2: Compute indicators + cross-sectional features (rs_15m, rs_1m, rs_vwap_dev) ─
+    logger.info("Pass 2: Computing cross-sectional relative strength features ...")
+    results = compute_indicators_for_universe(bars, shift=True)
+
+    # ── Pass 3: Attach GEX + write to DB ──────────────────────────────────────
+    logger.info("Pass 3: Attaching GEX + writing to DB ...")
+    session_factory = get_session_factory()
+    for ticker, feat_df in results.items():
+        async with session_factory() as session:
+            feat_df = await attach_gex_to_features(ticker, feat_df, session)
+
+        # Keep only indicator columns (drop raw OHLCV to avoid duplication)
+        indicator_cols = [c for c in feat_df.columns if c not in {"open", "high", "low", "close", "volume", "vwap"}]
+        feat_df = feat_df[indicator_cols]
+
+        written = await write_features(ticker, feat_df)
+        logger.info("  %s: %d feature rows written", ticker, written)
 
     # Summary
-    session_factory = get_session_factory()
     async with session_factory() as session:
         result = await session.execute(
             text("SELECT COUNT(*) FROM feature_matrix")

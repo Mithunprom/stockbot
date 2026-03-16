@@ -51,8 +51,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# --- RL agent checkpoint (Sharpe=-9.72, not ready for live) ---
-models/rl_agent/
+# --- RL agent periodic/old checkpoints (not needed in image) ---
+models/rl_agent/periodic/
+models/rl_agent/best_ppo_step_*
 
 # --- Reports (auto-generated at runtime, no need to ship) ---
 reports/latency/
@@ -75,6 +76,8 @@ config/staging/
 !models/tcn/
 !models/tcn/*.pt
 !models/sentiment/
+!models/rl_agent/
+!models/rl_agent/best_sizing_ppo.zip
 !config/
 !config/ffsa_features.json
 !config/paper.yaml

@@ -1,12 +1,15 @@
-"""Ensemble layer: combines Transformer, TCN, and FinBERT signals.
+"""Ensemble layer: combines LightGBM, Transformer, TCN, and FinBERT signals.
 
 ensemble_signal = (
-    0.45 * transformer_confidence * transformer_direction +
-    0.35 * tcn_confidence * tcn_direction +
+    0.60 * lgbm_confidence * lgbm_direction +
+    0.10 * transformer_confidence * transformer_direction +
+    0.10 * tcn_confidence * tcn_direction +
     0.20 * sentiment_index
 )
 
-Initial weights as above. Profit Sub-Agent re-optimizes quarterly.
+LightGBM is the primary signal (IC=0.21 vs IC≈0 for neural nets).
+Transformer/TCN kept at low weight as secondary signals.
+Profit Sub-Agent re-optimizes weights quarterly.
 Direction encoding: long=+1, neutral=0, short=-1.
 
 All signal computation is logged with model confidence for explainability.
@@ -40,6 +43,12 @@ try:
 except (ImportError, Exception):
     _MODELS_AVAILABLE = False
 
+try:
+    from src.models.lgbm import LGBMSignalModel, load_best_checkpoint as load_lgbm
+    _LGBM_AVAILABLE = True
+except (ImportError, Exception):
+    _LGBM_AVAILABLE = False
+
 logger = structlog.get_logger(__name__)
 
 
@@ -53,18 +62,23 @@ class EnsembleSignal:
     timestamp: datetime
 
     # Individual model outputs
-    transformer_direction: float    # +1 / 0 / -1
-    transformer_confidence: float   # [0, 1]
-    tcn_direction: float
-    tcn_confidence: float
-    sentiment_index: float          # rolling weighted SI
+    lgbm_direction: float = 0.0     # +1 / 0 / -1  (primary signal)
+    lgbm_confidence: float = 0.0    # [0, 1]
+    lgbm_pred_return: float = 0.0   # raw predicted 15m return
+    lgbm_dir_prob: float = 0.5      # classifier P(up) [0, 1]
+    transformer_direction: float = 0.0    # +1 / 0 / -1
+    transformer_confidence: float = 0.0   # [0, 1]
+    tcn_direction: float = 0.0
+    tcn_confidence: float = 0.0
+    sentiment_index: float = 0.0          # rolling weighted SI
 
     # Ensemble
-    ensemble_signal: float          # weighted combination
+    ensemble_signal: float = 0.0          # weighted combination
 
     # Ensemble weights used (may be updated by Profit Agent)
-    w_transformer: float = 0.45
-    w_tcn: float = 0.35
+    w_lgbm: float = 0.60
+    w_transformer: float = 0.10
+    w_tcn: float = 0.10
     w_sentiment: float = 0.20
 
     # Derived
@@ -85,6 +99,10 @@ class EnsembleSignal:
         return {
             "ticker": self.ticker,
             "timestamp": self.timestamp.isoformat(),
+            "lgbm_direction": self.lgbm_direction,
+            "lgbm_confidence": self.lgbm_confidence,
+            "lgbm_pred_return": round(self.lgbm_pred_return, 6),
+            "lgbm_dir_prob": round(self.lgbm_dir_prob, 4),
             "transformer_direction": self.transformer_direction,
             "transformer_confidence": self.transformer_confidence,
             "tcn_direction": self.tcn_direction,
@@ -93,6 +111,7 @@ class EnsembleSignal:
             "ensemble_signal": round(self.ensemble_signal, 4),
             "strength": self.strength,
             "weights": {
+                "lgbm": self.w_lgbm,
                 "transformer": self.w_transformer,
                 "tcn": self.w_tcn,
                 "sentiment": self.w_sentiment,
@@ -105,6 +124,7 @@ class EnsembleSignal:
         return (
             f"{self.ticker}: {self.strength.upper()} {direction} signal "
             f"(ensemble={self.ensemble_signal:+.3f}) — "
+            f"LGBM [{self.lgbm_confidence:.0%} conf, dir={self.lgbm_direction:+.0f}], "
             f"Transformer [{self.transformer_confidence:.0%} conf, dir={self.transformer_direction:+.0f}], "
             f"TCN [{self.tcn_confidence:.0%} conf, dir={self.tcn_direction:+.0f}], "
             f"Sentiment SI={self.sentiment_index:+.3f}"
@@ -115,12 +135,13 @@ class EnsembleSignal:
 
 @dataclass
 class EnsembleWeights:
-    transformer: float = 0.45
-    tcn: float = 0.35
+    lgbm: float = 0.60
+    transformer: float = 0.10
+    tcn: float = 0.10
     sentiment: float = 0.20
 
     def validate(self) -> None:
-        total = self.transformer + self.tcn + self.sentiment
+        total = self.lgbm + self.transformer + self.tcn + self.sentiment
         if abs(total - 1.0) > 1e-3:
             raise ValueError(f"Ensemble weights must sum to 1.0, got {total:.3f}")
 
@@ -133,8 +154,9 @@ class EnsembleWeights:
             data = json.load(f)
         weights = data.get("ensemble_weights", {})
         obj = cls(
-            transformer=weights.get("transformer", 0.45),
-            tcn=weights.get("tcn", 0.35),
+            lgbm=weights.get("lgbm", 0.60),
+            transformer=weights.get("transformer", 0.10),
+            tcn=weights.get("tcn", 0.10),
             sentiment=weights.get("sentiment", 0.20),
         )
         obj.validate()
@@ -156,20 +178,36 @@ class EnsembleEngine:
     ) -> None:
         self.weights = weights or EnsembleWeights()
         self._device = device or ("cuda" if (_TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu")
+        self._lgbm: Any | None = None
         self._transformer: Any | None = None
         self._tcn: Any | None = None
         self._sentiment: Any | None = SentimentScorer() if _MODELS_AVAILABLE else None
 
     async def load(self) -> None:
-        """Load all models concurrently. No-op if torch is not installed."""
-        if not _MODELS_AVAILABLE:
-            logger.warning("ml_models_unavailable: torch not installed — running in signal-free mode")
-            return
+        """Load all models concurrently."""
         loop = asyncio.get_event_loop()
-        t_load = loop.run_in_executor(None, self._load_transformer)
-        tcn_load = loop.run_in_executor(None, self._load_tcn)
-        sentiment_load = self._sentiment.load() if self._sentiment else asyncio.sleep(0)
-        await asyncio.gather(t_load, tcn_load, sentiment_load)
+
+        # LightGBM loads independently of torch
+        lgbm_load = loop.run_in_executor(None, self._load_lgbm)
+
+        if _MODELS_AVAILABLE:
+            t_load = loop.run_in_executor(None, self._load_transformer)
+            tcn_load = loop.run_in_executor(None, self._load_tcn)
+            sentiment_load = self._sentiment.load() if self._sentiment else asyncio.sleep(0)
+            await asyncio.gather(lgbm_load, t_load, tcn_load, sentiment_load)
+        else:
+            logger.warning("ml_models_unavailable: torch not installed — LightGBM only mode")
+            await lgbm_load
+
+    def _load_lgbm(self) -> None:
+        if not _LGBM_AVAILABLE:
+            logger.warning("lgbm_module_unavailable")
+            return
+        self._lgbm = load_lgbm()
+        if self._lgbm:
+            logger.info("lgbm_loaded", ic=self._lgbm.val_ic, dir_acc=self._lgbm.val_dir_acc)
+        else:
+            logger.warning("lgbm_checkpoint_not_found")
 
     def _load_transformer(self) -> None:
         if not _MODELS_AVAILABLE:
@@ -205,9 +243,9 @@ class EnsembleEngine:
     async def compute_signal(
         self,
         ticker: str,
-        features_1m: torch.Tensor,        # (seq_len, n_features)
-        features_5m: torch.Tensor,        # (seq_len, n_features)
-        options_flow: torch.Tensor | None = None,  # (seq_len, n_options)
+        features_1m: "torch.Tensor",     # (seq_len, n_features)
+        features_5m: "torch.Tensor",     # (seq_len, n_features)
+        options_flow: "torch.Tensor | None" = None,  # (seq_len, n_options)
     ) -> EnsembleSignal:
         """Compute the full ensemble signal for one ticker.
 
@@ -220,7 +258,23 @@ class EnsembleEngine:
         Returns:
             EnsembleSignal with full attribution.
         """
+        import numpy as np
+
         loop = asyncio.get_event_loop()
+
+        # LightGBM inference (primary signal — uses last bar, not sequence)
+        lgbm_dir, lgbm_conf, lgbm_pred_ret, lgbm_dir_prob = 0.0, 0.0, 0.0, 0.5
+        if self._lgbm is not None:
+            if _TORCH_AVAILABLE and isinstance(features_1m, torch.Tensor):
+                last_bar = features_1m[-1].cpu().numpy()
+            else:
+                last_bar = np.asarray(features_1m[-1])
+            lgbm_dir, lgbm_conf, lgbm_pred_ret, lgbm_dir_prob = self._lgbm.predict(last_bar)
+
+            # Confidence gate: zero out signal if dir_prob < 55% conviction
+            if lgbm_dir_prob < 0.55 and lgbm_dir_prob > 0.45:
+                lgbm_dir = 0.0
+                lgbm_conf = 0.0
 
         # Transformer inference
         if self._transformer is not None:
@@ -234,13 +288,13 @@ class EnsembleEngine:
         if self._tcn is not None:
             tcn_dir, tcn_conf = await loop.run_in_executor(
                 None, self._tcn.predict,
-                features_1m.T.unsqueeze(0).squeeze(0),   # (n_features, seq_len)
-                features_5m.T.unsqueeze(0).squeeze(0),
+                features_1m.T,   # (n_features, seq_len) — TCN expects channel-first
+                features_5m.T,
             )
         else:
             tcn_dir, tcn_conf = 0.0, 0.0
 
-        # Sentiment rolling index (None when transformers not installed)
+        # Sentiment rolling index
         si = 0.0
         if self._sentiment is not None:
             si = await self._sentiment.rolling_sentiment_index(ticker, lookback_hours=24)
@@ -248,7 +302,8 @@ class EnsembleEngine:
         # Weighted ensemble
         w = self.weights
         ensemble = (
-            w.transformer * t_conf * t_dir
+            w.lgbm * lgbm_conf * lgbm_dir
+            + w.transformer * t_conf * t_dir
             + w.tcn * tcn_conf * tcn_dir
             + w.sentiment * si
         )
@@ -258,12 +313,17 @@ class EnsembleEngine:
         signal = EnsembleSignal(
             ticker=ticker,
             timestamp=datetime.now(timezone.utc),
+            lgbm_direction=lgbm_dir,
+            lgbm_confidence=lgbm_conf,
+            lgbm_pred_return=lgbm_pred_ret,
+            lgbm_dir_prob=lgbm_dir_prob,
             transformer_direction=t_dir,
             transformer_confidence=t_conf,
             tcn_direction=tcn_dir,
             tcn_confidence=tcn_conf,
             sentiment_index=si,
             ensemble_signal=ensemble,
+            w_lgbm=w.lgbm,
             w_transformer=w.transformer,
             w_tcn=w.tcn,
             w_sentiment=w.sentiment,

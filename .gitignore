@@ -33,6 +33,8 @@ models/transformer/*.pt
 models/tcn/*.pt
 models/rl_agent/*.zip
 models/rl_agent/periodic/*.zip
+# Include the production sizing model
+!models/rl_agent/best_sizing_ppo.zip
 models/sentiment/
 
 # Data (raw tick data can be gigabytes)

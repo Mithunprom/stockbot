@@ -33,8 +33,19 @@ logger = logging.getLogger("train_rl")
 
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
-async def load_bars(ticker: str, feature_cols: list[str]) -> list[dict[str, Any]]:
-    """Load feature matrix + close prices and format into bar dicts for TradingEnv."""
+async def load_bars(
+    ticker: str,
+    feature_cols: list[str],
+    lgbm_model: Any = None,
+) -> list[dict[str, Any]]:
+    """Load feature matrix + close prices and format into bar dicts for TradingEnv.
+
+    Args:
+        ticker: Stock ticker symbol.
+        feature_cols: FFSA-selected feature columns.
+        lgbm_model: Optional LGBMSignalModel — if provided, populates
+                     lgbm_pred_return and lgbm_dir_prob per bar.
+    """
     from sqlalchemy import select
 
     from src.data.db import FeatureMatrix, OHLCV1m, get_session_factory, init_db
@@ -69,6 +80,9 @@ async def load_bars(ticker: str, feature_cols: list[str]) -> list[dict[str, Any]
     # Top-10 FFSA feature names (for the TradingEnv state)
     top10 = feature_cols[:10]
 
+    # LightGBM feature columns (may differ from FFSA top-10)
+    lgbm_feat_cols = lgbm_model.feature_cols if lgbm_model else []
+
     bars: list[dict[str, Any]] = []
     for ts, feat_dict in feat_rows:
         if not isinstance(feat_dict, dict):
@@ -80,6 +94,15 @@ async def load_bars(ticker: str, feature_cols: list[str]) -> list[dict[str, Any]
         # Extract top-10 FFSA feature values as an ordered list
         feat_values = [float(feat_dict.get(f, 0.0) or 0.0) for f in top10]
 
+        # LightGBM predictions for this bar
+        lgbm_pred_return = 0.0
+        lgbm_dir_prob = 0.5
+        if lgbm_model and lgbm_feat_cols:
+            full_feat = np.array(
+                [float(feat_dict.get(f, 0.0) or 0.0) for f in lgbm_feat_cols]
+            )
+            _, _, lgbm_pred_return, lgbm_dir_prob = lgbm_model.predict(full_feat)
+
         bars.append({
             "time":             ts,
             "close":            close,
@@ -90,6 +113,9 @@ async def load_bars(ticker: str, feature_cols: list[str]) -> list[dict[str, Any]
             "transformer_conf": 0.0,
             "tcn_conf":         0.0,
             "sentiment_index":  0.0,
+            # LightGBM predictions (fed into RL obs)
+            "lgbm_pred_return": lgbm_pred_return,
+            "lgbm_dir_prob":    lgbm_dir_prob,
             # Market context
             "vix":              20.0,   # placeholder until VIX feed is wired
             "regime":           0.0,    # 0=neutral
@@ -98,12 +124,15 @@ async def load_bars(ticker: str, feature_cols: list[str]) -> list[dict[str, Any]
                if k in ("macd", "macd_signal", "rsi_14")},
         })
 
+    if lgbm_model:
+        logger.info("  LightGBM predictions populated for %d bars", len(bars))
+
     return bars
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-async def main(ticker: str, timesteps: int, bc_epochs: int) -> None:
+async def main(ticker: str, timesteps: int, bc_epochs: int, env_mode: str = "sizing") -> None:
     # Load FFSA feature list
     ffsa_files = sorted(Path("reports/drift").glob("ffsa_*.json"), reverse=True)
     if not ffsa_files:
@@ -114,9 +143,17 @@ async def main(ticker: str, timesteps: int, bc_epochs: int) -> None:
     feature_cols: list[str] = ffsa["selected_features"]
     logger.info("FFSA features: %d selected from %s", len(feature_cols), ffsa_files[0].name)
 
+    # Load LightGBM model for RL observations
+    from src.models.lgbm import load_best_checkpoint
+    lgbm_model = load_best_checkpoint()
+    if lgbm_model:
+        logger.info("LightGBM loaded: val_ic=%.4f, %d features", lgbm_model.val_ic, len(lgbm_model.feature_cols))
+    else:
+        logger.warning("No LightGBM checkpoint — RL obs will have lgbm_pred_return=0, lgbm_dir_prob=0.5")
+
     # Load bars
     logger.info("Loading bars for %s ...", ticker)
-    bars = await load_bars(ticker, feature_cols)
+    bars = await load_bars(ticker, feature_cols, lgbm_model=lgbm_model)
     if len(bars) < 1000:
         logger.error("Too few bars for %s (%d). Need at least 1000.", ticker, len(bars))
         return
@@ -129,7 +166,18 @@ async def main(ticker: str, timesteps: int, bc_epochs: int) -> None:
 
     # Train
     from src.rl.trainer import RLTrainer
-    trainer = RLTrainer(bars_train, bars_val)
+    if env_mode == "sizing":
+        from src.rl.position_sizing_env import PositionSizingEnv, SizingEnvConfig
+        env_class = PositionSizingEnv
+        cfg = SizingEnvConfig()
+        bc_epochs = 0  # no BC for sizing env
+        logger.info("Using PositionSizingEnv (5 sizing actions, LightGBM gates entry/exit)")
+    else:
+        from src.rl.trading_env import TradingEnv, EnvConfig
+        env_class = TradingEnv
+        cfg = EnvConfig()
+        logger.info("Using TradingEnv (9 full actions)")
+    trainer = RLTrainer(bars_train, bars_val, cfg=cfg, env_class=env_class)
     model = trainer.run(total_timesteps=timesteps, bc_epochs=bc_epochs)
 
     # Backtest on validation set
@@ -172,5 +220,6 @@ if __name__ == "__main__":
     parser.add_argument("--ticker",     default="AAPL")
     parser.add_argument("--timesteps",  type=int, default=50_000)
     parser.add_argument("--bc-epochs",  type=int, default=10)
+    parser.add_argument("--env",        choices=["full", "sizing"], default="sizing")
     args = parser.parse_args()
-    asyncio.run(main(ticker=args.ticker, timesteps=args.timesteps, bc_epochs=args.bc_epochs))
+    asyncio.run(main(ticker=args.ticker, timesteps=args.timesteps, bc_epochs=args.bc_epochs, env_mode=args.env))

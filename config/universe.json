@@ -1,0 +1,27 @@
+{
+  "updated_at": "2026-03-13T18:03:59.516052+00:00",
+  "source": "screener_agent",
+  "count": 20,
+  "symbols": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "TSLA",
+    "AVGO",
+    "AMD",
+    "SNDK",
+    "JPM",
+    "V",
+    "MA",
+    "PLTR",
+    "ARM",
+    "MSTR",
+    "XOM",
+    "CVX",
+    "BTC/USD",
+    "ETH/USD",
+    "SOL/USD"
+  ]
+}
