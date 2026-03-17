@@ -376,7 +376,7 @@ class SignalLoop:
         time_in_trade = 0.0
 
         if pos is not None:
-            position_pct = (pos.qty * pos.entry_price) / max(self._pm.portfolio_value, 1.0)
+            position_pct = (pos.qty * pos.avg_entry_price) / max(self._pm.portfolio_value, 1.0)
             # Approximate unrealized PnL from position tracker
             unrealized_pnl = getattr(pos, "unrealized_pnl_pct", 0.0)
             time_in_trade = float(getattr(pos, "bars_held", 0)) / 100.0
@@ -445,7 +445,7 @@ class SignalLoop:
         bars_held = 0
 
         if pos is not None:
-            position_pct = (pos.qty * pos.entry_price) / max(self._pm.portfolio_value, 1.0)
+            position_pct = (pos.qty * pos.avg_entry_price) / max(self._pm.portfolio_value, 1.0)
             if pos.side == "short":
                 position_pct = -position_pct
             unrealized_pnl = getattr(pos, "unrealized_pnl_pct", 0.0)
