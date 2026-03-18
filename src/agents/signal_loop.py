@@ -510,7 +510,17 @@ class SignalLoop:
         entry_price = self._entry_prices.get(ticker)
         entry_dir = self._entry_directions.get(ticker, 0)
         if entry_price is None or entry_dir == 0:
-            return None
+            # Reconstruct sizing state from broker position (survives restarts)
+            pos = self._pm._positions.get(ticker)
+            if pos is None:
+                return None
+            entry_price = pos.avg_entry_price
+            entry_dir = 1 if pos.side == "long" else -1
+            self._entry_prices[ticker] = entry_price
+            self._entry_directions[ticker] = entry_dir
+            self._peak_prices[ticker] = pos.last_price or entry_price
+            # Position predates this deployment — force max_hold exit
+            self._bars_held[ticker] = SIZING_MAX_HOLD_BARS
 
         # Unrealized PnL
         unrealized = (price - entry_price) / entry_price
