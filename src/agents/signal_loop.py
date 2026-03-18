@@ -786,16 +786,17 @@ class SignalLoop:
                 )
                 return
 
-        # Get live quote for limit price
-        quote = await self._alpaca.get_latest_quote(ticker)
-        mid = quote.get("mid", price)
-        if mid <= 0:
-            mid = price
-
-        if side == "buy":
-            limit_price = round(mid * (1 + AlpacaOrderRouter.LIMIT_OFFSET_PCT), 2)
+        # Sell exits use market orders (Alpaca rejects limit orders with
+        # fractional qty, and we want guaranteed fills on exits).
+        # Buy entries use limit orders for price protection.
+        if side == "sell":
+            limit_price = None  # market order
         else:
-            limit_price = round(mid * (1 - AlpacaOrderRouter.LIMIT_OFFSET_PCT), 2)
+            quote = await self._alpaca.get_latest_quote(ticker)
+            mid = quote.get("mid", price)
+            if mid <= 0:
+                mid = price
+            limit_price = round(mid * (1 + AlpacaOrderRouter.LIMIT_OFFSET_PCT), 2)
 
         req = OrderRequest(
             ticker=ticker,
