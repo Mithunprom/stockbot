@@ -164,7 +164,9 @@ class NewsAPIClient:
         }
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(f"{NEWSAPI_BASE}/everything", params=params)
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                logger.warning("newsapi_http_error", status=resp.status_code)
+                return []
             data = resp.json()
             return data.get("articles", [])
 
