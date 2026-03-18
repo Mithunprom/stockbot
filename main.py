@@ -753,6 +753,9 @@ async def broadcast_dashboard(payload: dict[str, Any]) -> None:
 # ─── Logging setup ────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO)
+# Suppress httpx request logging — it leaks API keys in query params
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
