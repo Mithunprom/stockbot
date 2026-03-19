@@ -230,10 +230,15 @@ class SignalLoop:
 
         if not _ml_viable:
             # ── Rule-based fallback ───────────────────────────────────────────
+            from src.models.ensemble import _LGBM_AVAILABLE
             logger.info(
                 "signal_loop_using_rule_based_fallback",
                 n_features=self._n_features,
                 torch_available=_TORCH_AVAILABLE,
+                lgbm_available=_LGBM_AVAILABLE,
+                lgbm_loaded=self._ensemble._lgbm is not None,
+                transformer_loaded=self._ensemble._transformer is not None,
+                tcn_loaded=self._ensemble._tcn is not None,
             )
             signals = await self._rule_based_tick(prices)
             if not signals:

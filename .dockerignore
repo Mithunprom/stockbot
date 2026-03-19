@@ -71,6 +71,9 @@ config/staging/
 # just ensures they are present in the build context.
 # ============================================================
 !models/
+!models/lgbm/
+!models/lgbm/*.pkl
+!models/lgbm/*.json
 !models/transformer/
 !models/transformer/*.pt
 !models/tcn/

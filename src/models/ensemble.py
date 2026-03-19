@@ -203,7 +203,12 @@ class EnsembleEngine:
         if not _LGBM_AVAILABLE:
             logger.warning("lgbm_module_unavailable")
             return
-        self._lgbm = load_lgbm()
+        try:
+            self._lgbm = load_lgbm()
+        except Exception as exc:
+            import traceback
+            logger.error("lgbm_load_exception", error=str(exc), traceback=traceback.format_exc())
+            self._lgbm = None
         if self._lgbm:
             logger.info("lgbm_loaded", ic=self._lgbm.val_ic, dir_acc=self._lgbm.val_dir_acc)
         else:
