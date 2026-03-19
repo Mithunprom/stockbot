@@ -203,6 +203,16 @@ class EnsembleEngine:
         if not _LGBM_AVAILABLE:
             logger.warning("lgbm_module_unavailable")
             return
+        # Diagnostic: list model files on disk
+        from pathlib import Path
+        model_dir = Path("models/lgbm")
+        files = list(model_dir.glob("*")) if model_dir.exists() else []
+        logger.info("lgbm_model_dir_scan", dir=str(model_dir), exists=model_dir.exists(), files=[str(f) for f in files])
+        try:
+            import lightgbm
+            logger.info("lightgbm_import_ok", version=lightgbm.__version__)
+        except ImportError as ie:
+            logger.error("lightgbm_import_failed", error=str(ie))
         try:
             self._lgbm = load_lgbm()
         except Exception as exc:
