@@ -216,12 +216,14 @@ class SignalLoop:
         prices = await self._fetch_prices()
         self._pm.update_prices(prices)
 
-        # Check whether ML path is viable
+        # Check whether ML path is viable — LightGBM alone is sufficient
+        # (it's the primary 60% signal model; Transformer/TCN are optional)
         _ml_viable = (
             self._n_features >= 10
             and _TORCH_AVAILABLE
             and (
-                self._ensemble._transformer is not None
+                self._ensemble._lgbm is not None
+                or self._ensemble._transformer is not None
                 or self._ensemble._tcn is not None
             )
         )
