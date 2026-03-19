@@ -24,6 +24,7 @@ boto3>=1.34.0
 
 # ML signal model
 lightgbm>=4.3.0
+scikit-learn>=1.4.0
 
 # Feature engineering
 pandas>=2.2.2

@@ -184,7 +184,11 @@ class EnsembleEngine:
         self._sentiment: Any | None = SentimentScorer() if _MODELS_AVAILABLE else None
 
     async def load(self) -> None:
-        """Load all models concurrently."""
+        """Load all models concurrently.
+
+        Uses return_exceptions=True so one model's failure doesn't prevent
+        others from loading (e.g. sentiment failing shouldn't block LightGBM).
+        """
         loop = asyncio.get_event_loop()
 
         # LightGBM loads independently of torch
@@ -194,7 +198,14 @@ class EnsembleEngine:
             t_load = loop.run_in_executor(None, self._load_transformer)
             tcn_load = loop.run_in_executor(None, self._load_tcn)
             sentiment_load = self._sentiment.load() if self._sentiment else asyncio.sleep(0)
-            await asyncio.gather(lgbm_load, t_load, tcn_load, sentiment_load)
+            results = await asyncio.gather(
+                lgbm_load, t_load, tcn_load, sentiment_load,
+                return_exceptions=True,
+            )
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    names = ["lgbm", "transformer", "tcn", "sentiment"]
+                    logger.warning("model_load_error", model=names[i], error=str(result))
         else:
             logger.warning("ml_models_unavailable: torch not installed — LightGBM only mode")
             await lgbm_load
