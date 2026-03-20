@@ -277,7 +277,7 @@ class AlpacaOrderRouter:
         positions = await loop.run_in_executor(None, client.get_all_positions)
         return [
             {
-                "ticker": p.symbol,
+                "ticker": self._normalize_ticker(p.symbol),
                 "qty": float(p.qty or 0),
                 "side": p.side,
                 "avg_entry_price": float(p.avg_entry_price or 0),
@@ -287,3 +287,16 @@ class AlpacaOrderRouter:
             }
             for p in positions
         ]
+
+    @staticmethod
+    def _normalize_ticker(symbol: str) -> str:
+        """Normalize Alpaca symbol to universe format.
+
+        Alpaca uses 'BTCUSD' but the universe uses 'BTC/USD'.
+        """
+        # Crypto pairs: BTCUSD → BTC/USD, ETHUSD → ETH/USD, SOLUSD → SOL/USD
+        if symbol.endswith("USD") and len(symbol) > 3 and "/" not in symbol:
+            base = symbol[:-3]
+            if base in ("BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "DOT"):
+                return f"{base}/USD"
+        return symbol
