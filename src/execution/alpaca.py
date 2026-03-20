@@ -178,7 +178,7 @@ class AlpacaOrderRouter:
         start = time.monotonic()
         while time.monotonic() - start < self.FILL_TIMEOUT:
             updated = client.get_order_by_id(str(order.id))
-            status = str(updated.status)
+            status = updated.status.value if hasattr(updated.status, 'value') else str(updated.status)
             if status in ("filled", "partially_filled"):
                 return OrderResult(
                     order_id=str(order.id),
