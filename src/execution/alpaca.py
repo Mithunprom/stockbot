@@ -279,7 +279,7 @@ class AlpacaOrderRouter:
             {
                 "ticker": self._normalize_ticker(p.symbol),
                 "qty": float(p.qty or 0),
-                "side": p.side,
+                "side": p.side.value if hasattr(p.side, 'value') else str(p.side),
                 "avg_entry_price": float(p.avg_entry_price or 0),
                 "unrealized_pl": float(p.unrealized_pl or 0),
                 "unrealized_plpc": float(p.unrealized_plpc or 0),

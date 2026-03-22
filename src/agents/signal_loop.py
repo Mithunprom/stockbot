@@ -202,6 +202,108 @@ class SignalLoop:
         """Return latest ensemble signals for API response."""
         return [s.to_dict() for s in self._latest_signals]
 
+    def get_positions_detail(self) -> list[dict[str, Any]]:
+        """Return enriched position data with exit levels for mobile app."""
+        positions = []
+        for ticker, p in self._pm._positions.items():
+            entry_price = self._entry_prices.get(ticker, p.avg_entry_price)
+            entry_dir = self._entry_directions.get(ticker, 1 if p.side == "long" else -1)
+            peak = self._peak_prices.get(ticker, p.last_price)
+            bars = self._bars_held.get(ticker, 0)
+
+            if entry_dir > 0:
+                stop_loss_price = round(entry_price * (1 - SIZING_STOP_LOSS), 2)
+                take_profit_price = round(entry_price * (1 + SIZING_TAKE_PROFIT), 2)
+                trailing_stop_price = round(peak * (1 - SIZING_TRAILING_STOP), 2)
+            else:
+                stop_loss_price = round(entry_price * (1 + SIZING_STOP_LOSS), 2)
+                take_profit_price = round(entry_price * (1 - SIZING_TAKE_PROFIT), 2)
+                trailing_stop_price = round(peak * (1 + SIZING_TRAILING_STOP), 2)
+
+            positions.append({
+                "ticker": ticker,
+                "side": p.side,
+                "qty": p.qty,
+                "avg_entry_price": p.avg_entry_price,
+                "last_price": p.last_price,
+                "notional": round(p.notional, 2),
+                "unrealized_pnl": round(p.unrealized_pnl, 2),
+                "unrealized_pnl_pct": round(p.unrealized_pnl_pct, 4),
+                "stop_loss_price": stop_loss_price,
+                "take_profit_price": take_profit_price,
+                "trailing_stop_pct": SIZING_TRAILING_STOP,
+                "trailing_stop_price": trailing_stop_price,
+                "peak_price": round(peak, 2),
+                "bars_held": bars,
+                "max_hold_bars": SIZING_MAX_HOLD_BARS,
+                "bars_remaining": max(0, SIZING_MAX_HOLD_BARS - bars),
+                "entry_direction": entry_dir,
+            })
+        return positions
+
+    def get_actionable_signals(self) -> list[dict[str, Any]]:
+        """Return signals that pass entry gate with recommended sizing."""
+        if not self._sizing_mode:
+            return []
+
+        portfolio_value = self._pm.portfolio_value
+        result = []
+        for sig in self._latest_signals:
+            if not self._sizing_entry_gate_open(sig):
+                continue
+            # Skip tickers with existing positions
+            if sig.ticker in self._pm._positions:
+                continue
+
+            direction = 1.0 if float(sig.lgbm_pred_return) > 0 else -1.0
+            side = "buy" if direction > 0 else "sell"
+
+            # Estimate sizing action from RL agent or default
+            size_pct = 0.02  # default tiny
+
+            # Get current price from latest signal data
+            sig_dict = sig.to_dict()
+            result.append({
+                **sig_dict,
+                "actionable": True,
+                "recommended_side": side,
+                "recommended_size_pct": round(size_pct, 4),
+                "recommended_notional": round(portfolio_value * size_pct, 2),
+                "stop_loss_pct": SIZING_STOP_LOSS,
+                "take_profit_pct": SIZING_TAKE_PROFIT,
+                "trailing_stop_pct": SIZING_TRAILING_STOP,
+                "max_hold_bars": SIZING_MAX_HOLD_BARS,
+            })
+        return result
+
+    def get_portfolio_summary(self) -> dict[str, Any]:
+        """Return aggregated portfolio summary for mobile dashboard."""
+        from src.config import get_settings
+
+        pm = self._pm
+        daily_pnl_pct = (
+            (pm.portfolio_value / max(self._daily_start_value, 1) - 1) * 100
+        )
+        daily_pnl_dollar = pm.portfolio_value - self._daily_start_value
+
+        return {
+            "portfolio_value": round(pm.portfolio_value, 2),
+            "daily_pnl_pct": round(daily_pnl_pct, 3),
+            "daily_pnl_dollar": round(daily_pnl_dollar, 2),
+            "total_unrealized_pnl": round(pm.total_unrealized_pnl, 2),
+            "portfolio_heat": round(pm.portfolio_heat, 4),
+            "available_cash": round(pm.available_cash, 2),
+            "drawdown_pct": round(pm.drawdown * 100, 3),
+            "n_open_positions": len(pm._positions),
+            "n_trades_today": self._sizing_n_trades_today,
+            "consecutive_losses": self._consecutive_losses,
+            "halted": self._cb.is_halted,
+            "halt_reason": self._cb.halt_reason,
+            "mode": get_settings().alpaca_mode,
+            "market_open": self._is_market_hours(),
+            "sizing_mode": self._sizing_mode,
+        }
+
     # ── Main tick ────────────────────────────────────────────────────────────
 
     async def _tick(self) -> None:
@@ -220,11 +322,12 @@ class SignalLoop:
         # (it's the primary 60% signal model; Transformer/TCN are optional)
         _ml_viable = (
             self._n_features >= 10
-            and _TORCH_AVAILABLE
             and (
                 self._ensemble._lgbm is not None
-                or self._ensemble._transformer is not None
-                or self._ensemble._tcn is not None
+                or (_TORCH_AVAILABLE and (
+                    self._ensemble._transformer is not None
+                    or self._ensemble._tcn is not None
+                ))
             )
         )
 
@@ -352,6 +455,7 @@ class SignalLoop:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "signals": [s.to_dict() for s in signals[:10]],
                     "positions": self._pm.get_positions(),
+                    "positions_detail": self.get_positions_detail(),
                     "portfolio_value": self._pm.portfolio_value,
                     "portfolio_heat": round(self._pm.portfolio_heat, 4),
                     "halted": self._cb.is_halted,
@@ -816,7 +920,7 @@ class SignalLoop:
         result = await self._alpaca.submit_order(req)
 
         if result.status in ("filled", "partially_filled"):
-            fill_price = result.filled_avg_price or mid
+            fill_price = result.filled_avg_price or price
             filled_at = result.filled_at or datetime.now(timezone.utc)
             if side == "buy":
                 self._pm.open_position(
@@ -834,11 +938,18 @@ class SignalLoop:
                     entry_time=filled_at,
                 )
             else:
+                # Capture entry price BEFORE closing position
+                pos = self._pm.get_position(ticker)
+                entry_price = (
+                    pos.avg_entry_price if pos else
+                    self._entry_prices.get(ticker, fill_price)
+                )
+                entry_notional = qty * entry_price if entry_price else notional
                 pnl = self._pm.close_position(ticker, fill_price)
                 self._consecutive_losses = (
                     self._consecutive_losses + 1 if pnl < 0 else 0
                 )
-                self._pm.record_return(pnl / max(notional, 1.0))
+                self._pm.record_return(pnl / max(entry_notional, 1.0))
                 # Determine exit reason for sizing mode
                 exit_reason = "signal_reversal"
                 if self._sizing_mode:
@@ -935,8 +1046,9 @@ class SignalLoop:
             logger.debug("trade_exit_no_open_record", ticker=ticker)
             return
 
-        notional = qty * fill_price
-        pnl_pct = pnl / max(notional, 1.0)
+        # Use entry notional for accurate pnl_pct (not exit notional)
+        entry_notional = qty * fill_price - pnl  # entry_price * qty = exit_notional - pnl (for longs)
+        pnl_pct = pnl / max(abs(entry_notional), 1.0)
         try:
             async with self._sf() as session:
                 await session.execute(
@@ -1128,7 +1240,9 @@ class SignalLoop:
             from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
 
         now = datetime.now(ZoneInfo("America/New_York"))
-        if now.hour == 9 and now.minute == 30:
+        today = now.date()
+        if now.hour == 9 and now.minute <= 31 and getattr(self, '_last_reset_date', None) != today:
+            self._last_reset_date = today
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
             logger.info(

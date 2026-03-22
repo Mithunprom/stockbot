@@ -355,6 +355,22 @@ def compute_indicators(df: pd.DataFrame, shift: bool = True) -> pd.DataFrame:
     # Volatility confirmation: high ATR with high relative volume = real move
     out["atr_vol_interact"] = out["atr_pct"] * out["vol_ratio"]
 
+    # ── Candlestick patterns (Course 1 §5.3, §6.2) ──────────────────────────
+    from src.features.candlestick_patterns import compute_candlestick_features
+    compute_candlestick_features(out)
+
+    # ── Supply & Demand zones (Course 1 §8.2–§8.11) ─────────────────────────
+    from src.features.supply_demand import compute_supply_demand_features
+    compute_supply_demand_features(out)
+
+    # ── Multi-timeframe & Murphy indicators (Course 1 §9.1–§9.4) ────────────
+    from src.features.multi_timeframe import compute_multi_timeframe_features
+    compute_multi_timeframe_features(out)
+
+    # ── Advanced Murphy indicators (divergence, Fib, volume climax) ──────────
+    from src.features.murphy_advanced import compute_murphy_advanced_features
+    compute_murphy_advanced_features(out)
+
     # ── Prevent lookahead ──────────────────────────────────────────────────────
     if shift:
         indicator_cols = [c for c in out.columns if c not in df.columns]
@@ -485,4 +501,60 @@ FEATURE_COLUMNS: list[str] = [
     "orb_vpin_interact",                   # orb_dev × vpin_50 — informed breakout intensity
     "vwap_time_interact",                  # vwap_dev × time_to_close — mean-reversion urgency
     "atr_vol_interact",                    # atr_pct × vol_ratio — volatility confirmation
+
+    # ── Candlestick patterns (Course 1 §5.3, §6.2) ──────────────────────────
+    "candle_body_ratio",                   # body / range [0,1] — Marubozu=1, Doji=0
+    "candle_upper_shadow",                 # upper wick / range — selling pressure
+    "candle_lower_shadow",                 # lower wick / range — buying pressure
+    "candle_direction",                    # +1 bull, −1 bear
+    "candle_doji",                         # 1.0 if indecision candle
+    "candle_hammer",                       # +1 hammer, −1 shooting star
+    "candle_engulfing",                    # +1 bullish, −1 bearish engulfing
+    "candle_morning_eve_star",             # +1 morning star, −1 evening star
+    "candle_three_soldiers",               # +1 three soldiers, −1 three crows
+    "candle_inside_bar",                   # 1.0 if consolidation bar
+    "candle_tweezer",                      # +1 tweezer bottom, −1 tweezer top
+
+    # ── Supply & Demand zones (Course 1 §8.2–§8.11) ─────────────────────────
+    "sd_demand_dist_atr",                  # ATR-normalized distance to nearest demand zone
+    "sd_supply_dist_atr",                  # ATR-normalized distance to nearest supply zone
+    "sd_in_demand",                        # 1.0 if price inside demand zone
+    "sd_in_supply",                        # 1.0 if price inside supply zone
+    "sd_zone_strength",                    # strength of nearest zone [0,1]
+    "sr_support_dist",                     # distance to rolling support / price
+    "sr_resist_dist",                      # distance to rolling resistance / price
+
+    # ── Multi-timeframe alignment (Course 1 §9.1–§9.4) ──────────────────────
+    "mtf_trend_5m",                        # 5m EMA trend: +1/−1
+    "mtf_trend_15m",                       # 15m EMA trend: +1/−1
+    "mtf_trend_60m",                       # 60m EMA trend: +1/−1
+    "mtf_rsi_15m",                         # RSI on 15m bars, centered [-1,+1]
+    "mtf_confluence",                      # sum of 3 trend signals [-3,+3]
+    "mtf_aligned",                         # 1.0 if all 3 timeframes agree
+
+    # ── Murphy indicators (Technical Analysis of the Financial Markets) ──────
+    "donchian_pos",                        # position within 20-bar Donchian channel [0,1]
+    "donchian_breakout",                   # +1 new high, −1 new low
+    "ad_line_slope",                       # A/D line momentum (normalized)
+    "psar_signal",                         # Parabolic SAR: +1 above, −1 below
+
+    # ── Advanced Murphy: Divergence (Chapters 10, 13) ────────────────────────
+    "div_rsi",                             # RSI divergence: +1 bullish, −1 bearish
+    "div_macd",                            # MACD divergence: +1 bullish, −1 bearish
+    "div_strength",                        # combined divergence score [-2, +2]
+
+    # ── Advanced Murphy: Fibonacci Retracement (Chapter 13) ──────────────────
+    "fib_retrace_pos",                     # position in swing range [0, 1]
+    "fib_nearest_level",                   # nearest Fib level (0.382/0.500/0.618)
+    "fib_dist",                            # distance to nearest Fib level
+
+    # ── Advanced Murphy: Volume Climax (Chapter 7) ───────────────────────────
+    "vol_climax_signal",                   # +1 climax at low, −1 at high
+    "vol_climax_zscore",                   # volume z-score (spike intensity)
+    "vol_climax_intensity",                # vol_zscore × price_extreme [0, ∞)
+
+    # ── Advanced Murphy: Intermarket Proxies (Chapter 17) ────────────────────
+    "im_vol_regime_return",                # vol_rank × return_direction
+    "im_momentum_quality",                 # trend strength on calm vol
+    "im_exhaustion_index",                 # composite exhaustion score [0, 1]
 ]

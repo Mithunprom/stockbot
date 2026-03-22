@@ -290,8 +290,10 @@ async def _download_models_from_s3() -> None:
     # Priority order: LightGBM + sizing RL first (critical), then secondary models
     model_files = {
         # Primary: LightGBM signal model (gates RL entry/exit)
-        "lgbm/lgbm_ic_0.1117.pkl": Path("models/lgbm/lgbm_ic_0.1117.pkl"),
-        "lgbm/lgbm_ic_0.1117.json": Path("models/lgbm/lgbm_ic_0.1117.json"),
+        "lgbm/lgbm_ic_0.1775.pkl": Path("models/lgbm/lgbm_ic_0.1775.pkl"),
+        "lgbm/lgbm_ic_0.1775.json": Path("models/lgbm/lgbm_ic_0.1775.json"),
+        # FFSA feature list (must match model's expected features)
+        "drift/ffsa_2026-W11.json": Path("reports/drift/ffsa_2026-W11.json"),
         # Primary: Position-sizing RL agent (Sharpe 18.4)
         "rl_agent/best_sizing_ppo.zip": Path("models/rl_agent/best_sizing_ppo.zip"),
         # Secondary: Transformer + TCN (IC ≈ 0, low weight in ensemble)
@@ -337,8 +339,8 @@ async def upload_models_to_s3() -> dict[str, str]:
         return {"error": "boto3 not installed"}
 
     upload_files = {
-        Path("models/lgbm/lgbm_ic_0.1117.pkl"): "lgbm/lgbm_ic_0.1117.pkl",
-        Path("models/lgbm/lgbm_ic_0.1117.json"): "lgbm/lgbm_ic_0.1117.json",
+        Path("models/lgbm/lgbm_ic_0.1775.pkl"): "lgbm/lgbm_ic_0.1775.pkl",
+        Path("models/lgbm/lgbm_ic_0.1775.json"): "lgbm/lgbm_ic_0.1775.json",
         Path("models/rl_agent/best_sizing_ppo.zip"): "rl_agent/best_sizing_ppo.zip",
     }
 
@@ -420,7 +422,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -440,7 +442,10 @@ async def root() -> JSONResponse:
         "endpoints": {
             "health":  "GET /health",
             "signals": "GET /signals",
+            "signals_actionable": "GET /signals/actionable",
             "trades":  "GET /trades",
+            "positions_detail": "GET /positions/detail",
+            "portfolio_summary": "GET /portfolio/summary",
             "reports": "GET /reports/{risk|latency|drift|opportunities}",
             "dashboard_ws": "WS /ws/dashboard",
         },
@@ -710,6 +715,39 @@ async def get_report(report_name: str) -> JSONResponse:
     return JSONResponse(
         content={"report": report_name, "file": files[0].name, "data": data}
     )
+
+
+# ─── Mobile API Endpoints ────────────────────────────────────────────────────
+
+
+@app.get("/positions/detail")
+async def positions_detail() -> JSONResponse:
+    """Enriched position data with stop loss, take profit, trailing stop levels."""
+    if _signal_loop is None:
+        return JSONResponse(content={"positions": [], "error": "Signal loop not active"})
+    return JSONResponse(content={
+        "positions": _signal_loop.get_positions_detail(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/signals/actionable")
+async def signals_actionable() -> JSONResponse:
+    """Signals that pass LightGBM entry gate with recommended sizing."""
+    if _signal_loop is None:
+        return JSONResponse(content={"signals": [], "error": "Signal loop not active"})
+    return JSONResponse(content={
+        "signals": _signal_loop.get_actionable_signals(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/portfolio/summary")
+async def portfolio_summary() -> JSONResponse:
+    """Aggregated portfolio summary for mobile dashboard."""
+    if _signal_loop is None:
+        return JSONResponse(content={"error": "Signal loop not active"})
+    return JSONResponse(content=_signal_loop.get_portfolio_summary())
 
 
 # ─── WebSocket Dashboard ──────────────────────────────────────────────────────
