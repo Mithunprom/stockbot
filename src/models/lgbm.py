@@ -122,6 +122,15 @@ class LGBMSignalModel:
         if self.regressor is None or self.classifier is None:
             return 0.0, 0.0, 0.0, 0.5
 
+        n_expected = self.regressor.n_features_
+        if features.shape[0] < n_expected:
+            # Pad missing features with 0 (handles old DB rows with fewer features)
+            padded = np.zeros(n_expected, dtype=np.float32)
+            padded[:features.shape[0]] = features
+            features = padded
+        elif features.shape[0] > n_expected:
+            features = features[:n_expected]
+
         x = features.reshape(1, -1)
         pred_return = float(self.regressor.predict(x)[0])
         dir_prob = float(self.classifier.predict_proba(x)[0, 1])
