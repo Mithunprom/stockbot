@@ -213,24 +213,30 @@ class AlpacaDataStreamClient:
         self._running = False
 
     async def _stream_equities(self) -> None:
-        """Stream equity bars (IEX feed). Reconnects on error."""
+        """Stream equity bars (IEX feed). Reconnects with exponential backoff."""
+        backoff = 5
         while self._running:
             try:
+                backoff = 5  # reset on successful connection
                 await self._stream()
             except Exception as exc:
-                logger.error("alpaca_equity_ws_error: %s", exc)
+                logger.error("alpaca_equity_ws_error: %s (retry in %ds)", exc, backoff)
                 if self._running:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 300)  # max 5 min
 
     async def _stream_crypto(self) -> None:
-        """Stream crypto bars (Alpaca crypto feed). Reconnects on error."""
+        """Stream crypto bars (Alpaca crypto feed). Reconnects with exponential backoff."""
+        backoff = 5
         while self._running:
             try:
+                backoff = 5
                 await self._stream_crypto_inner()
             except Exception as exc:
-                logger.error("alpaca_crypto_ws_error: %s", exc)
+                logger.error("alpaca_crypto_ws_error: %s (retry in %ds)", exc, backoff)
                 if self._running:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 300)
 
     async def _stream(self) -> None:
         if not self._equity_tickers:
