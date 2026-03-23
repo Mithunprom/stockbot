@@ -264,7 +264,13 @@ class AlpacaDataStreamClient:
             "alpaca_equity_ws_started: feed=%s tickers=%d",
             self.feed, len(self._equity_tickers),
         )
-        await stream._run_forever()
+        # Wrap _run_forever with a timeout so tight internal retry loops
+        # (e.g. "connection limit exceeded") don't starve the event loop.
+        # If it fails within 30s, it's likely a connection limit issue.
+        try:
+            await asyncio.wait_for(stream._run_forever(), timeout=30)
+        except asyncio.TimeoutError:
+            pass  # normal: means stream ran for 30s+ (healthy)
 
     async def _stream_crypto_inner(self) -> None:
         if not self._crypto_tickers:
@@ -289,7 +295,10 @@ class AlpacaDataStreamClient:
             "alpaca_crypto_ws_started: tickers=%s",
             self._crypto_tickers,
         )
-        await stream._run_forever()
+        try:
+            await asyncio.wait_for(stream._run_forever(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
 
     async def _handle_bar(self, bar: Any) -> None:
         """Process one Alpaca bar event and flush completed bars."""
