@@ -78,24 +78,30 @@ async def lifespan(app: FastAPI):
     universe: list[str] = _load_universe()
 
     # ── Phase 1: Real-time data ingest ────────────────────────────────────────
-    alpaca_stream = AlpacaDataStreamClient(tickers=universe, feed="iex")
+    # WebSocket streaming is optional — disabled on Railway to prevent
+    # connection-limit loops that starve the HTTP event loop.
+    # The signal loop uses REST-based backfill via AlpacaOrderRouter instead.
+    import os as _os
+    _ws_enabled = _os.environ.get("ENABLE_ALPACA_WS", "false").lower() == "true"
 
-    # ── Phase 3+: Incremental feature computation on every live bar ───────────
-    # Must be registered before stream starts so no bars are missed.
-    # Feature cols loaded after this block — register the callback lazily via closure.
     from src.features.live import LiveFeatureComputer
     _live_feature_computer: LiveFeatureComputer | None = None
+    stream_task = None
 
-    async def _on_1m_bar(ticker: str, bar_time: Any) -> None:
-        if _live_feature_computer is not None:
-            await _live_feature_computer.on_bar(ticker, bar_time)
+    if _ws_enabled:
+        alpaca_stream = AlpacaDataStreamClient(tickers=universe, feed="iex")
 
-    alpaca_stream.on_1m_bar = _on_1m_bar
+        async def _on_1m_bar(ticker: str, bar_time: Any) -> None:
+            if _live_feature_computer is not None:
+                await _live_feature_computer.on_bar(ticker, bar_time)
 
-    stream_task = asyncio.create_task(
-        alpaca_stream.start(), name="alpaca_data_stream"
-    )
-    logger.info("alpaca_stream_started", tickers=len(universe), feed="iex")
+        alpaca_stream.on_1m_bar = _on_1m_bar
+        stream_task = asyncio.create_task(
+            alpaca_stream.start(), name="alpaca_data_stream"
+        )
+        logger.info("alpaca_stream_started", tickers=len(universe), feed="iex")
+    else:
+        logger.info("alpaca_ws_disabled — signal loop uses REST backfill")
 
     options_poller = OptionsFlowPoller(universe=universe, poll_interval_seconds=300)
     options_task = asyncio.create_task(
@@ -251,11 +257,13 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
     if _signal_loop:
         await _signal_loop.stop()
-    await alpaca_stream.stop()
+    if _ws_enabled:
+        await alpaca_stream.stop()
     await options_poller.stop()
     await news_poller.stop()
     for task in (stream_task, options_task, news_task, signal_task):
-        task.cancel()
+        if task is not None:
+            task.cancel()
         try:
             await task
         except asyncio.CancelledError:
