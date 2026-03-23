@@ -212,26 +212,6 @@ class AlpacaDataStreamClient:
     async def stop(self) -> None:
         self._running = False
 
-    async def _test_ws_auth(self, stream_cls: type, **kwargs: Any) -> bool:
-        """Test WebSocket auth with a single connection attempt.
-
-        Returns True if auth succeeds, False if connection limit exceeded.
-        Prevents tight retry loops from starving the event loop.
-        """
-        import websockets
-        try:
-            stream = stream_cls(**kwargs)
-            # Try connecting and authenticating once
-            ws_url = stream._ws_url if hasattr(stream, '_ws_url') else None
-            if ws_url:
-                async with websockets.connect(ws_url) as ws:
-                    await ws.close()
-            return True
-        except Exception as exc:
-            if "connection limit" in str(exc).lower():
-                return False
-            return True  # other errors — let _run_forever handle
-
     async def _stream_equities(self) -> None:
         """Stream equity bars (IEX feed). Reconnects with exponential backoff."""
         backoff = 60  # start at 60s since connection limit persists
@@ -268,6 +248,31 @@ class AlpacaDataStreamClient:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 600)
 
+    async def _try_ws_auth(self, ws_url: str) -> None:
+        """Test WebSocket auth with a single attempt. Raises on failure."""
+        import json as _json
+        try:
+            import websockets
+        except ImportError:
+            return  # can't pre-check, let _run_forever handle it
+
+        settings = get_settings()
+        async with websockets.connect(ws_url, close_timeout=5) as ws:
+            # Alpaca sends a welcome message, then we auth
+            welcome = await asyncio.wait_for(ws.recv(), timeout=5)
+            auth_msg = _json.dumps({
+                "action": "auth",
+                "key": settings.alpaca_api_key,
+                "secret": settings.alpaca_secret_key,
+            })
+            await ws.send(auth_msg)
+            resp = await asyncio.wait_for(ws.recv(), timeout=5)
+            data = _json.loads(resp)
+            if isinstance(data, list) and data:
+                msg = data[0].get("msg", "")
+                if "connection limit" in msg.lower():
+                    raise ConnectionError(f"Alpaca WS auth failed: {msg}")
+
     async def _stream(self) -> None:
         if not self._equity_tickers:
             return
@@ -279,6 +284,10 @@ class AlpacaDataStreamClient:
         settings = get_settings()
         from alpaca.data.enums import DataFeed
         feed_val = DataFeed(self.feed)
+
+        # Pre-check auth to avoid tight retry loop inside _run_forever
+        ws_url = "wss://stream.data.alpaca.markets/v2/iex"
+        await self._try_ws_auth(ws_url)
 
         stream = StockDataStream(
             api_key=settings.alpaca_api_key,
@@ -294,18 +303,7 @@ class AlpacaDataStreamClient:
             "alpaca_equity_ws_started: feed=%s tickers=%d",
             self.feed, len(self._equity_tickers),
         )
-        # Use short timeout: if _run_forever fails within 10s, it's a
-        # connection issue (e.g. limit exceeded). If it runs 10s+, it's
-        # healthy and connected — TimeoutError just means we need to restart.
-        try:
-            await asyncio.wait_for(stream._run_forever(), timeout=10)
-        except asyncio.TimeoutError:
-            pass  # healthy: stream ran for 10s+
-        except asyncio.CancelledError:
-            raise
-        # If _run_forever returns within 10s, it's a fast failure —
-        # raise so the caller applies exponential backoff
-        raise ConnectionError("alpaca equity stream exited early")
+        await stream._run_forever()
 
     async def _stream_crypto_inner(self) -> None:
         if not self._crypto_tickers:
@@ -317,6 +315,11 @@ class AlpacaDataStreamClient:
             return
 
         settings = get_settings()
+
+        # Pre-check auth
+        ws_url = "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
+        await self._try_ws_auth(ws_url)
+
         stream = CryptoDataStream(
             api_key=settings.alpaca_api_key,
             secret_key=settings.alpaca_secret_key,
@@ -330,13 +333,7 @@ class AlpacaDataStreamClient:
             "alpaca_crypto_ws_started: tickers=%s",
             self._crypto_tickers,
         )
-        try:
-            await asyncio.wait_for(stream._run_forever(), timeout=10)
-        except asyncio.TimeoutError:
-            pass
-        except asyncio.CancelledError:
-            raise
-        raise ConnectionError("alpaca crypto stream exited early")
+        await stream._run_forever()
 
     async def _handle_bar(self, bar: Any) -> None:
         """Process one Alpaca bar event and flush completed bars."""
