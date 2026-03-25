@@ -111,6 +111,10 @@ async def lifespan(app: FastAPI):
     news_poller = NewsPoller(universe=set(universe))
     news_task = asyncio.create_task(news_poller.start(), name="news_poller")
 
+    # ── Download ML checkpoints + FFSA report from S3 FIRST ─────────────────
+    # Must happen before loading FFSA features so Railway gets the latest report
+    await _download_models_from_s3()
+
     # ── Phase 3: Load FFSA feature list ──────────────────────────────────────
     feature_cols: list[str] = _load_ffsa_features()
     logger.info("ffsa_features_loaded", n_features=len(feature_cols))
@@ -118,9 +122,6 @@ async def lifespan(app: FastAPI):
     # Activate live feature computer now that feature_cols are known
     _live_feature_computer = LiveFeatureComputer(feature_cols)
     logger.info("live_feature_computer_ready")
-
-    # ── Download ML checkpoints from S3 (if not already present) ────────────
-    await _download_models_from_s3()
 
     # ── Phase 3+5: Load ML models ─────────────────────────────────────────────
     from src.models.ensemble import EnsembleEngine, EnsembleWeights
