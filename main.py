@@ -783,6 +783,18 @@ async def portfolio_summary() -> JSONResponse:
     return JSONResponse(content=_signal_loop.get_portfolio_summary())
 
 
+@app.get("/account")
+async def get_account_info() -> JSONResponse:
+    """Alpaca account info: equity, cash, buying power, DTBP."""
+    if _signal_loop is None:
+        return JSONResponse(content={"error": "Signal loop not active"})
+    try:
+        account = await _signal_loop._alpaca.get_account()
+        return JSONResponse(content=account)
+    except Exception as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=500)
+
+
 # ─── WebSocket Dashboard ──────────────────────────────────────────────────────
 
 _ws_clients: list[WebSocket] = []
