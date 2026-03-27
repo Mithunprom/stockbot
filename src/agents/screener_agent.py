@@ -49,12 +49,11 @@ ANCHOR_TICKERS: list[str] = [
     "PLTR", "ARM", "MSTR",
     # Energy
     "XOM", "CVX",
-    # Crypto — 24/7, fractional, not in S&P 500 so always anchored
-    "BTC/USD", "ETH/USD", "SOL/USD",
+    # Crypto REMOVED — LightGBM is equity-only; noise predictions caused
+    # stop-loss churn and ~5% portfolio loss. Re-add when crypto model exists.
 ]
 
-# Crypto tickers are never scored by the S&P 500 screener (they're not in the index).
-# They are always kept in the universe via ANCHOR_TICKERS.
+# Crypto tickers — excluded until a crypto-specific model is trained.
 CRYPTO_TICKERS: frozenset[str] = frozenset({"BTC/USD", "ETH/USD", "SOL/USD"})
 
 # These tickers are NEVER added to the universe even if S&P 500 momentum qualifies them.
