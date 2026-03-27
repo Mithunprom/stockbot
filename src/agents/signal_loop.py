@@ -155,7 +155,7 @@ class SignalLoop:
         self._cb = circuit_breakers
         self._pm = pos_manager
         self._sf = session_factory
-        self._feature_cols = feature_cols[:30]
+        self._feature_cols = feature_cols  # use all FFSA features (matches model)
         self._n_features = len(self._feature_cols)
         self._broadcast = broadcast_fn
         self._stopped = False

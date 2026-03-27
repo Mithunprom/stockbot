@@ -600,10 +600,12 @@ async def get_status() -> JSONResponse:
         ens = _signal_loop._ensemble
         status["ensemble"] = {
             "weights": {
+                "lgbm": ens.weights.lgbm,
                 "transformer": ens.weights.transformer,
                 "tcn": ens.weights.tcn,
                 "sentiment": ens.weights.sentiment,
             },
+            "lgbm_loaded": ens._lgbm is not None,
             "transformer_loaded": ens._transformer is not None,
             "tcn_loaded": ens._tcn is not None,
             "sentiment_loaded": ens._sentiment is not None,
