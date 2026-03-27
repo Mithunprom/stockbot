@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-03-13T18:03:59.516052+00:00",
+  "updated_at": "2026-03-21T17:19:07.850606+00:00",
   "source": "screener_agent",
-  "count": 20,
+  "count": 17,
   "symbols": [
     "AAPL",
     "MSFT",
@@ -19,9 +19,6 @@
     "ARM",
     "MSTR",
     "XOM",
-    "CVX",
-    "BTC/USD",
-    "ETH/USD",
-    "SOL/USD"
+    "CVX"
   ]
 }

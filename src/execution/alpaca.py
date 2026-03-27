@@ -267,6 +267,8 @@ class AlpacaOrderRouter:
             "equity": float(account.equity or 0),
             "cash": float(account.cash or 0),
             "buying_power": float(account.buying_power or 0),
+            "daytrading_buying_power": float(getattr(account, "daytrading_buying_power", 0) or 0),
+            "daytrade_count": int(getattr(account, "daytrade_count", 0) or 0),
             "portfolio_value": float(account.portfolio_value or 0),
         }
 

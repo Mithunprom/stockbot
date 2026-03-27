@@ -795,6 +795,13 @@ class SignalLoop:
                     self._sizing_returns_history.append(0.0)
                     return
             else:
+                # Block crypto entries — LightGBM was trained on equities only.
+                # Running it on crypto features produces noise predictions that
+                # churn through stop-losses and bleed the portfolio.
+                if ticker in self.CRYPTO_TICKERS:
+                    logger.debug("sizing_skip_crypto", ticker=ticker)
+                    return
+
                 # Check entry gate
                 if not self._sizing_entry_gate_open(sig):
                     return
@@ -842,6 +849,11 @@ class SignalLoop:
                     direction="long" if direction > 0 else "short",
                     lgbm_pred=round(sig.lgbm_pred_return, 5),
                 )
+
+        # ── Block crypto entries in non-sizing modes too ──────────────────────
+        elif not has_position and ticker in self.CRYPTO_TICKERS:
+            logger.debug("skip_crypto_entry", ticker=ticker)
+            return
 
         # ── RL-driven decision (full 9-action mode) ──────────────────────────
         elif self._rl_agent is not None:

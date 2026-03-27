@@ -46,8 +46,8 @@ _DEFAULT_UNIVERSE: list[str] = [
     "XOM", "CVX",
     # Consumer / healthcare
     "LLY", "UNH", "COST", "NFLX",
-    # Crypto (24/7, fractional, always anchored)
-    "BTC/USD", "ETH/USD", "SOL/USD",
+    # Crypto removed — LightGBM trained on equities only; noise predictions
+    # caused stop-loss churn and ~5% portfolio loss. Re-add when crypto model exists.
 ]
 
 # ─── Module-level singletons (populated in lifespan) ──────────────────────────
@@ -164,6 +164,28 @@ async def lifespan(app: FastAPI):
         )
     except Exception as exc:
         logger.warning("startup_position_sync_failed", error=str(exc))
+
+    # ── Close stale crypto positions ──────────────────────────────────────────
+    # LightGBM is equity-only; crypto positions were entered on noise signals.
+    # Liquidate them on startup to stop the stop-loss churn bleeding.
+    _CRYPTO_SYMBOLS = {"BTC/USD", "ETH/USD", "SOL/USD", "BTCUSD", "ETHUSD", "SOLUSD"}
+    try:
+        broker_positions = await alpaca_router.get_positions()
+        for bp in broker_positions:
+            if bp["ticker"] in _CRYPTO_SYMBOLS or bp["ticker"].replace("/", "") + "USD" in _CRYPTO_SYMBOLS:
+                from src.execution.alpaca import OrderRequest as _OR
+                _qty = float(bp["qty"])
+                if _qty > 0:
+                    logger.info("closing_stale_crypto", ticker=bp["ticker"], qty=_qty)
+                    await alpaca_router.submit_order(_OR(
+                        ticker=bp["ticker"],
+                        side="sell",
+                        qty=_qty,
+                        limit_price=None,  # market order for immediate fill
+                        reason="startup: closing stale crypto position (equity-only model)",
+                    ))
+    except Exception as exc:
+        logger.warning("crypto_liquidation_failed", error=str(exc))
 
     # ── Phase 5: Signal loop ──────────────────────────────────────────────────
     from src.agents.signal_loop import SignalLoop
