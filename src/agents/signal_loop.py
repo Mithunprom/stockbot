@@ -52,10 +52,14 @@ SIZING_STATE_DIM = 18
 SIZING_COST_THRESHOLD = 0.0015
 SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)
 SIZING_REVERSAL_BARS = 2
-SIZING_STOP_LOSS = 0.02
-SIZING_TRAILING_STOP = 0.025
-SIZING_TAKE_PROFIT = 0.035
-SIZING_MAX_HOLD_BARS = 45
+
+# Exit thresholds calibrated to equity intraday microstructure.
+# Mega-cap 1m vol ≈ 0.02%, so 15-bar range ≈ 0.08%, 45-bar ≈ 0.13%.
+# Old values (2%/2.5%/3.5%) were 15-25× expected range → 89% max_hold exits.
+SIZING_STOP_LOSS = 0.004       # 0.4% — ~5× 1min vol → 3σ 15-bar move
+SIZING_TRAILING_STOP = 0.005   # 0.5% — locks in gains within realistic range
+SIZING_TAKE_PROFIT = 0.006     # 0.6% — reachable in 15 min on good signal
+SIZING_MAX_HOLD_BARS = 15      # 15 min — matches LightGBM prediction horizon
 
 logger = structlog.get_logger(__name__)
 
@@ -1054,6 +1058,27 @@ class SignalLoop:
         from src.data.db import Trade
 
         trade_id = self._open_trade_ids.pop(ticker, None)
+        if trade_id is None:
+            # Recover orphaned trade: find the most recent open trade for this
+            # ticker in the DB. This handles restarts/redeploys where the
+            # in-memory _open_trade_ids dict was lost.
+            from sqlalchemy import select as _sel
+            from src.data.db import Trade as _T
+            try:
+                async with self._sf() as session:
+                    result = await session.execute(
+                        _sel(_T.id)
+                        .where(_T.ticker == ticker, _T.exit_time.is_(None))
+                        .order_by(_T.entry_time.desc())
+                        .limit(1)
+                    )
+                    row = result.scalar_one_or_none()
+                    if row is not None:
+                        trade_id = row
+                        logger.info("trade_exit_recovered_orphan", ticker=ticker, trade_id=trade_id)
+            except Exception as exc:
+                logger.warning("trade_exit_orphan_recovery_failed", ticker=ticker, error=str(exc))
+
         if trade_id is None:
             logger.debug("trade_exit_no_open_record", ticker=ticker)
             return
