@@ -47,19 +47,22 @@ STATE_DIM = 29
 
 # Position-sizing env constants (from position_sizing_env.py)
 SIZING_ACTION_NAMES = ["skip", "tiny", "small", "medium", "large"]
-SIZING_ACTION_PCTS = {0: 0.0, 1: 0.02, 2: 0.05, 3: 0.10, 4: 0.20}
+# [P0] Halved per quant research agent — Kelly=-0.68 means negative EV.
+# Smaller positions limit bleed while we validate signal edge.
+SIZING_ACTION_PCTS = {0: 0.0, 1: 0.01, 2: 0.02, 3: 0.03, 4: 0.05}
 SIZING_STATE_DIM = 18
 SIZING_COST_THRESHOLD = 0.0015
 SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)
 SIZING_REVERSAL_BARS = 2
 
 # Exit thresholds calibrated to equity intraday microstructure.
-# Mega-cap 1m vol ≈ 0.02%, so 15-bar range ≈ 0.08%, 45-bar ≈ 0.13%.
-# Old values (2%/2.5%/3.5%) were 15-25× expected range → 89% max_hold exits.
+# Mega-cap 1m vol ≈ 0.02%, so 10-bar range ≈ 0.06%.
 SIZING_STOP_LOSS = 0.004       # 0.4% — ~5× 1min vol → 3σ 15-bar move
 SIZING_TRAILING_STOP = 0.005   # 0.5% — locks in gains within realistic range
-SIZING_TAKE_PROFIT = 0.006     # 0.6% — reachable in 15 min on good signal
-SIZING_MAX_HOLD_BARS = 15      # 15 min — matches LightGBM prediction horizon
+SIZING_TAKE_PROFIT = 0.006     # 0.6% — reachable within signal horizon
+# [P1] Shortened from 15 to 10 — 89% of trades were timing out at max_hold.
+# Signal alpha decays fast; holding past the edge window bleeds.
+SIZING_MAX_HOLD_BARS = 10      # 10 min — tighter window to capture alpha
 
 logger = structlog.get_logger(__name__)
 
@@ -184,13 +187,26 @@ class SignalLoop:
         self._sizing_returns_history: list[float] = [0.0] * 20
         self._sizing_recent_outcomes: list[float] = []
         self._sizing_n_trades_today: int = 0
+
+        # Kelly gate — blocks new entries when rolling Kelly fraction < 0.
+        # Updated after each closed trade. Starts at 0 (conservative: no trades
+        # until enough history proves positive expected value).
+        self._kelly_fraction: float = 0.0
+        self._kelly_min_trades: int = 20  # need ≥20 closed trades to compute
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
         """Run signal loop until stop() is called."""
-        logger.info("signal_loop_started", universe=len(self._universe))
+        # Seed Kelly gate from DB history so it activates immediately
+        await self._seed_kelly_from_db()
+        logger.info(
+            "signal_loop_started",
+            universe=len(self._universe),
+            kelly=round(self._kelly_fraction, 4),
+            kelly_n=len(self._sizing_recent_outcomes),
+        )
         while not self._stopped:
             try:
                 await self._tick()
@@ -201,6 +217,37 @@ class SignalLoop:
     async def stop(self) -> None:
         self._stopped = True
         logger.info("signal_loop_stopped")
+
+    async def _seed_kelly_from_db(self) -> None:
+        """Load recent closed trade PnLs from DB to bootstrap Kelly gate.
+
+        Without this, the Kelly gate would need 20 new trades before it
+        can decide whether to block entries. By seeding from history, the
+        gate activates immediately on startup.
+        """
+        from sqlalchemy import select as _sel
+        from src.data.db import Trade as _T
+
+        try:
+            async with self._sf() as session:
+                result = await session.execute(
+                    _sel(_T.pnl)
+                    .where(_T.exit_time.isnot(None), _T.pnl.isnot(None))
+                    .order_by(_T.exit_time.desc())
+                    .limit(50)
+                )
+                pnls = [float(r) for r in result.scalars().all() if r is not None]
+
+            if pnls:
+                self._sizing_recent_outcomes = list(reversed(pnls))
+                self._update_kelly()
+                logger.info(
+                    "kelly_seeded_from_db",
+                    n_trades=len(pnls),
+                    kelly=round(self._kelly_fraction, 4),
+                )
+        except Exception as exc:
+            logger.warning("kelly_seed_failed", error=str(exc))
 
     def get_latest_signals(self) -> list[dict[str, Any]]:
         """Return latest ensemble signals for API response."""
@@ -306,6 +353,15 @@ class SignalLoop:
             "mode": get_settings().alpaca_mode,
             "market_open": self._is_market_hours(),
             "sizing_mode": self._sizing_mode,
+            "kelly_fraction": round(self._kelly_fraction, 4),
+            "kelly_gate_active": (
+                len(self._sizing_recent_outcomes) >= self._kelly_min_trades
+            ),
+            "kelly_entries_blocked": (
+                len(self._sizing_recent_outcomes) >= self._kelly_min_trades
+                and self._kelly_fraction <= 0
+            ),
+            "kelly_n_trades": len(self._sizing_recent_outcomes),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -600,11 +656,71 @@ class SignalLoop:
     # ── Sizing-mode entry/exit gating ────────────────────────────────────────
 
     def _sizing_entry_gate_open(self, sig: EnsembleSignal) -> bool:
-        """Check if LightGBM signal warrants entry (sizing mode)."""
+        """Check if LightGBM signal warrants entry (sizing mode).
+
+        Three gates must ALL pass:
+          1. LightGBM pred_return exceeds cost threshold
+          2. dir_prob is outside the dead zone (0.45-0.55)
+          3. Rolling Kelly fraction > 0 (positive expected value)
+        """
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
         lo, hi = SIZING_DIR_PROB_DEAD_ZONE
-        return abs(pred_ret) > SIZING_COST_THRESHOLD and not (lo < dir_prob < hi)
+
+        # Gate 1+2: Signal quality
+        signal_ok = abs(pred_ret) > SIZING_COST_THRESHOLD and not (lo < dir_prob < hi)
+        if not signal_ok:
+            return False
+
+        # Gate 3: Kelly — block entries if rolling Kelly fraction <= 0
+        # (negative expected value means every trade is expected to lose money)
+        if len(self._sizing_recent_outcomes) >= self._kelly_min_trades:
+            if self._kelly_fraction <= 0:
+                logger.info(
+                    "kelly_gate_blocked",
+                    ticker=sig.ticker,
+                    kelly=round(self._kelly_fraction, 4),
+                    n_outcomes=len(self._sizing_recent_outcomes),
+                )
+                return False
+
+        return True
+
+    def _update_kelly(self) -> None:
+        """Recompute rolling Kelly fraction from recent trade outcomes.
+
+        f* = (p * b - q) / b
+        where p = win rate, b = avg_win/avg_loss, q = 1-p
+
+        Uses half-Kelly for safety. Updated after every closed trade.
+        """
+        outcomes = self._sizing_recent_outcomes
+        if len(outcomes) < self._kelly_min_trades:
+            return
+
+        wins = [o for o in outcomes if o > 0]
+        losses = [o for o in outcomes if o < 0]
+
+        if not wins or not losses:
+            self._kelly_fraction = 0.0
+            return
+
+        import statistics
+        p = len(wins) / len(outcomes)
+        avg_win = statistics.mean(wins)
+        avg_loss = abs(statistics.mean(losses))
+        b = avg_win / max(avg_loss, 1e-9)
+        q = 1 - p
+
+        self._kelly_fraction = (p * b - q) / max(b, 1e-9)
+        logger.info(
+            "kelly_updated",
+            kelly_full=round(self._kelly_fraction, 4),
+            kelly_half=round(max(0, self._kelly_fraction / 2), 4),
+            win_rate=round(p, 3),
+            win_loss_ratio=round(b, 3),
+            n_trades=len(outcomes),
+        )
 
     def _sizing_signal_direction(self, sig: EnsembleSignal) -> int:
         """Get entry direction from LightGBM: +1 long, -1 short."""
@@ -970,10 +1086,11 @@ class SignalLoop:
                 exit_reason = "signal_reversal"
                 if self._sizing_mode:
                     exit_reason = self._pending_exit_reasons.pop(ticker, "signal_reversal")
-                    # Track outcome for recent win rate
+                    # Track outcome for recent win rate + Kelly computation
                     self._sizing_recent_outcomes.append(pnl)
-                    if len(self._sizing_recent_outcomes) > 10:
-                        self._sizing_recent_outcomes = self._sizing_recent_outcomes[-10:]
+                    if len(self._sizing_recent_outcomes) > 50:
+                        self._sizing_recent_outcomes = self._sizing_recent_outcomes[-50:]
+                    self._update_kelly()
                     self._clear_sizing_state(ticker)
                 await self._write_trade_exit(
                     ticker=ticker,
