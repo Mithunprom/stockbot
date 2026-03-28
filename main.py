@@ -209,6 +209,7 @@ async def lifespan(app: FastAPI):
     from src.agents.critique_agent import CritiqueAgent
     from src.agents.latency_agent import LatencyAgent
     from src.agents.profit_agent import ProfitAgent
+    from src.agents.quant_research_agent import QuantResearchAgent
     from src.agents.retrain_agent import RetrainAgent
     from src.agents.risk_agent import RiskAgent
     from src.agents.screener_agent import ScreenerAgent
@@ -224,6 +225,9 @@ async def lifespan(app: FastAPI):
         session_factory=session_factory,
         universe=universe,
     )
+    quant_research_agent = QuantResearchAgent(signal_loop=_signal_loop)
+    # Store globally so API endpoints can trigger it manually
+    app.state.quant_research_agent = quant_research_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -232,6 +236,7 @@ async def lifespan(app: FastAPI):
         screener_agent=screener_agent,
         critique_agent=critique_agent,
         retrain_agent=retrain_agent,
+        quant_research_agent=quant_research_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -500,6 +505,26 @@ async def upload_models_s3() -> JSONResponse:
     """Upload current model checkpoints to S3 as backup."""
     results = await upload_models_to_s3()
     return JSONResponse(content=results)
+
+
+@app.post("/admin/research/daily")
+async def trigger_research_daily() -> JSONResponse:
+    """Manually trigger quant research daily analysis."""
+    agent = getattr(app.state, "quant_research_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Quant research agent not initialized"}, status_code=503)
+    report = await agent.run_daily()
+    return JSONResponse(content=report)
+
+
+@app.post("/admin/research/weekly")
+async def trigger_research_weekly() -> JSONResponse:
+    """Manually trigger quant research weekly deep analysis."""
+    agent = getattr(app.state, "quant_research_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Quant research agent not initialized"}, status_code=503)
+    report = await agent.run_weekly()
+    return JSONResponse(content=report)
 
 
 @app.get("/signals")

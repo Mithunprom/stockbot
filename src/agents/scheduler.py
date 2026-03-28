@@ -28,6 +28,7 @@ def create_scheduler(
     screener_agent: Any | None = None,
     critique_agent: Any | None = None,
     retrain_agent: Any | None = None,
+    quant_research_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -141,6 +142,39 @@ def create_scheduler(
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=1800,
+        )
+
+    # ── Quant Research Agent: daily 17:30 ET + weekly Saturday 10:00 ET ───────
+    if quant_research_agent is not None:
+        # Daily analysis (after profit agent)
+        scheduler.add_job(
+            lambda: asyncio.create_task(quant_research_agent.run_daily()),
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour=17,
+                minute=30,
+                timezone="America/New_York",
+            ),
+            id="quant_research_daily",
+            name="Quant Research Agent (daily)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=1800,
+        )
+        # Weekly deep research (Saturday morning)
+        scheduler.add_job(
+            lambda: asyncio.create_task(quant_research_agent.run_weekly()),
+            trigger=CronTrigger(
+                day_of_week="sat",
+                hour=10,
+                minute=0,
+                timezone="America/New_York",
+            ),
+            id="quant_research_weekly",
+            name="Quant Research Agent (weekly)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
         )
 
     logger.info(
