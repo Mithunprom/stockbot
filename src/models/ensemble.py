@@ -302,23 +302,27 @@ class EnsembleEngine:
                 lgbm_dir = 0.0
                 lgbm_conf = 0.0
 
-        # Transformer inference
+        # Transformer inference (may fail if checkpoint n_features != current)
+        t_dir, t_conf = 0.0, 0.0
         if self._transformer is not None:
-            t_dir, t_conf = await loop.run_in_executor(
-                None, self._transformer.predict, features_1m, options_flow
-            )
-        else:
-            t_dir, t_conf = 0.0, 0.0
+            try:
+                t_dir, t_conf = await loop.run_in_executor(
+                    None, self._transformer.predict, features_1m, options_flow
+                )
+            except Exception as exc:
+                logger.warning("transformer_inference_failed", ticker=ticker, error=str(exc))
 
-        # TCN inference
+        # TCN inference (may fail if checkpoint n_features != current)
+        tcn_dir, tcn_conf = 0.0, 0.0
         if self._tcn is not None:
-            tcn_dir, tcn_conf = await loop.run_in_executor(
-                None, self._tcn.predict,
-                features_1m.T,   # (n_features, seq_len) — TCN expects channel-first
-                features_5m.T,
-            )
-        else:
-            tcn_dir, tcn_conf = 0.0, 0.0
+            try:
+                tcn_dir, tcn_conf = await loop.run_in_executor(
+                    None, self._tcn.predict,
+                    features_1m.T,   # (n_features, seq_len) — TCN expects channel-first
+                    features_5m.T,
+                )
+            except Exception as exc:
+                logger.warning("tcn_inference_failed", ticker=ticker, error=str(exc))
 
         # Sentiment rolling index
         si = 0.0
