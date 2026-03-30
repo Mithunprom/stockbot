@@ -325,36 +325,46 @@ async def _download_models_from_s3() -> None:
         logger.warning("s3_download_skipped_boto3_not_installed")
         return
 
-    # Map S3 key → local path
-    # Priority order: LightGBM + sizing RL first (critical), then secondary models
-    model_files = {
-        # Primary: LightGBM signal model (gates RL entry/exit)
-        "lgbm/lgbm_ic_0.1775.pkl": Path("models/lgbm/lgbm_ic_0.1775.pkl"),
-        "lgbm/lgbm_ic_0.1775.json": Path("models/lgbm/lgbm_ic_0.1775.json"),
-        # FFSA feature list (must match model's expected features)
-        "drift/ffsa_2026-W11.json": Path("reports/drift/ffsa_2026-W11.json"),
-        # Primary: Position-sizing RL agent (Sharpe 18.4)
-        "rl_agent/best_sizing_ppo.zip": Path("models/rl_agent/best_sizing_ppo.zip"),
-        # Secondary: Transformer + TCN (IC ≈ 0, low weight in ensemble)
-        "transformer/step_055314_sharpe_0.896.pt": Path("models/transformer/step_055314_sharpe_0.896.pt"),
-        "tcn/step_043461_sharpe_0.776.pt": Path("models/tcn/step_043461_sharpe_0.776.pt"),
+    # Download all model files from S3 prefixes.
+    # Lists objects under each prefix and downloads the latest (alphabetically last).
+    prefixes = ["lgbm/", "transformer/", "tcn/", "rl_agent/", "drift/"]
+    local_dirs = {
+        "lgbm/": Path("models/lgbm"),
+        "transformer/": Path("models/transformer"),
+        "tcn/": Path("models/tcn"),
+        "rl_agent/": Path("models/rl_agent"),
+        "drift/": Path("reports/drift"),
     }
 
     loop = asyncio.get_event_loop()
 
     def _download() -> None:
         s3 = boto3.client("s3")
-        for s3_key, local_path in model_files.items():
-            if local_path.exists():
-                logger.info("s3_model_already_present", path=str(local_path))
-                continue
-            local_path.parent.mkdir(parents=True, exist_ok=True)
+        for prefix in prefixes:
             try:
-                logger.info("s3_downloading", bucket=bucket, key=s3_key)
-                s3.download_file(bucket, s3_key, str(local_path))
-                logger.info("s3_download_complete", path=str(local_path), size=local_path.stat().st_size)
+                response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+                objects = response.get("Contents", [])
+                if not objects:
+                    logger.info("s3_no_objects", prefix=prefix)
+                    continue
+                for obj in objects:
+                    s3_key = obj["Key"]
+                    filename = s3_key.split("/")[-1]
+                    if not filename:
+                        continue
+                    local_path = local_dirs[prefix] / filename
+                    if local_path.exists():
+                        logger.info("s3_model_already_present", path=str(local_path))
+                        continue
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        logger.info("s3_downloading", bucket=bucket, key=s3_key)
+                        s3.download_file(bucket, s3_key, str(local_path))
+                        logger.info("s3_download_complete", path=str(local_path), size=local_path.stat().st_size)
+                    except (BotoCoreError, ClientError) as exc:
+                        logger.error("s3_download_failed", key=s3_key, error=str(exc))
             except (BotoCoreError, ClientError) as exc:
-                logger.error("s3_download_failed", key=s3_key, error=str(exc))
+                logger.error("s3_list_failed", prefix=prefix, error=str(exc))
 
     await loop.run_in_executor(None, _download)
 
@@ -377,11 +387,50 @@ async def upload_models_to_s3() -> dict[str, str]:
     except ImportError:
         return {"error": "boto3 not installed"}
 
-    upload_files = {
-        Path("models/lgbm/lgbm_ic_0.1775.pkl"): "lgbm/lgbm_ic_0.1775.pkl",
-        Path("models/lgbm/lgbm_ic_0.1775.json"): "lgbm/lgbm_ic_0.1775.json",
-        Path("models/rl_agent/best_sizing_ppo.zip"): "rl_agent/best_sizing_ppo.zip",
-    }
+    # Dynamically find best model checkpoints to upload
+    upload_files: dict[Path, str] = {}
+
+    def _best_by_sharpe(pattern_dir: Path, glob: str) -> Path | None:
+        """Find checkpoint with highest Sharpe value in filename."""
+        files = list(pattern_dir.glob(glob))
+        if not files:
+            return None
+        return max(files, key=lambda p: float(p.stem.split("sharpe_")[1]))
+
+    def _best_by_ic(pattern_dir: Path, glob: str) -> Path | None:
+        """Find LightGBM checkpoint with highest IC in filename."""
+        files = list(pattern_dir.glob(glob))
+        if not files:
+            return None
+        return max(files, key=lambda p: float(p.stem.split("ic_")[1]))
+
+    # LightGBM: best IC checkpoint (.pkl and .json)
+    best_pkl = _best_by_ic(Path("models/lgbm"), "lgbm_ic_*.pkl")
+    if best_pkl:
+        upload_files[best_pkl] = f"lgbm/{best_pkl.name}"
+        json_path = best_pkl.with_suffix(".json")
+        if json_path.exists():
+            upload_files[json_path] = f"lgbm/{json_path.name}"
+
+    # Transformer: best Sharpe checkpoint
+    best_t = _best_by_sharpe(Path("models/transformer"), "step_*_sharpe_*.pt")
+    if best_t:
+        upload_files[best_t] = f"transformer/{best_t.name}"
+
+    # TCN: best Sharpe checkpoint
+    best_tcn = _best_by_sharpe(Path("models/tcn"), "step_*_sharpe_*.pt")
+    if best_tcn:
+        upload_files[best_tcn] = f"tcn/{best_tcn.name}"
+
+    # RL agent
+    rl_path = Path("models/rl_agent/best_sizing_ppo.zip")
+    if rl_path.exists():
+        upload_files[rl_path] = "rl_agent/best_sizing_ppo.zip"
+
+    # FFSA report
+    ffsa_files = sorted(Path("reports/drift").glob("ffsa_*.json"), reverse=True)
+    if ffsa_files:
+        upload_files[ffsa_files[0]] = f"drift/{ffsa_files[0].name}"
 
     s3 = boto3.client("s3")
     results: dict[str, str] = {}
