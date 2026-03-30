@@ -171,12 +171,13 @@ class SignalLoop:
         self._consecutive_losses: int = 0
         self._open_trade_ids: dict[str, int] = {}  # ticker → Trade.id (for exit matching)
 
-        # RL agent (optional — falls back to threshold logic if unavailable)
+        # RL agents (legacy — kept for backward compat but not used for sizing)
         self._rl_agent: Any | None = _load_rl_agent()
-
-        # Position-sizing RL agent (preferred over full RL when available)
         self._sizing_agent: Any | None = _load_sizing_agent()
-        self._sizing_mode = self._sizing_agent is not None
+
+        # Sizing mode: LightGBM gates entry/exit, Kelly sizes positions.
+        # Activated when LightGBM is loaded (doesn't require RL agent anymore).
+        self._sizing_mode = self._ensemble._lgbm is not None
 
         # Sizing mode state tracking (per-ticker)
         self._entry_directions: dict[str, int] = {}      # +1 long, -1 short
@@ -658,10 +659,14 @@ class SignalLoop:
     def _sizing_entry_gate_open(self, sig: EnsembleSignal) -> bool:
         """Check if LightGBM signal warrants entry (sizing mode).
 
-        Three gates must ALL pass:
+        Two gates must pass:
           1. LightGBM pred_return exceeds cost threshold
           2. dir_prob is outside the dead zone (0.45-0.55)
-          3. Rolling Kelly fraction > 0 (positive expected value)
+
+        Kelly doesn't BLOCK entries — it controls SIZING instead:
+          - Kelly > 0: half-Kelly position size (proven edge)
+          - Kelly <= 0: minimum 1% size (collecting data to validate)
+        This lets the new exit params prove themselves with small bets.
         """
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
@@ -669,22 +674,7 @@ class SignalLoop:
 
         # Gate 1+2: Signal quality
         signal_ok = abs(pred_ret) > SIZING_COST_THRESHOLD and not (lo < dir_prob < hi)
-        if not signal_ok:
-            return False
-
-        # Gate 3: Kelly — block entries if rolling Kelly fraction <= 0
-        # (negative expected value means every trade is expected to lose money)
-        if len(self._sizing_recent_outcomes) >= self._kelly_min_trades:
-            if self._kelly_fraction <= 0:
-                logger.info(
-                    "kelly_gate_blocked",
-                    ticker=sig.ticker,
-                    kelly=round(self._kelly_fraction, 4),
-                    n_outcomes=len(self._sizing_recent_outcomes),
-                )
-                return False
-
-        return True
+        return signal_ok
 
     def _update_kelly(self) -> None:
         """Recompute rolling Kelly fraction from recent trade outcomes.
@@ -922,23 +912,9 @@ class SignalLoop:
                     logger.debug("sizing_skip_crypto", ticker=ticker)
                     return
 
-                # Check entry gate
+                # Check entry gate (includes Kelly check)
                 if not self._sizing_entry_gate_open(sig):
                     return
-
-                # Ask RL for position size
-                obs = self._build_sizing_obs(sig, ticker, features_arr)
-                action, _ = self._sizing_agent.predict(obs, deterministic=True)
-                action = int(action)
-                size_pct = SIZING_ACTION_PCTS.get(action, 0.0)
-                action_name = SIZING_ACTION_NAMES[action]
-
-                if size_pct == 0.0:
-                    logger.debug("sizing_skip", ticker=ticker, action=action_name)
-                    return
-
-                # Apply regime scaling
-                size_pct *= size_scale
 
                 direction = self._sizing_signal_direction(sig)
                 if direction == 0:
@@ -946,6 +922,20 @@ class SignalLoop:
                 # Phase 5: no shorts
                 if direction < 0:
                     return
+
+                # Kelly-based position sizing (replaces RL agent).
+                # When Kelly > 0: use half-Kelly as position size.
+                # When Kelly <= 0 but < min_trades: use minimum size (1%)
+                # to collect data for Kelly computation.
+                if self._kelly_fraction > 0:
+                    size_pct = min(self._kelly_fraction / 2, 0.05)  # half-Kelly, cap 5%
+                    sizing_method = "kelly"
+                else:
+                    size_pct = 0.01  # 1% minimum while collecting data
+                    sizing_method = "min_explore"
+
+                # Apply regime scaling
+                size_pct *= size_scale
 
                 side = "buy"
                 notional = self._pm.compute_position_size(
@@ -964,7 +954,7 @@ class SignalLoop:
                 logger.info(
                     "sizing_entry",
                     ticker=ticker,
-                    action=action_name,
+                    sizing=sizing_method,
                     size_pct=round(size_pct, 3),
                     direction="long" if direction > 0 else "short",
                     lgbm_pred=round(sig.lgbm_pred_return, 5),

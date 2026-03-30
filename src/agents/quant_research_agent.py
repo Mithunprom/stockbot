@@ -47,8 +47,9 @@ AGENT_NAME = "Quant Research Agent"
 class QuantResearchAgent:
     """Automated quant research: performance forensics + strategy proposals."""
 
-    def __init__(self, signal_loop: Any = None) -> None:
+    def __init__(self, signal_loop: Any = None, retrain_agent: Any = None) -> None:
         self._signal_loop = signal_loop
+        self._retrain_agent = retrain_agent
         self._sf = get_session_factory()
 
     # ── Main entry points ─────────────────────────────────────────────────────
@@ -152,6 +153,25 @@ class QuantResearchAgent:
                     "proposals": report["parameter_proposals"],
                     "needs_review": True,
                 }, f, indent=2, default=str)
+
+        # Trigger retrain if performance is poor and retrain agent is wired
+        if self._retrain_agent is not None:
+            should_retrain = (
+                not report.get("null_signal_test", {}).get("signal_has_edge", True)
+                or report.get("performance", {}).get("sharpe_1w", 0) < 0
+                or report.get("performance", {}).get("win_rate", 1.0) < 0.45
+            )
+            if should_retrain:
+                logger.info("quant_research_triggering_retrain",
+                            reason="poor weekly performance detected")
+                try:
+                    retrain_report = await self._retrain_agent.run(force_neural_nets=True)
+                    report["retrain_triggered"] = True
+                    report["retrain_result"] = retrain_report.get("status", "unknown")
+                except Exception as exc:
+                    logger.warning("quant_research_retrain_failed", error=str(exc))
+                    report["retrain_triggered"] = True
+                    report["retrain_result"] = f"failed: {exc}"
 
         logger.info("quant_research_weekly_done", path=str(report_path))
         return report

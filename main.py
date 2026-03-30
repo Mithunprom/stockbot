@@ -225,7 +225,10 @@ async def lifespan(app: FastAPI):
         session_factory=session_factory,
         universe=universe,
     )
-    quant_research_agent = QuantResearchAgent(signal_loop=_signal_loop)
+    quant_research_agent = QuantResearchAgent(
+        signal_loop=_signal_loop,
+        retrain_agent=retrain_agent,
+    )
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
 
