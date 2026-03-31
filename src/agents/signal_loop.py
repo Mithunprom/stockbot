@@ -51,9 +51,13 @@ SIZING_ACTION_NAMES = ["skip", "tiny", "small", "medium", "large"]
 # Smaller positions limit bleed while we validate signal edge.
 SIZING_ACTION_PCTS = {0: 0.0, 1: 0.01, 2: 0.02, 3: 0.03, 4: 0.05}
 SIZING_STATE_DIM = 18
-SIZING_COST_THRESHOLD = 0.0015
+SIZING_COST_THRESHOLD = 0.003   # raised from 0.0015 — filter weak signals
 SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)
 SIZING_REVERSAL_BARS = 2
+
+# Anti-churn controls
+SIZING_MAX_TRADES_PER_DAY = 8       # cap total round-trips per day
+SIZING_TICKER_COOLDOWN_BARS = 30    # 30 min cooldown after exiting a ticker
 
 # Exit thresholds calibrated to equity intraday microstructure.
 # Mega-cap 1m vol ≈ 0.02%, so 10-bar range ≈ 0.06%.
@@ -188,6 +192,7 @@ class SignalLoop:
         self._sizing_returns_history: list[float] = [0.0] * 20
         self._sizing_recent_outcomes: list[float] = []
         self._sizing_n_trades_today: int = 0
+        self._ticker_cooldown: dict[str, int] = {}  # ticker → bars remaining
 
         # Kelly gate — blocks new entries when rolling Kelly fraction < 0.
         # Updated after each closed trade. Starts at 0 (conservative: no trades
@@ -363,6 +368,8 @@ class SignalLoop:
                 and self._kelly_fraction <= 0
             ),
             "kelly_n_trades": len(self._sizing_recent_outcomes),
+            "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
+            "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -373,6 +380,16 @@ class SignalLoop:
         has_crypto = any(t in self.CRYPTO_TICKERS for t in self._universe)
         if not market_open and not has_crypto:
             return
+
+        # Decrement per-ticker cooldowns (1 bar = 1 minute)
+        expired = []
+        for t, remaining in self._ticker_cooldown.items():
+            if remaining <= 1:
+                expired.append(t)
+            else:
+                self._ticker_cooldown[t] = remaining - 1
+        for t in expired:
+            del self._ticker_cooldown[t]
 
         # 1. Fetch latest features + prices from DB
         features_map, regime_map = await self._fetch_features()
@@ -659,20 +676,37 @@ class SignalLoop:
     def _sizing_entry_gate_open(self, sig: EnsembleSignal) -> bool:
         """Check if LightGBM signal warrants entry (sizing mode).
 
-        Two gates must pass:
-          1. LightGBM pred_return exceeds cost threshold
-          2. dir_prob is outside the dead zone (0.45-0.55)
-
-        Kelly doesn't BLOCK entries — it controls SIZING instead:
-          - Kelly > 0: half-Kelly position size (proven edge)
-          - Kelly <= 0: minimum 1% size (collecting data to validate)
-        This lets the new exit params prove themselves with small bets.
+        Gates:
+          1. Daily trade cap not exceeded
+          2. Per-ticker cooldown elapsed (prevents re-entry churn)
+          3. Kelly gate: once 20+ trades confirm negative EV, STOP trading
+          4. LightGBM pred_return exceeds cost threshold
+          5. dir_prob is outside the dead zone (0.45-0.55)
         """
+        ticker = sig.ticker
+
+        # Gate 1: Daily trade cap
+        if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
+            logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)
+            return False
+
+        # Gate 2: Per-ticker cooldown
+        cooldown_remaining = self._ticker_cooldown.get(ticker, 0)
+        if cooldown_remaining > 0:
+            logger.debug("sizing_cooldown_active", ticker=ticker, bars=cooldown_remaining)
+            return False
+
+        # Gate 3: Kelly stop — if 20+ trades prove negative EV, stop bleeding
+        if (len(self._sizing_recent_outcomes) >= self._kelly_min_trades
+                and self._kelly_fraction <= 0):
+            logger.debug("sizing_kelly_stop", kelly=round(self._kelly_fraction, 4),
+                         n=len(self._sizing_recent_outcomes))
+            return False
+
+        # Gate 4+5: Signal quality
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
         lo, hi = SIZING_DIR_PROB_DEAD_ZONE
-
-        # Gate 1+2: Signal quality
         signal_ok = abs(pred_ret) > SIZING_COST_THRESHOLD and not (lo < dir_prob < hi)
         return signal_ok
 
@@ -887,11 +921,14 @@ class SignalLoop:
                     qty = pos.qty
                     notional = qty * price
                     self._pending_exit_reasons[ticker] = exit_reason
+                    # Start cooldown to prevent immediate re-entry churn
+                    self._ticker_cooldown[ticker] = SIZING_TICKER_COOLDOWN_BARS
                     logger.info(
                         "sizing_exit",
                         ticker=ticker,
                         reason=exit_reason,
                         bars_held=self._bars_held.get(ticker, 0),
+                        cooldown_bars=SIZING_TICKER_COOLDOWN_BARS,
                     )
                 else:
                     # Still holding — update tracking state
@@ -923,15 +960,15 @@ class SignalLoop:
                 if direction < 0:
                     return
 
-                # Kelly-based position sizing (replaces RL agent).
-                # When Kelly > 0: use half-Kelly as position size.
-                # When Kelly <= 0 but < min_trades: use minimum size (1%)
-                # to collect data for Kelly computation.
+                # Kelly-based position sizing.
+                # Kelly > 0: half-Kelly (proven edge). Cap at 5%.
+                # Kelly <= 0 but < 20 trades: min 1% to collect data.
+                # Kelly <= 0 with 20+ trades: blocked by entry gate (won't reach here).
                 if self._kelly_fraction > 0:
                     size_pct = min(self._kelly_fraction / 2, 0.05)  # half-Kelly, cap 5%
                     sizing_method = "kelly"
                 else:
-                    size_pct = 0.01  # 1% minimum while collecting data
+                    size_pct = 0.01  # 1% minimum — collecting data for Kelly
                     sizing_method = "min_explore"
 
                 # Apply regime scaling
@@ -1389,6 +1426,7 @@ class SignalLoop:
             self._last_reset_date = today
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
+            self._ticker_cooldown.clear()
             logger.info(
                 "daily_start_value_reset",
                 value=self._daily_start_value,
