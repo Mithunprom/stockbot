@@ -126,8 +126,9 @@ def walk_forward_split(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Per-ticker walk-forward split (last val_frac% of each ticker's bars)."""
     train_frames, val_frames = [], []
+    time_col = "time" if "time" in df.columns else "index"
     for ticker, grp in df.groupby("ticker"):
-        grp = grp.sort_values("time")
+        grp = grp.sort_values(time_col)
         cutoff = int(len(grp) * (1 - val_frac))
         train_frames.append(grp.iloc[:cutoff])
         val_frames.append(grp.iloc[cutoff:])
