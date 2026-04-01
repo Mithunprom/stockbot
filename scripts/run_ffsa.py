@@ -182,7 +182,8 @@ def run_ffsa(X: pd.DataFrame, y: pd.Series, top_n: int, feat_df: pd.DataFrame | 
         train_mask = pd.Series(False, index=X.index)
         val_mask = pd.Series(False, index=X.index)
         for ticker, grp in feat_df.groupby("ticker"):
-            grp_sorted = grp.sort_values("time")
+            _time_col = "time" if "time" in grp.columns else "index"
+            grp_sorted = grp.sort_values(_time_col)
             grp_idx = grp_sorted.index.intersection(X.index)
             cutoff = int(len(grp_idx) * 0.80)
             train_mask.loc[grp_idx[:cutoff]] = True

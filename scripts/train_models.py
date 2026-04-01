@@ -169,8 +169,9 @@ async def load_training_data(top_n: int, tickers: list[str] | None = None, max_r
 
 def walk_forward_split(df: pd.DataFrame, val_frac: float = 0.20) -> tuple[pd.DataFrame, pd.DataFrame]:
     train_frames, val_frames = [], []
+    time_col = "time" if "time" in df.columns else "index"
     for ticker, grp in df.groupby("ticker"):
-        grp = grp.sort_values("time")
+        grp = grp.sort_values(time_col)
         cutoff = int(len(grp) * (1 - val_frac))
         train_frames.append(grp.iloc[:cutoff])
         val_frames.append(grp.iloc[cutoff:])

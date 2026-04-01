@@ -131,8 +131,9 @@ class StockSequenceDataset(Dataset):
 
         max_forward = max(FORWARD_N, FORWARD_5, FORWARD_30)
 
+        time_col = "time" if "time" in df.columns else "index"
         for t_idx, (ticker, grp) in enumerate(df.groupby("ticker")):
-            grp = grp.sort_values("time").reset_index(drop=True)
+            grp = grp.sort_values(time_col).reset_index(drop=True)
             feats = grp[feature_cols].values.astype(np.float32)
 
             fwd_15 = grp["forward_return"].values.astype(np.float32)
