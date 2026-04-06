@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # ─── AI ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = Field("", description="Anthropic API key")
 
+    # ─── A/B Testing ──────────────────────────────────────────────────────────
+    ab_test_enabled: bool = False
+    ab_capital_split: float = 0.5  # fraction of capital for Pipeline A (rest → B)
+
     # ─── Trading mode (resolved from yaml config) ─────────────────────────────
     _trading_config: dict | None = None
 

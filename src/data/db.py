@@ -7,6 +7,7 @@ Tables (all created as TimescaleDB hypertables where applicable):
   feature_matrix                             — computed FFSA feature rows
   signals                                    — per-ticker model outputs
   trades                                     — execution log
+  prediction_outcomes                        — live IC tracking pairs
 """
 
 from __future__ import annotations
@@ -252,6 +253,38 @@ class Trade(Base):
     rl_action = Column(String(32))
     rl_q_value = Column(Float)
     alpaca_order_id = Column(String(64))
+    pipeline_id = Column(String(32), default="pipeline_a")  # "pipeline_a" or "pipeline_b"
+
+
+# ─── Prediction Outcomes (Live IC Tracker) ─────────────────────────────────────
+
+
+class PredictionOutcome(Base):
+    """Prediction-outcome pairs for live IC tracking.
+
+    Stores each LightGBM prediction alongside the actual forward return
+    so the Live IC Tracker can compute rolling Spearman correlation (IC)
+    and directional accuracy.
+
+    actual_return fields are NULL at insert time and backfilled by
+    LiveICTracker.fill_actual_returns() once the forward window elapses.
+    """
+
+    __tablename__ = "prediction_outcomes"
+    __table_args__ = (
+        Index("ix_pred_outcomes_ticker_ts", "ticker", "timestamp"),
+        Index("ix_pred_outcomes_unfilled", "actual_return_15m", "timestamp"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(20), nullable=False)
+    timestamp = Column(TIMESTAMP(timezone=True), nullable=False)
+    pred_return = Column(Float, nullable=False)           # LightGBM predicted return
+    dir_prob = Column(Float, nullable=False)              # LightGBM P(up) [0,1]
+    ensemble_signal = Column(Float)                       # weighted ensemble value
+    actual_return_15m = Column(Float)                     # actual 15-bar forward return
+    actual_return_30m = Column(Float)                     # actual 30-bar forward return
+    filled_at = Column(TIMESTAMP(timezone=True))          # when actuals were filled
 
 
 # ─── Engine & session factory ──────────────────────────────────────────────────
@@ -299,6 +332,7 @@ _HYPERTABLES = [
     ("news_raw", "published_at"),
     ("feature_matrix", "time"),
     ("signals", "time"),
+    ("prediction_outcomes", "timestamp"),
 ]
 
 _COMPRESSION_POLICIES = [
@@ -339,6 +373,7 @@ async def init_db() -> None:
     _migrations = [
         "ALTER TABLE options_flow ADD COLUMN IF NOT EXISTS put_call_ratio FLOAT",
         "ALTER TABLE options_flow ADD COLUMN IF NOT EXISTS iv_rank FLOAT",
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS pipeline_id VARCHAR(32) DEFAULT 'pipeline_a'",
     ]
     async with engine.begin() as conn:
         for stmt in _migrations:

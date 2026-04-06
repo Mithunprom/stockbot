@@ -53,6 +53,8 @@ _DEFAULT_UNIVERSE: list[str] = [
 # ─── Module-level singletons (populated in lifespan) ──────────────────────────
 
 _signal_loop: Any | None = None    # SignalLoop (imported lazily to avoid circular)
+_signal_loop_b: Any | None = None  # SignalLoopB (Pipeline B, A/B testing)
+_ab_runner: Any | None = None      # ABTestRunner (manages both pipelines)
 
 
 # ─── Startup / Shutdown ────────────────────────────────────────────────────────
@@ -61,7 +63,7 @@ _signal_loop: Any | None = None    # SignalLoop (imported lazily to avoid circul
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize resources on startup, clean up on shutdown."""
-    global _signal_loop
+    global _signal_loop, _signal_loop_b, _ab_runner
 
     settings = get_settings()
     logger.info(
@@ -199,15 +201,99 @@ async def lifespan(app: FastAPI):
         session_factory=session_factory,
         feature_cols=feature_cols,
         broadcast_fn=broadcast_dashboard,
+        pipeline_id="pipeline_a",
     )
-    signal_task = asyncio.create_task(
-        _signal_loop.start(), name="signal_loop"
-    )
-    logger.info("signal_loop_started")
+
+    # ── A/B Testing: Pipeline B (rules-based) ────────────────────────────────
+    signal_task_b = None
+    if settings.ab_test_enabled:
+        from src.agents.ab_runner import ABTestRunner
+        from src.agents.signal_loop_b import SignalLoopB
+        from src.data.fundamentals import FundamentalsCache
+        from src.data.market_regime import MarketRegimeMonitor
+        from src.data.social_stocktwits import StockTwitsFeed
+        from src.models.pipeline_b import PipelineBEngine
+
+        # Split capital between Pipeline A and Pipeline B
+        split = settings.ab_capital_split
+        capital_a = initial_portfolio * split
+        capital_b = initial_portfolio * (1.0 - split)
+        pos_manager._portfolio_value = capital_a
+        pos_manager._peak_value = capital_a
+
+        # Pipeline B manages positions purely in-memory (no broker sync).
+        # Since both pipelines share one Alpaca account, only Pipeline A syncs
+        # from the broker. Pipeline B tracks its own positions via open/close calls.
+        pos_manager_b = PositionManager(
+            initial_portfolio=capital_b,
+            broker_sync_enabled=False,
+        )
+
+        # Data sources for Pipeline B
+        fundamentals_cache = FundamentalsCache(universe=universe)
+        market_regime_monitor = MarketRegimeMonitor(session_factory=session_factory)
+        social_feed = StockTwitsFeed(universe=universe)
+
+        # Start data source pollers
+        fundamentals_task = asyncio.create_task(
+            fundamentals_cache.start(), name="fundamentals_cache"
+        )
+        regime_task = asyncio.create_task(
+            market_regime_monitor.start(), name="market_regime_monitor"
+        )
+        stocktwits_task = asyncio.create_task(
+            social_feed.start(), name="stocktwits_feed"
+        )
+
+        # Build Pipeline B engine
+        sentiment_scorer = ensemble._sentiment if hasattr(ensemble, '_sentiment') else None
+        pipeline_b_engine = PipelineBEngine(
+            fundamentals_cache=fundamentals_cache,
+            market_regime=market_regime_monitor,
+            social_feed=social_feed,
+            sentiment_scorer=sentiment_scorer,
+        )
+        await pipeline_b_engine.load()
+
+        # Build Pipeline B signal loop
+        _signal_loop_b = SignalLoopB(
+            universe=universe,
+            ensemble=ensemble,          # passed to parent __init__ (not used in _tick)
+            pipeline_b=pipeline_b_engine,
+            alpaca=alpaca_router,
+            circuit_breakers=circuit_breakers,
+            pos_manager=pos_manager_b,
+            session_factory=session_factory,
+            feature_cols=feature_cols,
+            broadcast_fn=broadcast_dashboard,
+            pipeline_id="pipeline_b",
+        )
+
+        # Create and start A/B runner
+        _ab_runner = ABTestRunner(
+            signal_loop_a=_signal_loop,
+            signal_loop_b=_signal_loop_b,
+            pos_manager_a=pos_manager,
+            pos_manager_b=pos_manager_b,
+            circuit_breakers=circuit_breakers,
+        )
+        await _ab_runner.start()
+        logger.info(
+            "ab_test_started",
+            capital_a=round(capital_a, 2),
+            capital_b=round(capital_b, 2),
+        )
+    else:
+        signal_task = asyncio.create_task(
+            _signal_loop.start(), name="signal_loop"
+        )
+        logger.info("signal_loop_started")
 
     # ── Phase 6: Sub-agent scheduler ─────────────────────────────────────────
     from src.agents.critique_agent import CritiqueAgent
+    from src.agents.drift_agent import DriftAgent
     from src.agents.latency_agent import LatencyAgent
+    from src.agents.live_ic_tracker import LiveICTracker
     from src.agents.profit_agent import ProfitAgent
     from src.agents.quant_research_agent import QuantResearchAgent
     from src.agents.retrain_agent import RetrainAgent
@@ -229,8 +315,13 @@ async def lifespan(app: FastAPI):
         signal_loop=_signal_loop,
         retrain_agent=retrain_agent,
     )
+    live_ic_tracker = LiveICTracker(session_factory=session_factory)
+    drift_agent = DriftAgent(lookback_days=7, live_ic_tracker=live_ic_tracker)
+    _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
+    app.state.live_ic_tracker = live_ic_tracker
+    app.state.drift_agent = drift_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -240,6 +331,8 @@ async def lifespan(app: FastAPI):
         critique_agent=critique_agent,
         retrain_agent=retrain_agent,
         quant_research_agent=quant_research_agent,
+        drift_agent=drift_agent,
+        live_ic_tracker=live_ic_tracker,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -276,6 +369,18 @@ async def lifespan(app: FastAPI):
                 logger.info("startup_profit_agent_done")
             except Exception as exc:
                 logger.warning("startup_profit_agent_failed", error=str(exc))
+        # Live IC Tracker: fill any unfilled predictions from previous session
+        try:
+            await live_ic_tracker.fill_actual_returns()
+            logger.info("startup_ic_tracker_fill_done")
+        except Exception as exc:
+            logger.warning("startup_ic_tracker_fill_failed", error=str(exc))
+        # Drift Agent: run initial drift check
+        try:
+            await drift_agent.run()
+            logger.info("startup_drift_agent_done")
+        except Exception as exc:
+            logger.warning("startup_drift_agent_failed", error=str(exc))
 
     asyncio.create_task(_run_startup_agents(), name="startup_agents")
     logger.info("startup_agents_task_created")
@@ -286,18 +391,29 @@ async def lifespan(app: FastAPI):
     # ── Graceful shutdown ─────────────────────────────────────────────────────
     logger.info("stockbot_shutting_down")
     scheduler.shutdown(wait=False)
-    if _signal_loop:
+    if _ab_runner is not None:
+        await _ab_runner.stop()
+    elif _signal_loop:
         await _signal_loop.stop()
     if _ws_enabled:
         await alpaca_stream.stop()
     await options_poller.stop()
     await news_poller.stop()
-    for task in (stream_task, options_task, news_task, signal_task):
+    shutdown_tasks = [stream_task, options_task, news_task]
+    if not settings.ab_test_enabled:
+        shutdown_tasks.append(signal_task)
+    if settings.ab_test_enabled:
+        shutdown_tasks.extend([t for t in [
+            locals().get("fundamentals_task"),
+            locals().get("regime_task"),
+            locals().get("stocktwits_task"),
+        ] if t is not None])
+    for task in shutdown_tasks:
         if task is not None:
             task.cancel()
         try:
             await task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, TypeError):
             pass
 
 
@@ -559,6 +675,36 @@ async def upload_models_s3() -> JSONResponse:
     return JSONResponse(content=results)
 
 
+@app.post("/admin/drift")
+async def trigger_drift_check() -> JSONResponse:
+    """Manually trigger model drift analysis."""
+    agent = getattr(app.state, "drift_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Drift agent not initialized"}, status_code=503)
+    report = await agent.run()
+    return JSONResponse(content=report)
+
+
+@app.post("/admin/ic/fill")
+async def trigger_ic_fill() -> JSONResponse:
+    """Manually trigger backfill of actual returns for IC tracking."""
+    tracker = getattr(app.state, "live_ic_tracker", None)
+    if tracker is None:
+        return JSONResponse(content={"error": "IC tracker not initialized"}, status_code=503)
+    result = await tracker.fill_actual_returns()
+    return JSONResponse(content=result)
+
+
+@app.get("/admin/ic/report")
+async def get_ic_report() -> JSONResponse:
+    """Generate and return the current live IC report."""
+    tracker = getattr(app.state, "live_ic_tracker", None)
+    if tracker is None:
+        return JSONResponse(content={"error": "IC tracker not initialized"}, status_code=503)
+    report = await tracker.generate_report()
+    return JSONResponse(content=report)
+
+
 @app.post("/admin/research/daily")
 async def trigger_research_daily() -> JSONResponse:
     """Manually trigger quant research daily analysis."""
@@ -577,6 +723,16 @@ async def trigger_research_weekly() -> JSONResponse:
         return JSONResponse(content={"error": "Quant research agent not initialized"}, status_code=503)
     report = await agent.run_weekly()
     return JSONResponse(content=report)
+
+
+@app.get("/ab/status")
+async def ab_status() -> JSONResponse:
+    """Return side-by-side A/B pipeline comparison (active only when AB_TEST_ENABLED=true)."""
+    if _ab_runner is None:
+        return JSONResponse(
+            content={"ab_test_active": False, "note": "A/B testing not enabled"},
+        )
+    return JSONResponse(content=_ab_runner.get_combined_status())
 
 
 @app.get("/signals")

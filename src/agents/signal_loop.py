@@ -34,6 +34,7 @@ except ImportError:
 from src.data.options_flow import get_options_flow
 from src.execution.alpaca import AlpacaOrderRouter, OrderRequest
 from src.execution.position_manager import PositionManager
+from src.execution.position_sizer import SmartPositionSizer, SECTOR_MAP
 from src.models.ensemble import EnsembleEngine, EnsembleSignal
 from src.risk.circuit_breakers import CircuitBreakers, RiskState
 
@@ -45,14 +46,9 @@ ACTION_NAMES = [
 ]
 STATE_DIM = 29
 
-# Position-sizing env constants (from position_sizing_env.py)
-SIZING_ACTION_NAMES = ["skip", "tiny", "small", "medium", "large"]
-# [P0] Halved per quant research agent — Kelly=-0.68 means negative EV.
-# Smaller positions limit bleed while we validate signal edge.
-SIZING_ACTION_PCTS = {0: 0.0, 1: 0.01, 2: 0.02, 3: 0.03, 4: 0.05}
-SIZING_STATE_DIM = 18
-SIZING_COST_THRESHOLD = 0.003   # raised from 0.0015 — filter weak signals
-SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)
+# Signal quality thresholds for entry gating
+SIZING_COST_THRESHOLD = 0.003   # min |pred_return| to consider entry
+SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # dir_prob inside this range → skip
 SIZING_REVERSAL_BARS = 2
 
 # Anti-churn controls
@@ -103,31 +99,6 @@ def _load_rl_agent() -> Any | None:
         return None
 
 
-def _load_sizing_agent() -> Any | None:
-    """Load the position-sizing PPO model (best_sizing_ppo.zip).
-
-    Returns the loaded model or None if not available.
-    """
-    from pathlib import Path
-
-    ckpt_path = Path("models/rl_agent/best_sizing_ppo.zip")
-    if not ckpt_path.exists():
-        logger.info("sizing_agent_not_found")
-        return None
-
-    try:
-        from stable_baselines3 import PPO
-        model = PPO.load(str(ckpt_path), device="cpu")
-        logger.info("sizing_agent_loaded", path=str(ckpt_path))
-        return model
-    except ImportError:
-        logger.warning("sizing_agent_sb3_not_installed")
-        return None
-    except Exception as exc:
-        logger.warning("sizing_agent_load_failed", error=str(exc))
-        return None
-
-
 class SignalLoop:
     """Runs the 1m bar → ensemble → execution loop.
 
@@ -159,6 +130,7 @@ class SignalLoop:
         session_factory: Any,
         feature_cols: list[str],
         broadcast_fn: Callable[[dict[str, Any]], Coroutine] | None = None,
+        pipeline_id: str = "pipeline_a",
     ) -> None:
         self._universe = universe
         self._ensemble = ensemble
@@ -166,6 +138,7 @@ class SignalLoop:
         self._cb = circuit_breakers
         self._pm = pos_manager
         self._sf = session_factory
+        self._pipeline_id = pipeline_id
         self._feature_cols = feature_cols  # use all FFSA features (matches model)
         self._n_features = len(self._feature_cols)
         self._broadcast = broadcast_fn
@@ -173,15 +146,21 @@ class SignalLoop:
         self._latest_signals: list[EnsembleSignal] = []
         self._daily_start_value: float = pos_manager.portfolio_value
         self._consecutive_losses: int = 0
+        # A/B testing: reference to the OTHER pipeline's PositionManager.
+        # When set, prevents both pipelines from opening the same ticker.
+        self._other_pm: PositionManager | None = None
         self._open_trade_ids: dict[str, int] = {}  # ticker → Trade.id (for exit matching)
 
-        # RL agents (legacy — kept for backward compat but not used for sizing)
+        # RL agent (legacy — kept for rule-based / non-sizing fallback)
         self._rl_agent: Any | None = _load_rl_agent()
-        self._sizing_agent: Any | None = _load_sizing_agent()
 
-        # Sizing mode: LightGBM gates entry/exit, Kelly sizes positions.
-        # Activated when LightGBM is loaded (doesn't require RL agent anymore).
+        # Sizing mode: LightGBM gates entry/exit, SmartPositionSizer sizes.
+        # Activated when LightGBM is loaded.
         self._sizing_mode = self._ensemble._lgbm is not None
+
+        # Smart Position Sizer — 6-stage pipeline replacing flat % / RL sizing
+        from src.config import get_settings
+        self._sizer = SmartPositionSizer(mode=get_settings().alpaca_mode)
 
         # Sizing mode state tracking (per-ticker)
         self._entry_directions: dict[str, int] = {}      # +1 long, -1 short
@@ -194,12 +173,27 @@ class SignalLoop:
         self._sizing_n_trades_today: int = 0
         self._ticker_cooldown: dict[str, int] = {}  # ticker → bars remaining
 
+        # Per-ticker ATR cache (refreshed each tick from feature_matrix)
+        self._ticker_atr: dict[str, float] = {}
+
         # Kelly gate — blocks new entries when rolling Kelly fraction < 0.
         # Updated after each closed trade. Starts at 0 (conservative: no trades
         # until enough history proves positive expected value).
         self._kelly_fraction: float = 0.0
         self._kelly_min_trades: int = 20  # need ≥20 closed trades to compute
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
+
+        # Live IC Tracker — set via set_ic_tracker() after construction
+        # (tracker is created after signal loop in main.py startup sequence)
+        self._ic_tracker: Any | None = None
+
+    def set_ic_tracker(self, tracker: Any) -> None:
+        """Attach a LiveICTracker instance for prediction recording.
+
+        Called from main.py after both the signal loop and tracker are created.
+        """
+        self._ic_tracker = tracker
+        logger.info("ic_tracker_attached_to_signal_loop")
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -303,29 +297,36 @@ class SignalLoop:
         if not self._sizing_mode:
             return []
 
-        portfolio_value = self._pm.portfolio_value
+        sector_notionals = self._compute_sector_notionals()
         result = []
         for sig in self._latest_signals:
             if not self._sizing_entry_gate_open(sig):
                 continue
-            # Skip tickers with existing positions
             if sig.ticker in self._pm._positions:
                 continue
 
-            direction = 1.0 if float(sig.lgbm_pred_return) > 0 else -1.0
-            side = "buy" if direction > 0 else "sell"
+            sizing = self._sizer.compute(
+                ticker=sig.ticker,
+                dir_prob=float(sig.lgbm_dir_prob),
+                pred_return=float(sig.lgbm_pred_return),
+                atr_pct=self._ticker_atr.get(sig.ticker, 0.01),
+                price=sig.price if hasattr(sig, "price") else 0.0,
+                portfolio_value=self._pm.portfolio_value,
+                portfolio_heat=self._pm.portfolio_heat,
+                sector_notionals=sector_notionals,
+                kelly_fraction=self._kelly_fraction,
+            )
+            if sizing is None:
+                continue
 
-            # Estimate sizing action from RL agent or default
-            size_pct = 0.02  # default tiny
-
-            # Get current price from latest signal data
             sig_dict = sig.to_dict()
             result.append({
                 **sig_dict,
                 "actionable": True,
-                "recommended_side": side,
-                "recommended_size_pct": round(size_pct, 4),
-                "recommended_notional": round(portfolio_value * size_pct, 2),
+                "recommended_side": sizing.side,
+                "recommended_size_pct": round(sizing.size_pct, 4),
+                "recommended_notional": round(sizing.notional, 2),
+                "sizing_stages": sizing.to_dict()["stages"],
                 "stop_loss_pct": SIZING_STOP_LOSS,
                 "take_profit_pct": SIZING_TAKE_PROFIT,
                 "trailing_stop_pct": SIZING_TRAILING_STOP,
@@ -370,6 +371,7 @@ class SignalLoop:
             "kelly_n_trades": len(self._sizing_recent_outcomes),
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
+            "sector_notionals": self._compute_sector_notionals(),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -449,6 +451,26 @@ class SignalLoop:
             signals = await self._ensemble.compute_universe(universe_features)
             self._latest_signals = signals
             logger.info("signal_loop_tick", n_signals=len(signals))
+
+        # 3b. Record predictions for live IC tracking (fire-and-forget)
+        if self._ic_tracker is not None:
+            for sig in signals:
+                # Only record LightGBM predictions (skip rule-based fallback)
+                if sig.lgbm_pred_return != 0.0 or sig.lgbm_dir_prob != 0.5:
+                    try:
+                        await self._ic_tracker.record_prediction(
+                            ticker=sig.ticker,
+                            timestamp=sig.timestamp,
+                            pred_return=sig.lgbm_pred_return,
+                            dir_prob=sig.lgbm_dir_prob,
+                            ensemble_signal=sig.ensemble_signal,
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "ic_tracker_record_error",
+                            ticker=sig.ticker,
+                            error=str(exc),
+                        )
 
         # 4. Act on signals — RL agent uses obs from features; fallback uses threshold
         # universe_features only exists in the ML path; rule-based path has no tensors
@@ -610,66 +632,18 @@ class SignalLoop:
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
         return obs
 
-    # ── Sizing-mode observation builder ──────────────────────────────────────
+    # ── Sector notional computation ────────────────────────────────────────────
 
-    def _build_sizing_obs(
-        self,
-        sig: EnsembleSignal,
-        ticker: str,
-        features_arr: np.ndarray | None,
-    ) -> np.ndarray:
-        """Build 18-dim observation for position-sizing RL agent.
+    def _compute_sector_notionals(self) -> dict[str, float]:
+        """Compute total $ deployed per sector from open positions.
 
-        Matches PositionSizingEnv._build_obs() state space.
+        Used by SmartPositionSizer stage 4 to enforce sector concentration limits.
         """
-        pred_ret = float(sig.lgbm_pred_return)
-        dir_prob = float(sig.lgbm_dir_prob)
-        drawdown = max(0.0, 1.0 - self._pm.portfolio_value / max(self._daily_start_value, 1.0))
-        rolling_vol = float(np.std(self._sizing_returns_history[-20:]) + 1e-9)
-
-        # Position state for this ticker
-        pos = self._pm._positions.get(ticker)
-        position_pct = 0.0
-        unrealized_pnl = 0.0
-        bars_held = 0
-
-        if pos is not None:
-            position_pct = (pos.qty * pos.avg_entry_price) / max(self._pm.portfolio_value, 1.0)
-            if pos.side == "short":
-                position_pct = -position_pct
-            unrealized_pnl = getattr(pos, "unrealized_pnl_pct", 0.0)
-            bars_held = self._bars_held.get(ticker, 0)
-
-        recent_wr = 0.5
-        if self._sizing_recent_outcomes:
-            recent_wr = sum(1 for x in self._sizing_recent_outcomes if x > 0) / len(self._sizing_recent_outcomes)
-
-        state = [
-            pred_ret * 100.0,                                       # [0] scaled pred return
-            dir_prob,                                                # [1] direction probability
-            abs(pred_ret) / max(SIZING_COST_THRESHOLD, 1e-6),       # [2] signal-to-cost ratio
-            float(position_pct),                                     # [3] current position
-            float(unrealized_pnl),                                   # [4] unrealized PnL
-            float(bars_held) / 60.0,                                 # [5] normalized bars held
-            float(abs(position_pct)),                                # [6] portfolio heat
-            float(drawdown),                                         # [7] drawdown
-            float(rolling_vol) * 100.0,                              # [8] scaled rolling vol
-            20.0 / 100.0,                                            # [9] VIX placeholder
-            0.0,                                                     # [10] regime
-            float(recent_wr),                                        # [11] recent win rate
-            float(self._sizing_n_trades_today) / 10.0,              # [12] trades today
-        ]
-
-        # Top-5 FFSA features from most recent row
-        if features_arr is not None and len(features_arr) > 0:
-            last_row = features_arr[-1][:5].tolist()
-        else:
-            last_row = []
-        ffsa_padded = last_row + [0.0] * (5 - len(last_row))
-        state.extend(ffsa_padded[:5])
-
-        obs = np.array(state[:SIZING_STATE_DIM], dtype=np.float32)
-        return np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
+        sector_notionals: dict[str, float] = {}
+        for ticker, pos in self._pm._positions.items():
+            sector = SECTOR_MAP.get(ticker, "other")
+            sector_notionals[sector] = sector_notionals.get(sector, 0.0) + pos.notional
+        return sector_notionals
 
     # ── Sizing-mode entry/exit gating ────────────────────────────────────────
 
@@ -872,8 +846,6 @@ class SignalLoop:
 
     # ── Order execution ───────────────────────────────────────────────────────
 
-    MAX_PORTFOLIO_HEAT: float = 0.80   # circuit breaker: no new entries above 80%
-
     async def _act_on_signal(
         self,
         sig: EnsembleSignal,
@@ -881,25 +853,20 @@ class SignalLoop:
         features_arr: np.ndarray | None = None,
         regime: int = 0,
     ) -> None:
-        """Use RL agent (or threshold fallback) to decide and execute an action."""
+        """Use SmartPositionSizer (or RL/threshold fallback) to decide and execute."""
         if self._cb.is_halted:
             return
 
         ticker = sig.ticker
         has_position = ticker in self._pm._positions
 
-        # Portfolio heat circuit breaker — no new entries when > 80% deployed.
-        # Sell orders are always allowed (they reduce heat).
-        if not has_position and self._pm.portfolio_heat > self.MAX_PORTFOLIO_HEAT:
-            logger.warning(
-                "new_entry_blocked_portfolio_heat",
-                ticker=ticker,
-                heat=round(self._pm.portfolio_heat, 3),
-                limit=self.MAX_PORTFOLIO_HEAT,
-            )
-            return
+        # A/B conflict prevention: skip entry if the OTHER pipeline holds this ticker
+        if not has_position and self._other_pm is not None:
+            if ticker in self._other_pm._positions:
+                logger.debug("ab_ticker_conflict_skip", ticker=ticker, pipeline=self._pipeline_id)
+                return
 
-        # Regime-based position size scale (0.5× in high_vol, 0.7× in choppy)
+        # Regime logging (sizing constraints are handled inside SmartPositionSizer)
         from src.features.regime import REGIME_GATE, regime_label
         _, size_scale = REGIME_GATE.get(regime, (0.40, 1.0))
         if size_scale < 1.0 and not has_position:
@@ -943,8 +910,6 @@ class SignalLoop:
                     return
             else:
                 # Block crypto entries — LightGBM was trained on equities only.
-                # Running it on crypto features produces noise predictions that
-                # churn through stop-losses and bleed the portfolio.
                 if ticker in self.CRYPTO_TICKERS:
                     logger.debug("sizing_skip_crypto", ticker=ticker)
                     return
@@ -960,25 +925,25 @@ class SignalLoop:
                 if direction < 0:
                     return
 
-                # Kelly-based position sizing.
-                # Kelly > 0: half-Kelly (proven edge). Cap at 5%.
-                # Kelly <= 0 but < 20 trades: min 1% to collect data.
-                # Kelly <= 0 with 20+ trades: blocked by entry gate (won't reach here).
-                if self._kelly_fraction > 0:
-                    size_pct = min(self._kelly_fraction / 2, 0.05)  # half-Kelly, cap 5%
-                    sizing_method = "kelly"
-                else:
-                    size_pct = 0.01  # 1% minimum — collecting data for Kelly
-                    sizing_method = "min_explore"
-
-                # Apply regime scaling
-                size_pct *= size_scale
-
-                side = "buy"
-                notional = self._pm.compute_position_size(
-                    ticker, base_size_pct=size_pct
+                # ── Smart Position Sizer: 6-stage pipeline ───────────────────
+                sector_notionals = self._compute_sector_notionals()
+                sizing = self._sizer.compute(
+                    ticker=ticker,
+                    dir_prob=float(sig.lgbm_dir_prob),
+                    pred_return=float(sig.lgbm_pred_return),
+                    atr_pct=self._ticker_atr.get(ticker, 0.01),
+                    price=price,
+                    portfolio_value=self._pm.portfolio_value,
+                    portfolio_heat=self._pm.portfolio_heat,
+                    sector_notionals=sector_notionals,
+                    kelly_fraction=self._kelly_fraction,
                 )
-                qty = round(notional / max(price, 0.01), 2)
+                if sizing is None:
+                    return
+
+                side = sizing.side
+                notional = sizing.notional
+                qty = sizing.shares
 
                 # Track entry state
                 self._entry_directions[ticker] = direction
@@ -991,10 +956,12 @@ class SignalLoop:
                 logger.info(
                     "sizing_entry",
                     ticker=ticker,
-                    sizing=sizing_method,
-                    size_pct=round(size_pct, 3),
+                    sizing="smart_pipeline",
+                    size_pct=round(sizing.size_pct, 4),
+                    stages=f"{sizing.stage1_base_pct:.3f}→{sizing.stage2_atr_pct:.3f}→{sizing.stage3_kelly_pct:.3f}→{sizing.stage4_constraint_pct:.3f}",
                     direction="long" if direction > 0 else "short",
                     lgbm_pred=round(sig.lgbm_pred_return, 5),
+                    atr=round(self._ticker_atr.get(ticker, 0.01), 4),
                 )
 
         # ── Block crypto entries in non-sizing modes too ──────────────────────
@@ -1098,7 +1065,7 @@ class SignalLoop:
                 )
             else:
                 # Capture entry price BEFORE closing position
-                pos = self._pm.get_position(ticker)
+                pos = self._pm._positions.get(ticker)
                 entry_price = (
                     pos.avg_entry_price if pos else
                     self._entry_prices.get(ticker, fill_price)
@@ -1178,6 +1145,7 @@ class SignalLoop:
                     sentiment_index=sig.sentiment_index,
                     ensemble_signal=sig.ensemble_signal,
                     alpaca_order_id=order_id,
+                    pipeline_id=self._pipeline_id,
                 )
                 session.add(trade)
                 await session.flush()
@@ -1355,6 +1323,10 @@ class SignalLoop:
                 # Latest regime from most-recent row (last after reversing)
                 latest_row = feat_rows[-1] or {}
                 regime_map[ticker] = int(latest_row.get("regime", 1) or 1)
+                # Cache per-ticker ATR for SmartPositionSizer
+                atr_val = latest_row.get("atr_pct")
+                if atr_val is not None:
+                    self._ticker_atr[ticker] = float(atr_val)
         return result, regime_map
 
     async def _fetch_prices(self) -> dict[str, float]:

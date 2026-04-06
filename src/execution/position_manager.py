@@ -63,11 +63,13 @@ class PositionManager:
         max_position_pct: float = 0.25,
         cash_buffer_pct: float = 0.10,
         target_daily_vol: float = 0.01,
+        broker_sync_enabled: bool = True,
     ) -> None:
         self.portfolio_value = initial_portfolio
         self.max_position_pct = max_position_pct
         self.cash_buffer_pct = cash_buffer_pct
         self.target_daily_vol = target_daily_vol
+        self.broker_sync_enabled = broker_sync_enabled
 
         self._positions: dict[str, Position] = {}
         self._daily_returns: list[float] = []
@@ -214,7 +216,13 @@ class PositionManager:
     # ── Sync from broker ─────────────────────────────────────────────────────
 
     async def sync_from_broker(self, alpaca_router: Any) -> None:
-        """Sync position state from Alpaca to catch any fills we missed."""
+        """Sync position state from Alpaca to catch any fills we missed.
+
+        Skipped when broker_sync_enabled=False (used by Pipeline B in A/B
+        testing to prevent both managers claiming the same broker positions).
+        """
+        if not self.broker_sync_enabled:
+            return
         try:
             broker_positions = await alpaca_router.get_positions()
             account = await alpaca_router.get_account()
