@@ -64,12 +64,14 @@ class PositionManager:
         cash_buffer_pct: float = 0.10,
         target_daily_vol: float = 0.01,
         broker_sync_enabled: bool = True,
+        universe: list[str] | None = None,
     ) -> None:
         self.portfolio_value = initial_portfolio
         self.max_position_pct = max_position_pct
         self.cash_buffer_pct = cash_buffer_pct
         self.target_daily_vol = target_daily_vol
         self.broker_sync_enabled = broker_sync_enabled
+        self._universe: set[str] = set(universe) if universe else set()
 
         self._positions: dict[str, Position] = {}
         self._daily_returns: list[float] = []
@@ -229,16 +231,27 @@ class PositionManager:
 
             self.portfolio_value = account.get("portfolio_value", self.portfolio_value)
 
-            # Rebuild position map from broker state
+            # Rebuild position map from broker state.
+            # When running in A/B mode, only sync positions for tickers in
+            # this pipeline's universe. Otherwise the broker's full position
+            # list (including the other pipeline's positions and orphaned
+            # crypto) inflates portfolio_heat and triggers circuit breakers.
             self._positions = {}
+            skipped = 0
             for pos in broker_positions:
-                self._positions[pos["ticker"]] = Position(
-                    ticker=pos["ticker"],
+                ticker = pos["ticker"]
+                if self._universe and ticker not in self._universe:
+                    skipped += 1
+                    continue
+                self._positions[ticker] = Position(
+                    ticker=ticker,
                     side="long" if pos.get("side") == "long" else "short",
                     qty=abs(pos["qty"]),
                     avg_entry_price=pos["avg_entry_price"],
                     last_price=pos["avg_entry_price"],   # will be updated on next price tick
                 )
+            if skipped:
+                logger.info("sync_skipped_non_universe", skipped=skipped)
 
             logger.info(
                 "positions_synced",

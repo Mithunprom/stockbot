@@ -47,7 +47,7 @@ ACTION_NAMES = [
 STATE_DIM = 29
 
 # Signal quality thresholds for entry gating
-SIZING_COST_THRESHOLD = 0.003   # min |pred_return| to consider entry
+SIZING_COST_THRESHOLD = 0.001   # min |pred_return| to consider entry (liquid mega-cap round-trip cost ~0.02-0.05%)
 SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # dir_prob inside this range → skip
 SIZING_REVERSAL_BARS = 2
 

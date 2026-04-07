@@ -25,7 +25,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-TRADING_THRESHOLD = 0.0025  # 0.25% — only generate signal if |pred| exceeds this
+TRADING_THRESHOLD = 0.0005  # 0.05% — direction filter; entry gate (SIZING_COST_THRESHOLD) handles actual trade gating
 MODEL_DIR = Path("models/lgbm")
 
 

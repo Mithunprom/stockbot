@@ -152,7 +152,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("portfolio_sync_failed_using_default", error=str(exc))
 
-    pos_manager = PositionManager(initial_portfolio=initial_portfolio)
+    pos_manager = PositionManager(initial_portfolio=initial_portfolio, universe=universe)
 
     # Sync existing broker positions into pos_manager BEFORE signal loop starts.
     # Without this, if the broker already has open positions from a previous session,
