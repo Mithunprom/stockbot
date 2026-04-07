@@ -80,7 +80,8 @@ class CircuitBreakers:
             await cb.halt_trading(reason=triggered)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pipeline_id: str = "") -> None:
+        self._pipeline_id = pipeline_id
         self._halted: bool = False
         self._halt_reason: str = ""
         self._halt_time: datetime | None = None
@@ -253,15 +254,17 @@ class CircuitBreakers:
         self._halted = True
         self._halt_reason = reason
         self._halt_time = datetime.now(timezone.utc)
+        pipeline_label = f" [{self._pipeline_id}]" if self._pipeline_id else ""
         logger.critical(
             "trading_halted",
+            pipeline=self._pipeline_id,
             reason=reason,
             message=message,
             requires_human_restart=True,
         )
         # Print escalation to console
         print(
-            f"\n🚨 ESCALATION — Risk Agent — {self._halt_time.isoformat()}\n"
+            f"\n🚨 ESCALATION — Risk Agent{pipeline_label} — {self._halt_time.isoformat()}\n"
             f"Issue: {message}\n"
             f"Action taken: Trading halted automatically.\n"
             f"Required from human: Manual restart required after review.\n"

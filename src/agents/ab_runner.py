@@ -75,13 +75,15 @@ class ABTestRunner:
         signal_loop_b: Any,       # SignalLoopB
         pos_manager_a: Any,       # PositionManager
         pos_manager_b: Any,       # PositionManager
-        circuit_breakers: Any,    # CircuitBreakers
+        circuit_breakers_a: Any,  # CircuitBreakers for Pipeline A
+        circuit_breakers_b: Any,  # CircuitBreakers for Pipeline B
     ) -> None:
         self._loop_a = signal_loop_a
         self._loop_b = signal_loop_b
         self._pm_a = pos_manager_a
         self._pm_b = pos_manager_b
-        self._cb = circuit_breakers
+        self._cb_a = circuit_breakers_a
+        self._cb_b = circuit_breakers_b
         self._task_a: asyncio.Task | None = None
         self._task_b: asyncio.Task | None = None
 
@@ -139,11 +141,17 @@ class ABTestRunner:
             "combined": {
                 "portfolio_value": round(combined_value, 2),
                 "portfolio_heat": round(combined_heat, 4),
-                "halted": self._cb.is_halted,
-                "halt_reason": self._cb.halt_reason,
             },
-            "pipeline_a": status_a.to_dict(),
-            "pipeline_b": status_b.to_dict(),
+            "pipeline_a": {
+                **status_a.to_dict(),
+                "halted": self._cb_a.is_halted,
+                "halt_reason": self._cb_a.halt_reason,
+            },
+            "pipeline_b": {
+                **status_b.to_dict(),
+                "halted": self._cb_b.is_halted,
+                "halt_reason": self._cb_b.halt_reason,
+            },
         }
 
     def _get_pipeline_status(

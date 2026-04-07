@@ -29,6 +29,8 @@ def create_scheduler(
     critique_agent: Any | None = None,
     retrain_agent: Any | None = None,
     quant_research_agent: Any | None = None,
+    drift_agent: Any | None = None,
+    live_ic_tracker: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -37,6 +39,8 @@ def create_scheduler(
         risk_agent: RiskAgent instance.
         latency_agent: LatencyAgent instance.
         profit_agent: ProfitAgent instance (optional — enable after Week 4).
+        drift_agent: DriftAgent instance (optional — enable after Week 4).
+        live_ic_tracker: LiveICTracker instance (optional).
         mode: "paper" or "live".
 
     Returns:
@@ -144,6 +148,23 @@ def create_scheduler(
             misfire_grace_time=1800,
         )
 
+    # ── Model Drift Agent: weekly Saturday morning (enable Week 4+) ──────────
+    if drift_agent is not None:
+        scheduler.add_job(
+            lambda: asyncio.create_task(drift_agent.run()),
+            trigger=CronTrigger(
+                day_of_week="sat",
+                hour=8,
+                minute=0,
+                timezone="America/New_York",
+            ),
+            id="drift_agent",
+            name="Model Drift Agent (weekly)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
     # ── Quant Research Agent: daily 17:30 ET + weekly Saturday 10:00 ET ───────
     if quant_research_agent is not None:
         # Daily analysis (after profit agent)
@@ -175,6 +196,39 @@ def create_scheduler(
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,
+        )
+
+    # ── Live IC Tracker: fill actuals every 15 min + daily report ──────────────
+    if live_ic_tracker is not None:
+        # Fill actual returns every 15 minutes during market hours
+        scheduler.add_job(
+            lambda: asyncio.create_task(live_ic_tracker.run_fill()),
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour="10-16",
+                minute="7,22,37,52",
+                timezone="America/New_York",
+            ),
+            id="ic_tracker_fill",
+            name="Live IC Tracker (fill actuals, 15 min)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=120,
+        )
+        # Daily IC report at 16:45 ET (after market close, before profit agent)
+        scheduler.add_job(
+            lambda: asyncio.create_task(live_ic_tracker.run_report()),
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour=16,
+                minute=45,
+                timezone="America/New_York",
+            ),
+            id="ic_tracker_report",
+            name="Live IC Tracker (daily report)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=600,
         )
 
     logger.info(

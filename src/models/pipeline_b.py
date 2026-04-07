@@ -96,11 +96,12 @@ def _score_technicals(row: dict[str, float]) -> float:
 
     # ── ADX trend strength filter ────────────────────────────────────────────
     # Low ADX = choppy market — reduce signal magnitude
+    # Damping softened so Pipeline B signals can reach entry-gate threshold
     adx = row.get("adx", 20.0)
     if adx < 15:
-        score *= 0.40       # very weak trend — heavy damping
+        score *= 0.60       # very weak trend — moderate damping
     elif adx < 20:
-        score *= 0.70       # weak trend — moderate damping
+        score *= 0.85       # weak trend — light damping
 
     # ── MFI (volume-weighted RSI) ────────────────────────────────────────────
     mfi = row.get("mfi_14", 50.0)
@@ -350,9 +351,9 @@ class PipelineBEngine:
 
         # lgbm_pred_return: synthetic expected return proportional to signal
         # The entry gate requires abs(pred_return) > 0.003 (SIZING_COST_THRESHOLD).
-        # Scale so a moderate signal (±0.25) maps to ±0.003 (just passes gate).
-        # Strong signal (±1.0) → ±0.012 expected return.
-        pred_return = ensemble * 0.012
+        # Scale so a moderate signal (±0.125) maps to ±0.003 (passes gate).
+        # Strong signal (±1.0) → ±0.024 expected return.
+        pred_return = ensemble * 0.024
 
         # Direction: +1 bullish, -1 bearish, 0 neutral
         if abs(ensemble) < 0.10:

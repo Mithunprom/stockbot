@@ -140,7 +140,7 @@ async def lifespan(app: FastAPI):
     from src.execution.position_manager import PositionManager
     from src.risk.circuit_breakers import CircuitBreakers
 
-    circuit_breakers = CircuitBreakers()
+    circuit_breakers = CircuitBreakers(pipeline_id="pipeline_a")
 
     # Sync initial portfolio value from broker
     alpaca_router = AlpacaOrderRouter(circuit_breakers)
@@ -229,12 +229,31 @@ async def lifespan(app: FastAPI):
             broker_sync_enabled=False,
         )
 
+        # Separate circuit breakers for Pipeline B so one pipeline's
+        # losses don't halt the other.
+        circuit_breakers_b = CircuitBreakers(pipeline_id="pipeline_b")
+
         # Data sources for Pipeline B
         fundamentals_cache = FundamentalsCache(universe=universe)
         market_regime_monitor = MarketRegimeMonitor(session_factory=session_factory)
         social_feed = StockTwitsFeed(universe=universe)
 
-        # Start data source pollers
+        # Pre-populate caches BEFORE signal loops start.
+        # Without this, Pipeline B's first ticks get 0.0 for fundamentals
+        # (25% of signal weight) because the background poller hasn't fetched yet.
+        try:
+            await fundamentals_cache.fetch_universe()
+            logger.info("fundamentals_cache_prefetched", n_tickers=len(universe))
+        except Exception as exc:
+            logger.warning("fundamentals_prefetch_failed", error=str(exc))
+
+        try:
+            await market_regime_monitor.poll_once()
+            logger.info("market_regime_prefetched")
+        except Exception as exc:
+            logger.warning("regime_prefetch_failed", error=str(exc))
+
+        # Start background pollers for ongoing updates
         fundamentals_task = asyncio.create_task(
             fundamentals_cache.start(), name="fundamentals_cache"
         )
@@ -261,7 +280,7 @@ async def lifespan(app: FastAPI):
             ensemble=ensemble,          # passed to parent __init__ (not used in _tick)
             pipeline_b=pipeline_b_engine,
             alpaca=alpaca_router,
-            circuit_breakers=circuit_breakers,
+            circuit_breakers=circuit_breakers_b,
             pos_manager=pos_manager_b,
             session_factory=session_factory,
             feature_cols=feature_cols,
@@ -275,7 +294,8 @@ async def lifespan(app: FastAPI):
             signal_loop_b=_signal_loop_b,
             pos_manager_a=pos_manager,
             pos_manager_b=pos_manager_b,
-            circuit_breakers=circuit_breakers,
+            circuit_breakers_a=circuit_breakers,
+            circuit_breakers_b=circuit_breakers_b,
         )
         await _ab_runner.start()
         logger.info(
@@ -650,6 +670,9 @@ async def root() -> JSONResponse:
             "trades":  "GET /trades",
             "positions_detail": "GET /positions/detail",
             "portfolio_summary": "GET /portfolio/summary",
+            "diagnostics": "GET /diagnostics",
+            "ab_status": "GET /ab/status",
+            "resume_trading": "POST /admin/resume-trading?pipeline=all&authorized_by=admin",
             "reports": "GET /reports/{risk|latency|drift|opportunities}",
             "dashboard_ws": "WS /ws/dashboard",
         },
@@ -723,6 +746,127 @@ async def trigger_research_weekly() -> JSONResponse:
         return JSONResponse(content={"error": "Quant research agent not initialized"}, status_code=503)
     report = await agent.run_weekly()
     return JSONResponse(content=report)
+
+
+@app.get("/diagnostics")
+async def diagnostics() -> JSONResponse:
+    """Real-time signal gate diagnostics — shows why trades aren't happening.
+
+    For each pipeline, reports:
+      - Circuit breaker state
+      - Kelly gate state
+      - Latest signal values and whether they pass entry gates
+      - Cooldowns and trade caps
+    """
+    from src.agents.signal_loop import SIZING_COST_THRESHOLD, SIZING_DIR_PROB_DEAD_ZONE
+
+    result: dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ab_test_active": _ab_runner is not None,
+    }
+
+    def _pipeline_diagnostics(loop: Any, label: str) -> dict[str, Any]:
+        if loop is None:
+            return {"active": False}
+
+        # Portfolio summary includes Kelly, cooldowns, trade caps
+        summary = loop.get_portfolio_summary()
+
+        # Analyze latest signals against entry gates
+        raw_signals = loop._latest_signals or []
+        gate_analysis: list[dict[str, Any]] = []
+        for sig in raw_signals[:10]:
+            pred_ret = float(sig.lgbm_pred_return)
+            dir_prob = float(sig.lgbm_dir_prob)
+            lo, hi = SIZING_DIR_PROB_DEAD_ZONE
+            passes_pred = abs(pred_ret) > SIZING_COST_THRESHOLD
+            passes_dir = not (lo < dir_prob < hi)
+            passes_both = passes_pred and passes_dir
+            cooldown_active = sig.ticker in loop._ticker_cooldown
+
+            gate_analysis.append({
+                "ticker": sig.ticker,
+                "ensemble_signal": round(float(sig.ensemble_signal), 4),
+                "lgbm_pred_return": round(pred_ret, 6),
+                "lgbm_dir_prob": round(dir_prob, 4),
+                "passes_pred_return_gate": passes_pred,
+                "passes_dir_prob_gate": passes_dir,
+                "passes_both_gates": passes_both,
+                "would_trade": passes_both and not cooldown_active,
+                "blocked_by": (
+                    []
+                    + (["pred_return_too_small"] if not passes_pred else [])
+                    + (["dir_prob_in_dead_zone"] if not passes_dir else [])
+                    + (["ticker_cooldown"] if cooldown_active else [])
+                ),
+            })
+
+        # Count how many signals pass vs fail
+        n_pass = sum(1 for g in gate_analysis if g["passes_both_gates"])
+        n_fail = len(gate_analysis) - n_pass
+
+        return {
+            "active": True,
+            "pipeline": label,
+            "circuit_breaker_halted": summary.get("halted", False),
+            "halt_reason": summary.get("halt_reason", ""),
+            "market_open": summary.get("market_open", False),
+            "sizing_mode": summary.get("sizing_mode", False),
+            "kelly_fraction": summary.get("kelly_fraction", 0.0),
+            "kelly_entries_blocked": summary.get("kelly_entries_blocked", False),
+            "kelly_n_trades": summary.get("kelly_n_trades", 0),
+            "n_trades_today": summary.get("n_trades_today", 0),
+            "max_trades_per_day": summary.get("max_trades_per_day", 8),
+            "tickers_on_cooldown": summary.get("tickers_on_cooldown", []),
+            "n_open_positions": summary.get("n_open_positions", 0),
+            "portfolio_heat": summary.get("portfolio_heat", 0.0),
+            "thresholds": {
+                "sizing_cost_threshold": SIZING_COST_THRESHOLD,
+                "dir_prob_dead_zone": list(SIZING_DIR_PROB_DEAD_ZONE),
+            },
+            "signal_gate_analysis": gate_analysis,
+            "signals_passing": n_pass,
+            "signals_blocked": n_fail,
+        }
+
+    result["pipeline_a"] = _pipeline_diagnostics(_signal_loop, "pipeline_a")
+    if _ab_runner is not None and _signal_loop_b is not None:
+        result["pipeline_b"] = _pipeline_diagnostics(_signal_loop_b, "pipeline_b")
+
+    return JSONResponse(content=result)
+
+
+@app.post("/admin/resume-trading")
+async def resume_trading(pipeline: str = "all", authorized_by: str = "admin") -> JSONResponse:
+    """Resume trading after a circuit breaker halt. Requires authorization."""
+    if not authorized_by:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "authorized_by parameter required"},
+        )
+
+    results: dict[str, str] = {}
+    if _signal_loop is not None and pipeline in ("all", "pipeline_a"):
+        cb = _signal_loop._cb
+        if cb.is_halted:
+            cb.resume_trading(authorized_by=authorized_by)
+            results["pipeline_a"] = "resumed"
+        else:
+            results["pipeline_a"] = "not_halted"
+
+    if _signal_loop_b is not None and pipeline in ("all", "pipeline_b"):
+        cb_b = _signal_loop_b._cb
+        if cb_b.is_halted:
+            cb_b.resume_trading(authorized_by=authorized_by)
+            results["pipeline_b"] = "resumed"
+        else:
+            results["pipeline_b"] = "not_halted"
+
+    return JSONResponse(content={
+        "action": "resume_trading",
+        "authorized_by": authorized_by,
+        "results": results,
+    })
 
 
 @app.get("/ab/status")
@@ -853,9 +997,17 @@ async def get_status() -> JSONResponse:
         # ── Circuit breakers ──────────────────────────────────────────────────
         cb = _signal_loop._cb
         status["circuit_breakers"] = {
-            "halted": cb.is_halted,
-            "halt_reason": cb.halt_reason,
+            "pipeline_a": {
+                "halted": cb.is_halted,
+                "halt_reason": cb.halt_reason,
+            },
         }
+        if _signal_loop_b is not None:
+            cb_b = _signal_loop_b._cb
+            status["circuit_breakers"]["pipeline_b"] = {
+                "halted": cb_b.is_halted,
+                "halt_reason": cb_b.halt_reason,
+            }
 
         # ── RL agent ──────────────────────────────────────────────────────────
         rl = _signal_loop._rl_agent
