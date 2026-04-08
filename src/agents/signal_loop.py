@@ -224,18 +224,30 @@ class SignalLoop:
         Without this, the Kelly gate would need 20 new trades before it
         can decide whether to block entries. By seeding from history, the
         gate activates immediately on startup.
+
+        Filters by pipeline_id so each pipeline only sees its own history,
+        and excludes crypto tickers (old crypto trades had noise signals).
         """
         from sqlalchemy import select as _sel
         from src.data.db import Trade as _T
 
         try:
             async with self._sf() as session:
-                result = await session.execute(
+                query = (
                     _sel(_T.pnl)
-                    .where(_T.exit_time.isnot(None), _T.pnl.isnot(None))
+                    .where(
+                        _T.exit_time.isnot(None),
+                        _T.pnl.isnot(None),
+                        ~_T.ticker.in_(list(self.CRYPTO_TICKERS)),
+                    )
                     .order_by(_T.exit_time.desc())
                     .limit(50)
                 )
+                # Filter by pipeline_id if set (A/B mode)
+                if self._pipeline_id:
+                    query = query.where(_T.pipeline_id == self._pipeline_id)
+
+                result = await session.execute(query)
                 pnls = [float(r) for r in result.scalars().all() if r is not None]
 
             if pnls:
@@ -245,6 +257,14 @@ class SignalLoop:
                     "kelly_seeded_from_db",
                     n_trades=len(pnls),
                     kelly=round(self._kelly_fraction, 4),
+                    pipeline=self._pipeline_id,
+                )
+            else:
+                # No history for this pipeline — start fresh (no Kelly gate)
+                logger.info(
+                    "kelly_no_history",
+                    pipeline=self._pipeline_id,
+                    note="Kelly gate inactive until 20+ trades",
                 )
         except Exception as exc:
             logger.warning("kelly_seed_failed", error=str(exc))
