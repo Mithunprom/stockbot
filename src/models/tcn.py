@@ -239,7 +239,13 @@ def load_best_checkpoint(checkpoint_dir: Path | None = None) -> TCNSignalModel |
         return None
     best = max(checkpoints, key=lambda p: float(p.stem.split("sharpe_")[1]))
     state = torch.load(best, map_location="cpu")
-    cfg = state["config"]
+    cfg = state.get("config", {})  # fall back to defaults if config not saved
     model = TCNSignalModel(**cfg)
-    model.load_state_dict(state["model_state"])
+    try:
+        model.load_state_dict(state["model_state"])
+    except RuntimeError:
+        # Architecture mismatch (older checkpoint) — cannot load
+        import logging
+        logging.getLogger(__name__).warning("TCN checkpoint incompatible with current architecture: %s", best)
+        return None
     return model
