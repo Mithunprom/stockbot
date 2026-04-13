@@ -28,7 +28,7 @@ from src.data.db import NewsRaw, get_session_factory
 
 logger = structlog.get_logger(__name__)
 
-HF_API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert"
 HF_TOKEN = os.environ.get("HUGGINGFACE_API_TOKEN", "")
 
 # Sentiment label → numeric score
