@@ -74,6 +74,7 @@ class PositionManager:
         self._universe: set[str] = set(universe) if universe else set()
 
         self._positions: dict[str, Position] = {}
+        self._managed_tickers: set[str] = set()   # positions opened by signal loop
         self._daily_returns: list[float] = []
         self._peak_value = initial_portfolio
 
@@ -94,6 +95,7 @@ class PositionManager:
             avg_entry_price=entry_price,
             last_price=entry_price,
         )
+        self._managed_tickers.add(ticker)
         logger.info(
             "position_opened",
             ticker=ticker,
@@ -105,6 +107,7 @@ class PositionManager:
     def close_position(self, ticker: str, exit_price: float) -> float:
         """Record a position closing. Returns realized PnL."""
         pos = self._positions.pop(ticker, None)
+        self._managed_tickers.discard(ticker)
         if pos is None:
             logger.warning("close_nonexistent_position", ticker=ticker)
             return 0.0
@@ -139,6 +142,23 @@ class PositionManager:
     def portfolio_heat(self) -> float:
         """Fraction of portfolio currently deployed in positions."""
         return self.total_notional / max(self.portfolio_value, 1.0)
+
+    @property
+    def managed_notional(self) -> float:
+        """Notional only for positions opened by the signal loop."""
+        return sum(
+            p.notional for t, p in self._positions.items()
+            if t in self._managed_tickers
+        )
+
+    @property
+    def managed_heat(self) -> float:
+        """Fraction of portfolio deployed in signal-loop-managed positions.
+
+        Pre-existing broker positions (not opened by this pipeline) are excluded
+        so they don't block new entries via the heat gate.
+        """
+        return self.managed_notional / max(self.portfolio_value, 1.0)
 
     @property
     def available_cash(self) -> float:
@@ -253,10 +273,17 @@ class PositionManager:
             if skipped:
                 logger.info("sync_skipped_non_universe", skipped=skipped)
 
+            unmanaged = [
+                t for t in self._positions if t not in self._managed_tickers
+            ]
             logger.info(
                 "positions_synced",
                 count=len(self._positions),
+                managed=len(self._managed_tickers & set(self._positions)),
+                unmanaged=unmanaged or None,
                 portfolio=self.portfolio_value,
+                total_heat=round(self.portfolio_heat, 3),
+                managed_heat=round(self.managed_heat, 3),
             )
         except Exception as exc:
             logger.error("position_sync_error", error=str(exc))

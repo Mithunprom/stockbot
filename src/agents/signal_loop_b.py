@@ -102,9 +102,21 @@ class SignalLoopB(SignalLoop):
             del self._ticker_cooldown[t]
 
         # 1. Fetch features + prices from DB (inherited method)
-        features_map, regime_map = await self._fetch_features()
+        features_map, regime_map, latest_feature_time = await self._fetch_features()
         prices = await self._fetch_prices()
         self._pm.update_prices(prices)
+
+        # Data freshness gate (inherited flag — used by _sizing_entry_gate_open)
+        from src.agents.signal_loop import DATA_FRESHNESS_MAX_MINUTES
+        self._data_fresh = True
+        if latest_feature_time is not None:
+            age_minutes = (datetime.now(timezone.utc) - latest_feature_time).total_seconds() / 60
+            if age_minutes > DATA_FRESHNESS_MAX_MINUTES:
+                self._data_fresh = False
+                logger.warning(
+                    "data_stale_skipping_entries_b",
+                    age_minutes=round(age_minutes, 1),
+                )
 
         if not features_map:
             logger.warning("signal_loop_b_no_features")

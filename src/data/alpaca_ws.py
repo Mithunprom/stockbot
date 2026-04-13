@@ -214,64 +214,54 @@ class AlpacaDataStreamClient:
 
     async def _stream_equities(self) -> None:
         """Stream equity bars (IEX feed). Reconnects with exponential backoff."""
-        backoff = 60  # start at 60s since connection limit persists
+        backoff = 5
         while self._running:
             try:
                 await self._stream()
-                backoff = 60  # reset after successful long-running connection
+                backoff = 5  # reset after successful long-running connection
             except Exception as exc:
+                # Flush any partial bars so data isn't lost on disconnect
+                self._flush_partial_bars()
                 err_msg = str(exc).lower()
                 if "connection limit" in err_msg:
-                    backoff = max(backoff, 120)  # min 2 min for connection limit
-                    logger.warning("alpaca_equity_ws_connection_limit — backing off %ds", backoff)
+                    backoff = max(backoff, 120)  # connection limit needs longer cooldown
+                    logger.warning("alpaca_equity_ws_connection_limit", backoff_s=backoff)
                 else:
-                    logger.error("alpaca_equity_ws_error: %s (retry in %ds)", exc, backoff)
+                    logger.error("alpaca_equity_ws_error", error=str(exc), backoff_s=backoff)
                 if self._running:
                     await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, 600)  # max 10 min
+                    backoff = min(backoff * 2, 300)  # max 5 min
 
     async def _stream_crypto(self) -> None:
         """Stream crypto bars (Alpaca crypto feed). Reconnects with exponential backoff."""
-        backoff = 60
+        backoff = 5
         while self._running:
             try:
                 await self._stream_crypto_inner()
-                backoff = 60
+                backoff = 5
             except Exception as exc:
+                self._flush_partial_bars()
                 err_msg = str(exc).lower()
                 if "connection limit" in err_msg:
                     backoff = max(backoff, 120)
-                    logger.warning("alpaca_crypto_ws_connection_limit — backing off %ds", backoff)
+                    logger.warning("alpaca_crypto_ws_connection_limit", backoff_s=backoff)
                 else:
-                    logger.error("alpaca_crypto_ws_error: %s (retry in %ds)", exc, backoff)
+                    logger.error("alpaca_crypto_ws_error", error=str(exc), backoff_s=backoff)
                 if self._running:
                     await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, 600)
+                    backoff = min(backoff * 2, 300)
 
-    async def _try_ws_auth(self, ws_url: str) -> None:
-        """Test WebSocket auth with a single attempt. Raises on failure."""
-        import json as _json
-        try:
-            import websockets
-        except ImportError:
-            return  # can't pre-check, let _run_forever handle it
+    def _flush_partial_bars(self) -> None:
+        """Write any in-progress partial bars to DB on disconnect.
 
-        settings = get_settings()
-        async with websockets.connect(ws_url, close_timeout=5) as ws:
-            # Alpaca sends a welcome message, then we auth
-            welcome = await asyncio.wait_for(ws.recv(), timeout=5)
-            auth_msg = _json.dumps({
-                "action": "auth",
-                "key": settings.alpaca_api_key,
-                "secret": settings.alpaca_secret_key,
-            })
-            await ws.send(auth_msg)
-            resp = await asyncio.wait_for(ws.recv(), timeout=5)
-            data = _json.loads(resp)
-            if isinstance(data, list) and data:
-                msg = data[0].get("msg", "")
-                if "connection limit" in msg.lower():
-                    raise ConnectionError(f"Alpaca WS auth failed: {msg}")
+        Prevents data loss when the WebSocket drops mid-bar.
+        """
+        for acc, table_cls in [(self._acc_1m, OHLCV1m), (self._acc_5m, OHLCV5m)]:
+            rows = [pb.to_row() for pb in acc._bars.values() if pb._init]
+            if rows:
+                asyncio.create_task(_write_bars(table_cls, rows))
+                logger.info("flushed_partial_bars", table=table_cls.__tablename__, count=len(rows))
+            acc._bars.clear()
 
     async def _stream(self) -> None:
         if not self._equity_tickers:
@@ -285,10 +275,6 @@ class AlpacaDataStreamClient:
         from alpaca.data.enums import DataFeed
         feed_val = DataFeed(self.feed)
 
-        # Pre-check auth to avoid tight retry loop inside _run_forever
-        ws_url = "wss://stream.data.alpaca.markets/v2/iex"
-        await self._try_ws_auth(ws_url)
-
         stream = StockDataStream(
             api_key=settings.alpaca_api_key,
             secret_key=settings.alpaca_secret_key,
@@ -299,10 +285,7 @@ class AlpacaDataStreamClient:
             await self._handle_bar(bar)
 
         stream.subscribe_bars(on_bar, *self._equity_tickers)
-        logger.info(
-            "alpaca_equity_ws_started: feed=%s tickers=%d",
-            self.feed, len(self._equity_tickers),
-        )
+        logger.info("alpaca_equity_ws_connecting", feed=self.feed, tickers=len(self._equity_tickers))
         await stream._run_forever()
 
     async def _stream_crypto_inner(self) -> None:
@@ -315,10 +298,6 @@ class AlpacaDataStreamClient:
             return
 
         settings = get_settings()
-
-        # Pre-check auth
-        ws_url = "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
-        await self._try_ws_auth(ws_url)
 
         stream = CryptoDataStream(
             api_key=settings.alpaca_api_key,

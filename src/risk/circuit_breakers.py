@@ -270,6 +270,31 @@ class CircuitBreakers:
             f"Required from human: Manual restart required after review.\n"
         )
 
+    def try_daily_reset(self) -> bool:
+        """Auto-clear daily_loss halts at market open.
+
+        daily_loss is inherently "halt for the rest of the day" — when the
+        daily start value resets, the old day's loss no longer applies.
+        Structural halts (max_drawdown) still require manual resume.
+
+        Returns True if halt was cleared.
+        """
+        if not self._halted:
+            return False
+        if self._halt_reason != "daily_loss":
+            return False
+        self._halted = False
+        old_reason = self._halt_reason
+        self._halt_reason = ""
+        self._halt_time = None
+        logger.info(
+            "daily_loss_halt_auto_reset",
+            pipeline=self._pipeline_id,
+            previous_reason=old_reason,
+            note="New trading day — daily_loss halt cleared automatically",
+        )
+        return True
+
     def resume_trading(self, authorized_by: str) -> None:
         """Re-enable trading after a halt. REQUIRES human authorization.
 

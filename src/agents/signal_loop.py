@@ -55,6 +55,9 @@ SIZING_REVERSAL_BARS = 2
 SIZING_MAX_TRADES_PER_DAY = 8       # cap total round-trips per day
 SIZING_TICKER_COOLDOWN_BARS = 30    # 30 min cooldown after exiting a ticker
 
+# Data freshness gate — skip new entries when features are stale
+DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
+
 # Exit thresholds calibrated to equity intraday microstructure.
 # Mega-cap 1m vol ≈ 0.02%, so 10-bar range ≈ 0.06%.
 SIZING_STOP_LOSS = 0.004       # 0.4% — ~5× 1min vol → 3σ 15-bar move
@@ -176,6 +179,9 @@ class SignalLoop:
         # Per-ticker ATR cache (refreshed each tick from feature_matrix)
         self._ticker_atr: dict[str, float] = {}
 
+        # Data freshness flag — set False when features are stale to block new entries
+        self._data_fresh: bool = True
+
         # Kelly gate — blocks new entries when rolling Kelly fraction < 0.
         # Updated after each closed trade. Starts at 0 (conservative: no trades
         # until enough history proves positive expected value).
@@ -200,19 +206,38 @@ class SignalLoop:
     async def start(self) -> None:
         """Run signal loop until stop() is called."""
         # Seed Kelly gate from DB history so it activates immediately
-        await self._seed_kelly_from_db()
+        try:
+            await self._seed_kelly_from_db()
+        except Exception:
+            logger.exception("kelly_seed_startup_failed_continuing")
+
         logger.info(
             "signal_loop_started",
             universe=len(self._universe),
+            pipeline=self._pipeline_id,
             kelly=round(self._kelly_fraction, 4),
             kelly_n=len(self._sizing_recent_outcomes),
         )
+        _tick_count = 0
         while not self._stopped:
             try:
                 await self._tick()
+                _tick_count += 1
+                if _tick_count % 30 == 0:
+                    logger.info(
+                        "signal_loop_heartbeat",
+                        pipeline=self._pipeline_id,
+                        ticks=_tick_count,
+                        positions=len(self._pm._positions),
+                    )
+                await self._sleep_until_next_minute()
+            except asyncio.CancelledError:
+                logger.warning("signal_loop_cancelled", pipeline=self._pipeline_id)
+                raise
             except Exception:
-                logger.exception("signal_loop_tick_error")
-            await self._sleep_until_next_minute()
+                logger.exception("signal_loop_tick_error", pipeline=self._pipeline_id)
+                # Avoid tight crash loop — sleep before retrying
+                await asyncio.sleep(5)
 
     async def stop(self) -> None:
         self._stopped = True
@@ -332,7 +357,7 @@ class SignalLoop:
                 atr_pct=self._ticker_atr.get(sig.ticker, 0.01),
                 price=sig.price if hasattr(sig, "price") else 0.0,
                 portfolio_value=self._pm.portfolio_value,
-                portfolio_heat=self._pm.portfolio_heat,
+                portfolio_heat=self._pm.managed_heat,
                 sector_notionals=sector_notionals,
                 kelly_fraction=self._kelly_fraction,
             )
@@ -370,6 +395,7 @@ class SignalLoop:
             "daily_pnl_dollar": round(daily_pnl_dollar, 2),
             "total_unrealized_pnl": round(pm.total_unrealized_pnl, 2),
             "portfolio_heat": round(pm.portfolio_heat, 4),
+            "managed_heat": round(pm.managed_heat, 4),
             "available_cash": round(pm.available_cash, 2),
             "drawdown_pct": round(pm.drawdown * 100, 3),
             "n_open_positions": len(pm._positions),
@@ -392,6 +418,8 @@ class SignalLoop:
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
+            "data_fresh": self._data_fresh,
+            "managed_heat": round(pm.managed_heat, 4),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -414,8 +442,21 @@ class SignalLoop:
             del self._ticker_cooldown[t]
 
         # 1. Fetch latest features + prices from DB
-        features_map, regime_map = await self._fetch_features()
+        features_map, regime_map, latest_feature_time = await self._fetch_features()
         prices = await self._fetch_prices()
+
+        # Data freshness gate — if features are stale, manage exits only (no new entries)
+        self._data_fresh = True
+        if latest_feature_time is not None:
+            age_minutes = (datetime.now(timezone.utc) - latest_feature_time).total_seconds() / 60
+            if age_minutes > DATA_FRESHNESS_MAX_MINUTES:
+                self._data_fresh = False
+                logger.warning(
+                    "data_stale_skipping_entries",
+                    age_minutes=round(age_minutes, 1),
+                    threshold=DATA_FRESHNESS_MAX_MINUTES,
+                    latest_feature_time=str(latest_feature_time),
+                )
         self._pm.update_prices(prices)
 
         # Check whether ML path is viable — LightGBM alone is sufficient
@@ -671,6 +712,7 @@ class SignalLoop:
         """Check if LightGBM signal warrants entry (sizing mode).
 
         Gates:
+          0. Data freshness — features must be recent (WebSocket may be down)
           1. Daily trade cap not exceeded
           2. Per-ticker cooldown elapsed (prevents re-entry churn)
           3. Kelly gate: once 20+ trades confirm negative EV, STOP trading
@@ -678,6 +720,10 @@ class SignalLoop:
           5. dir_prob is outside the dead zone (0.45-0.55)
         """
         ticker = sig.ticker
+
+        # Gate 0: Data freshness — don't enter on stale features
+        if not self._data_fresh:
+            return False
 
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
@@ -954,7 +1000,7 @@ class SignalLoop:
                     atr_pct=self._ticker_atr.get(ticker, 0.01),
                     price=price,
                     portfolio_value=self._pm.portfolio_value,
-                    portfolio_heat=self._pm.portfolio_heat,
+                    portfolio_heat=self._pm.managed_heat,
                     sector_notionals=sector_notionals,
                     kelly_fraction=self._kelly_fraction,
                 )
@@ -1308,12 +1354,15 @@ class SignalLoop:
 
     # ── Data fetching ─────────────────────────────────────────────────────────
 
-    async def _fetch_features(self) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+    async def _fetch_features(
+        self,
+    ) -> tuple[dict[str, np.ndarray], dict[str, int], datetime | None]:
         """Fetch last SEQ_LEN feature rows per ticker from DB.
 
         Returns:
             features_map: ticker → (SEQ_LEN, n_features) float32 array
             regime_map:   ticker → latest regime int (0=trending,1=choppy,2=high_vol)
+            latest_time:  most recent feature timestamp across all tickers (or None)
         """
         from sqlalchemy import select
 
@@ -1321,17 +1370,24 @@ class SignalLoop:
 
         result: dict[str, np.ndarray] = {}
         regime_map: dict[str, int] = {}
+        latest_time: datetime | None = None
         async with self._sf() as session:
             for ticker in self._universe:
                 rows = await session.execute(
-                    select(FeatureMatrix.features)
+                    select(FeatureMatrix.features, FeatureMatrix.time)
                     .where(FeatureMatrix.ticker == ticker)
                     .order_by(FeatureMatrix.time.desc())
                     .limit(self.SEQ_LEN)
                 )
-                feat_rows = list(reversed(rows.scalars().all()))
-                if not feat_rows:
+                raw_rows = list(reversed(rows.all()))
+                if not raw_rows:
                     continue
+                feat_rows = [r[0] for r in raw_rows]
+                row_time = raw_rows[-1][1]  # most recent (last after reversing)
+                if row_time is not None:
+                    if latest_time is None or row_time > latest_time:
+                        latest_time = row_time
+
                 arr = np.array(
                     [
                         [float((row or {}).get(f, 0.0) or 0.0) for f in self._feature_cols]
@@ -1347,7 +1403,7 @@ class SignalLoop:
                 atr_val = latest_row.get("atr_pct")
                 if atr_val is not None:
                     self._ticker_atr[ticker] = float(atr_val)
-        return result, regime_map
+        return result, regime_map, latest_time
 
     async def _fetch_prices(self) -> dict[str, float]:
         """Fetch latest close price per ticker from the 1m OHLCV table."""
@@ -1419,6 +1475,8 @@ class SignalLoop:
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
             self._ticker_cooldown.clear()
+            # Auto-clear daily_loss halts (structural halts like max_drawdown stay)
+            self._cb.try_daily_reset()
             logger.info(
                 "daily_start_value_reset",
                 value=self._daily_start_value,

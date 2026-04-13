@@ -798,6 +798,7 @@ async def diagnostics() -> JSONResponse:
                     + (["pred_return_too_small"] if not passes_pred else [])
                     + (["dir_prob_in_dead_zone"] if not passes_dir else [])
                     + (["ticker_cooldown"] if cooldown_active else [])
+                    + (["managed_heat_too_high"] if summary.get("managed_heat", 0) >= 0.80 else [])
                 ),
             })
 
@@ -820,6 +821,7 @@ async def diagnostics() -> JSONResponse:
             "tickers_on_cooldown": summary.get("tickers_on_cooldown", []),
             "n_open_positions": summary.get("n_open_positions", 0),
             "portfolio_heat": summary.get("portfolio_heat", 0.0),
+            "managed_heat": summary.get("managed_heat", 0.0),
             "thresholds": {
                 "sizing_cost_threshold": SIZING_COST_THRESHOLD,
                 "dir_prob_dead_zone": list(SIZING_DIR_PROB_DEAD_ZONE),
@@ -846,7 +848,8 @@ async def resume_trading(pipeline: str = "all", authorized_by: str = "admin") ->
         )
 
     results: dict[str, str] = {}
-    if _signal_loop is not None and pipeline in ("all", "pipeline_a"):
+    p = pipeline.lower().strip()
+    if _signal_loop is not None and p in ("all", "a", "pipeline_a"):
         cb = _signal_loop._cb
         if cb.is_halted:
             cb.resume_trading(authorized_by=authorized_by)
@@ -854,7 +857,7 @@ async def resume_trading(pipeline: str = "all", authorized_by: str = "admin") ->
         else:
             results["pipeline_a"] = "not_halted"
 
-    if _signal_loop_b is not None and pipeline in ("all", "pipeline_b"):
+    if _signal_loop_b is not None and p in ("all", "b", "pipeline_b"):
         cb_b = _signal_loop_b._cb
         if cb_b.is_halted:
             cb_b.resume_trading(authorized_by=authorized_by)

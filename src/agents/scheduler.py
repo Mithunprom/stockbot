@@ -8,7 +8,7 @@ Activation order (per CLAUDE.md):
 
 from __future__ import annotations
 
-import asyncio
+import functools
 import logging
 import structlog
 from datetime import datetime, timezone
@@ -83,7 +83,7 @@ def create_scheduler(
     # ── Profit Agent: daily after market close (enable Week 4+) ─────────────
     if profit_agent is not None:
         scheduler.add_job(
-            lambda: asyncio.create_task(profit_agent.run(mode=mode)),
+            functools.partial(profit_agent.run, mode=mode),
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour=16,
@@ -100,7 +100,7 @@ def create_scheduler(
     # ── Screener Agent: nightly after market close ────────────────────────────
     if screener_agent is not None:
         scheduler.add_job(
-            lambda: asyncio.create_task(screener_agent.run()),
+            screener_agent.run,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour=18,
@@ -117,7 +117,7 @@ def create_scheduler(
     # ── Retrain Agent: daily at 08:00 ET (before market open) ─────────────────
     if retrain_agent is not None:
         scheduler.add_job(
-            lambda: asyncio.create_task(retrain_agent.run()),
+            retrain_agent.run,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour=8,
@@ -134,7 +134,7 @@ def create_scheduler(
     # ── Critique Agent: daily at 17:00 ET (30 min after profit_agent) ─────────
     if critique_agent is not None:
         scheduler.add_job(
-            lambda: asyncio.create_task(critique_agent.run()),
+            critique_agent.run,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour=17,
@@ -151,7 +151,7 @@ def create_scheduler(
     # ── Model Drift Agent: weekly Saturday morning (enable Week 4+) ──────────
     if drift_agent is not None:
         scheduler.add_job(
-            lambda: asyncio.create_task(drift_agent.run()),
+            drift_agent.run,
             trigger=CronTrigger(
                 day_of_week="sat",
                 hour=8,
@@ -169,7 +169,7 @@ def create_scheduler(
     if quant_research_agent is not None:
         # Daily analysis (after profit agent)
         scheduler.add_job(
-            lambda: asyncio.create_task(quant_research_agent.run_daily()),
+            quant_research_agent.run_daily,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour=17,
@@ -184,7 +184,7 @@ def create_scheduler(
         )
         # Weekly deep research (Saturday morning)
         scheduler.add_job(
-            lambda: asyncio.create_task(quant_research_agent.run_weekly()),
+            quant_research_agent.run_weekly,
             trigger=CronTrigger(
                 day_of_week="sat",
                 hour=10,
@@ -202,7 +202,7 @@ def create_scheduler(
     if live_ic_tracker is not None:
         # Fill actual returns every 15 minutes during market hours
         scheduler.add_job(
-            lambda: asyncio.create_task(live_ic_tracker.run_fill()),
+            live_ic_tracker.run_fill,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour="10-16",
@@ -217,7 +217,7 @@ def create_scheduler(
         )
         # Daily IC report at 16:45 ET (after market close, before profit agent)
         scheduler.add_job(
-            lambda: asyncio.create_task(live_ic_tracker.run_report()),
+            live_ic_tracker.run_report,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour=16,
