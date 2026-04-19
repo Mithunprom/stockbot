@@ -36,10 +36,11 @@ qualifies — they are not hardcoded.
 ## 2. Data Pipeline
 
 ### 2a. Price Data
-- **Source:** Alpaca IEX WebSocket (free, real-time)
+- **Source:** Alpaca REST bar poller (free tier, polls every 60s)
+  - WebSocket disabled on Railway (1-connection-per-account limit breaks rolling deploys)
 - **Granularity:** 1-minute OHLCV bars
 - **Storage:** TimescaleDB `ohlcv_1m` table
-- **Backfill:** Last 300 bars fetched on startup
+- **Backfill:** Last 5 minutes fetched per poll cycle; 300 bars on startup
 
 ### 2b. News & Sentiment
 - **Source:** NewsAPI + Benzinga (polled every 5 minutes)
@@ -80,76 +81,113 @@ All indicators shifted by 1 bar (no lookahead bias).
 
 ---
 
-## 4. Signal Generation — Ensemble Model
+## 4. Signal Generation
+
+### Two Pipelines
+
+StockBot supports two signal pipelines. **Pipeline B is currently active
+(standalone mode since 2026-04-19).** Pipeline A is disabled pending live IC
+validation.
+
+| Aspect | Pipeline A (ML) | Pipeline B (Rules) — ACTIVE |
+|--------|----------------|----------------------------|
+| Signal source | LightGBM + Transformer + TCN + FinBERT | Technical rules + fundamentals + regime + sentiment + social |
+| Training needed | Yes | No |
+| Live performance | IC~0, Sharpe -3.5 (failed) | TBD |
+| Config | `ACTIVE_PIPELINE=a` | `ACTIVE_PIPELINE=b` |
+
+> Full Pipeline B documentation: **[docs/pipeline_b.md](pipeline_b.md)**
+
+### 4a. Pipeline A — ML Ensemble (INACTIVE)
 
 ```
-ensemble_signal = 0.45 × (transformer_conf × transformer_dir)
-               + 0.35 × (tcn_conf × tcn_dir)
-               + 0.20 × sentiment_index
-
-ensemble_signal ∈ [-1, +1]
+ensemble_signal = 0.60 × LightGBM + 0.10 × Transformer + 0.10 × TCN + 0.20 × Sentiment
 ```
 
-### 4a. Transformer Model
-- Architecture: 4-head attention, 3 layers, cross-attention on options flow
-- Input: 60-bar sequence × 30 features (1m resolution)
-- Output: direction ∈ {-1, 0, +1}, confidence ∈ [0, 1]
-- Best checkpoint: Sharpe 0.896, val_accuracy 37.5%
-- Stored on: AWS S3 → downloaded to Railway at startup
+- LightGBM: val IC=0.11, dir_acc=52% (primary signal)
+- Transformer: val IC~0 (effectively random — disabled)
+- TCN: val IC~0 (effectively random — disabled)
+- FinBERT sentiment: 20% weight
 
-### 4b. TCN (Temporal Convolutional Network)
-- Architecture: Dual-stream (1m + 5m bars), dilated causal convolutions
-- Input: 1m and 5m feature sequences
-- Output: direction + confidence
-- Best checkpoint: Sharpe 0.776, val_accuracy 36.9%
-- Stored on: AWS S3 → downloaded to Railway at startup
+**Post-mortem (2026-03-27):** 155 trades, win rate 32%, profit factor 0.348,
+Sharpe -3.5. Signal strength showed zero conditional predictive power. See
+`src/agents/quant_research_agent.md` for full analysis.
 
-### 4c. FinBERT Sentiment
-- Model: `ProsusAI/finbert` (financial domain FinBERT)
-- Inference: Hugging Face Inference API (no local GPU needed)
-- Rolling Sentiment Index: recency-decayed (half-life 12h) × relevance-weighted
-- Contributes 20% to ensemble signal
+### 4b. Pipeline B — Rules-Based Ensemble (ACTIVE)
 
-### 4d. Rule-Based Fallback
-Used only when ML models unavailable:
-- RSI(14) < 35 AND MACD bullish crossover → +0.50
-- RSI(14) > 65 AND MACD bearish crossover → -0.50
+```
+ensemble = 0.30 × technicals + 0.25 × fundamentals + 0.20 × regime
+         + 0.20 × sentiment + 0.05 × social
+```
+
+**Technical (30%):** RSI, MACD, Bollinger %B, VWAP deviation, ADX, MFI,
+Stochastic, OBV, multi-timeframe confluence, divergence, candlestick patterns,
+supply/demand zones, Parabolic SAR, Donchian breakout.
+
+**Fundamental (25%):** P/E ratio, forward P/E compression, earnings surprise,
+YoY revenue growth (via yfinance, daily cache).
+
+**Market Regime (20%):** VIX level + percentile, SPY/QQQ 5-bar and 15-bar
+momentum, QQQ-SPY risk-on spread.
+
+**Sentiment (20%):** FinBERT (ProsusAI/finbert) via HuggingFace Inference API.
+Rolling sentiment index, recency-weighted (12h half-life).
+
+**Social (5%):** Reddit finance subreddits (r/wallstreetbets, r/stocks,
+r/investing, r/options). Keyword heuristic + upvote weighting.
 
 ### Signal Strength Classification
 | Range | Strength |
 |---|---|
-| \|signal\| ≥ 0.60 | Strong |
-| \|signal\| ≥ 0.40 | Moderate |
-| \|signal\| ≥ 0.20 | Weak |
+| \|signal\| >= 0.60 | Strong |
+| \|signal\| >= 0.40 | Moderate |
+| \|signal\| >= 0.20 | Weak |
 | \|signal\| < 0.20 | Flat (no trade) |
 
-**Entry threshold:** \|ensemble_signal\| ≥ 0.40 (moderate or stronger)
+**Entry threshold:** \|ensemble_signal\| >= 0.40 (moderate or stronger)
 
 ---
 
 ## 5. Trade Execution
 
-### 5a. RL Agent (PPO)
-- Algorithm: Proximal Policy Optimization (Stable-Baselines3)
-- State space: 27-dimensional observation (ensemble signal, position, FFSA features, options flow)
-- Action space: 9 discrete actions (hold, buy small/medium/large, sell 25/50/100%, short small/large)
-- Current status: 500k steps trained, Sharpe -9.7 (needs 2M+ steps to converge)
-- Retraining trigger: ≥500 paper trades logged + rolling Sharpe ≥ 0.5
+### 5a. Position Sizing (SmartPositionSizer)
 
-### 5b. Threshold Fallback (active while RL matures)
-- Buy: `ensemble_signal ≥ 0.40` and no open position
-- Sell: position open and `ensemble_signal < -0.20`
+Kelly-inspired conviction buckets based on `dir_prob`:
 
-### 5c. Position Sizing
-- Base size: 5% of portfolio per position
-- Scaling: volatility-scaled (ATR-based, targets 1% daily vol per position)
-- Max single position: 25% of portfolio
-- Max portfolio heat: 80% deployed
+| dir_prob | Max cap | Description |
+|----------|---------|-------------|
+| [0.55, 0.65) | 2% | Low conviction |
+| [0.65, 0.80) | 4% | Medium conviction |
+| [0.80, 1.00] | 6% | High conviction |
 
-### 5d. Order Type
-- Limit orders only, 0.1% above/below mid-price
-- Fill polling: checks every second for up to 60 seconds
+Hard caps: max 25% single position, max 80% portfolio heat, min 10% cash buffer.
+
+Entry gate requires `|pred_return| > 0.0015` (cost threshold) AND `dir_prob`
+outside [0.45, 0.55] dead zone.
+
+### 5b. ATR-Adaptive Exits (since 2026-04-16)
+
+Stop-loss, trailing stop, and take-profit scale per-ticker by 1-minute ATR:
+
+```
+stop_loss     = max(ATR% × 15, 0.5%)
+trailing_stop = max(ATR% × 20, 0.8%)
+take_profit   = max(ATR% × 35, 1.5%)
+max_hold      = 45 bars (45 minutes)
+```
+
+Volatile stocks (NVDA: 1.35% stop) get wider stops than low-vol stocks
+(AAPL: 0.6% stop), preventing noise-triggered exits.
+
+### 5c. Order Type
+- Market orders for paper trading (immediate fill)
+- Fill polling: checks every second for up to 30 seconds
 - Shorts: disabled (paper account needs margin approval)
+
+### 5d. RL Agent (INACTIVE)
+- PPO position-sizing agent trained (Sharpe 18.4 in simulation)
+- Replaced by SmartPositionSizer for now (simpler, more transparent)
+- Re-enable when live IC > 0.05 validated
 
 ---
 
@@ -203,11 +241,17 @@ All sub-agent changes go to `config/staging/` — never directly to live config.
 
 | Endpoint | Description |
 |---|---|
-| `GET /health` | Liveness check |
+| `GET /health` | Liveness check (shows active_pipeline: a/b/ab) |
 | `GET /signals` | Latest ensemble signals for all tickers |
+| `GET /signals/actionable` | Signals that pass entry gate with trade/no-trade flags |
 | `GET /trades` | Trade history with full attribution |
-| `GET /status` | Full system status (models, weights, agents, FFSA, positions) |
+| `GET /positions/detail` | Open positions with ATR stops, unrealized P&L |
+| `GET /portfolio/summary` | Portfolio diagnostics (ATR multipliers, thresholds, positions) |
+| `GET /diagnostics` | Full pipeline diagnostics (A and/or B) |
+| `GET /status` | System status (models, weights, agents, FFSA, positions) |
+| `GET /ab/status` | A/B test comparison (when both pipelines active) |
 | `GET /reports/{name}` | Latest sub-agent report (risk, latency, drift) |
+| `POST /admin/resume-trading` | Resume after circuit breaker halt |
 | `WS /ws/dashboard` | Real-time push: signals, positions, PnL, risk |
 
 **Live URL:** `https://stockbot-production-cbde.up.railway.app`

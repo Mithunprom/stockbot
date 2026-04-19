@@ -1,12 +1,14 @@
 # Stockbot — Project Documentation
 
 ## Objective
-An institutional-grade algorithmic trading dashboard that:
-1. Screens the S&P 500 universe for the top 20 stocks using multi-factor alpha scoring
-2. Generates buy/sell/hold signals via a 7-factor signal engine
-3. Backtests strategies with zero lookahead bias and realistic transaction costs
-4. Trains a Reinforcement Learning agent to optimize factor weights per market regime
-5. Supports paper trading and (roadmap) live execution via Alpaca
+An autonomous intraday paper trading system that:
+1. Screens S&P 500 for top 20-40 stocks via multi-factor momentum scoring
+2. Generates buy/sell signals via a 5-dimension rules-based engine (Pipeline B)
+3. Executes paper trades on Alpaca with ATR-adaptive exits
+4. Monitors performance via sub-agents (risk, latency, profit, drift)
+5. Targets transition to live trading after meeting Sharpe/drawdown criteria
+
+**Current mode:** Paper trading, Pipeline B standalone (since 2026-04-19)
 
 ---
 
@@ -14,210 +16,199 @@ An institutional-grade algorithmic trading dashboard that:
 
 ```
 stockbot/
+├── main.py                    # FastAPI entry point, lifespan, API routes
 ├── src/
+│   ├── config.py              # Settings (pydantic-settings, .env)
 │   ├── data/
-│   │   ├── screener.js        # S&P 500 screener — grouped daily bars
-│   │   ├── polygonClient.js   # Polygon.io API client (rate-limited, cached)
-│   │   ├── universe.js        # Trading universe management
-│   │   ├── verifier.js        # Stock verification before universe entry
-│   │   ├── persistence.js     # localStorage helpers
-│   │   ├── news.js            # News sentiment engine
-│   │   ├── priceGate.js       # Rate-limiting gate for price fetches
-│   │   ├── stockPriceSeeds.js # Synthetic data for mock mode
-│   │   └── cryptoPrices.js    # Crypto price feed
-│   ├── signals/
-│   │   └── signals.js         # 7-factor signal engine
-│   ├── backtest/
-│   │   └── backtester.js      # Vectorized backtester
-│   ├── rl/
-│   │   ├── agent.js           # CEM + Q-learning RL agent
-│   │   └── trainer.js         # Training loop orchestrator
-│   ├── risk/
-│   │   └── kelly.js           # Kelly criterion position sizing
+│   │   ├── db.py              # TimescaleDB schema (ohlcv_1m, feature_matrix, trades)
+│   │   ├── alpaca_ws.py       # AlpacaDataStreamClient + RestBarPoller
+│   │   ├── news.py            # NewsPoller (Polygon.io + Benzinga)
+│   │   ├── options_flow.py    # Options flow poller (yfinance chains)
+│   │   ├── fundamentals.py    # FundamentalsCache (yfinance P/E, earnings)
+│   │   ├── market_regime.py   # MarketRegimeMonitor (VIX + SPY/QQQ)
+│   │   └── social_stocktwits.py # Reddit social sentiment feed
+│   ├── features/
+│   │   ├── indicators.py      # Full pandas-ta indicator pipeline
+│   │   ├── live.py            # LiveFeatureComputer (incremental on each bar)
+│   │   ├── ffsa.py            # LightGBM + SHAP feature selection
+│   │   ├── regime.py          # Regime classification + gate thresholds
+│   │   └── psi.py             # Population Stability Index (drift)
 │   ├── models/
-│   │   ├── ensemble.js        # Ensemble model
-│   │   ├── famaFrench.js      # Fama-French factor proxy
-│   │   └── temporalCNN.js     # Temporal CNN multi-scale alignment
-│   ├── trading/
-│   │   ├── alpaca.js          # Alpaca broker integration
-│   │   ├── autoTrader.js      # Automated execution
-│   │   └── exitStrategy.js    # Exit strategy (trailing stop)
-│   ├── ui/components/         # React UI components
-│   ├── App.jsx                # Main dashboard (5 screens)
-│   └── main.jsx               # Vite entry point
-├── api/
-│   ├── email.js               # Email notification handler
-│   └── send-email.js          # Vercel serverless email endpoint
-├── CLAUDE.md                  # Claude Code instructions
+│   │   ├── pipeline_b.py      # PipelineBEngine (rules-based signal — ACTIVE)
+│   │   ├── lgbm.py            # LGBMSignalModel (inactive)
+│   │   ├── transformer.py     # TransformerSignalModel (inactive)
+│   │   ├── tcn.py             # TCNSignalModel (inactive)
+│   │   ├── sentiment.py       # FinBERT via HuggingFace API
+│   │   └── ensemble.py        # EnsembleEngine + EnsembleSignal dataclass
+│   ├── execution/
+│   │   ├── alpaca.py          # AlpacaOrderRouter (paper/live)
+│   │   ├── position_manager.py # PositionManager (tracking, heat, sync)
+│   │   └── position_sizer.py  # SmartPositionSizer (Kelly-inspired)
+│   ├── risk/
+│   │   └── circuit_breakers.py # 7 hard circuit breakers
+│   └── agents/
+│       ├── signal_loop.py     # SignalLoop (base class — execution, exits, ATR)
+│       ├── signal_loop_b.py   # SignalLoopB (Pipeline B — overrides _tick())
+│       ├── scheduler.py       # APScheduler for sub-agents
+│       ├── risk_agent.py      # Every 15 min
+│       ├── latency_agent.py   # Hourly
+│       ├── profit_agent.py    # Daily 16:30 ET
+│       ├── screener_agent.py  # Nightly 18:00 ET
+│       ├── drift_agent.py     # Weekly
+│       ├── live_ic_tracker.py # Prediction vs actual tracking
+│       ├── critique_agent.py  # Trade critique
+│       ├── retrain_agent.py   # Retrain scheduler
+│       └── quant_research_agent.md # Research spec
+├── scripts/
+│   ├── test_pipeline_b_steps.py  # Step-by-step Pipeline B test
+│   ├── test_signal_scan.py       # Full universe signal scanner
+│   ├── test_trade_roundtrip.py   # Buy/sell execution test
+│   ├── test_pipeline_health.py   # End-to-end health check
+│   ├── daily_performance.py      # Performance plots (A vs B)
+│   ├── ab_report.py              # A/B comparison report
+│   ├── train_lgbm.py             # Train LightGBM
+│   ├── train_models.py           # Train Transformer/TCN
+│   ├── train_rl.py               # Train RL agent
+│   ├── run_ffsa.py               # FFSA feature selection
+│   ├── build_features.py         # Rebuild feature matrix
+│   └── backfill.py               # Backfill OHLCV bars
+├── config/
+│   ├── universe.json          # Active trading universe (screener-managed)
+│   ├── paper.yaml             # Paper trading config
+│   ├── live.yaml              # Live config (human-managed, never auto-modified)
+│   └── staging/               # Sub-agent proposed changes
+├── models/                    # Saved model checkpoints (S3 synced)
+├── reports/                   # Sub-agent output (risk, latency, drift, performance)
 ├── docs/
 │   ├── project.md             # This file
+│   ├── strategy.md            # Trading strategy & system design
+│   ├── pipeline_b.md          # Pipeline B detailed documentation
+│   ├── model_improvement_brief.md # ML model analysis
 │   └── skills.md              # Role & expertise profile
-├── .env.example               # Environment variable template
-├── vercel.json                # Vercel deployment config
-└── vite.config.js             # Vite build config
+├── frontend/                  # React dashboard (npm run dev → :5173)
+├── CLAUDE.md                  # Claude Code instructions
+└── SKILL.md                   # Technical skill guide
 ```
 
 ---
 
 ## Modules
 
-### Screener (`src/data/screener.js`)
-Screens ~250 S&P 500 components using Polygon.io grouped daily bars.
+### Signal Engine — Pipeline B (`src/models/pipeline_b.py`)
 
-**API Strategy:**
-- `GET /v2/aggs/grouped/locale/us/market/stocks/{date}` returns ALL US stocks in one call
-- Fetches last 5 trading days on first run (5 API calls, spaced 13s for rate limiting)
-- `groupedDayCache` is in-memory with no TTL — daily bars are immutable, so re-screens cost 0 API calls
+The active signal engine. Scores each ticker across 5 dimensions:
+
+```
+ensemble = 0.30 × technicals + 0.25 × fundamentals + 0.20 × regime
+         + 0.20 × sentiment + 0.05 × social
+```
+
+See [docs/pipeline_b.md](pipeline_b.md) for full scoring rules and thresholds.
+
+---
+
+### Screener Agent (`src/agents/screener_agent.py`)
+
+Runs nightly at 18:00 ET to rotate the trading universe.
 
 **Scoring:**
 ```
-composite = dayReturn × 0.6 × adjMomentum
-          + weekReturn × 0.4 × adjMomentum
-          + volSurge × volumeSurge_weight
-          + trendScore × trendBreak_weight
-          + newsScore × 0.20
+composite = 0.35 × 5d_return + 0.35 × 20d_return
+          + 0.20 × volume_surge + 0.10 × RS_vs_SPY
 ```
 
-**Screening Profiles:**
-
-| Profile | Momentum | Volume Surge | Trend Break | RSI Oversold |
-|---------|----------|--------------|-------------|--------------|
-| MOMENTUM | 0.50 | 0.20 | 0.20 | 0.00 |
-| BREAKOUT | 0.20 | 0.40 | 0.30 | 0.00 |
-| MEAN REVERSION | 0.00 | 0.10 | -0.30 | 0.60 |
-| HIGH VOLATILITY | 0.20 | 0.30 | 0.10 | 0.00 |
-| BALANCED | 0.25 | 0.25 | 0.25 | 0.00 |
+**Filters:** Avg daily volume > 500k, price $5-$2000, max 40 stocks.
+**Anchor tickers:** Always included (AAPL, MSFT, NVDA, AMZN, GOOGL, TSLA, etc.)
+**Output:** `config/universe.json` (hot-swapped without restart)
 
 ---
 
-### Signal Engine (`src/signals/signals.js`)
-Generates composite BUY/SELL/HOLD signals from 7 factors.
+### Feature Engineering (`src/features/indicators.py`)
 
-**Factors:**
+All indicators computed from raw OHLCV via pure pandas/numpy:
 
-| Factor | Description | Default Weight |
-|--------|-------------|----------------|
-| Momentum | 1-month + 3-month return, MACD confirmation | 0.28 |
-| Mean Reversion | RSI + Bollinger Bands + Stochastic | 0.12 |
-| Volume | Volume ratio × price direction + OBV trend | 0.18 |
-| Volatility | ATR + vol ratio (low vol = bullish for momentum) | 0.12 |
-| Trend | Price vs VWAP/MA20/MA50 + EMA golden cross | 0.20 |
-| FF Alpha | Fama-French alpha proxy (residual return + RMW) | 0.08 |
-| TCN Align | Multi-scale MA alignment (5/10/20/50-day) | 0.08 |
+| Category | Indicators |
+|---|---|
+| Trend | EMA(9/21/50), MACD(12/26/9), ADX(14), Parabolic SAR |
+| Momentum | RSI(14), Stochastic(14), Williams %R |
+| Volatility | ATR(14), Bollinger Bands(20), Keltner Channel, Donchian |
+| Volume | OBV, MFI(14), Volume ratio, VPIN |
+| Price | VWAP, CCI(14), supply/demand zones |
+| Multi-TF | Multi-timeframe confluence, divergence detection |
+| Composite | orb_vpin_interact, vwap_time_interact, atr_vol_interact |
 
-**Technical Indicators computed:**
-- RSI (14-period)
-- MACD (12/26/9)
-- Bollinger Bands (20-period, 2σ)
-- Stochastic Oscillator (14/3)
-- ATR (14-period)
-- OBV (On-Balance Volume)
+All indicators shifted by 1 bar (no lookahead bias).
 
-**Signal thresholds:**
-- `score > 0.15` → BUY
-- `score < -0.15` → SELL
-- otherwise → HOLD
+**FFSA:** LightGBM + SHAP selects top 30 features. Current IC = 0.1385.
 
 ---
 
-### Backtester (`src/backtest/backtester.js`)
-Vectorized backtester with institutional-grade accuracy.
+### Risk Management (`src/risk/circuit_breakers.py`)
 
-**Key properties:**
-- Zero lookahead bias — `vectorizeSignals()` uses fixed lookback window sliced at each bar
-- Transaction costs: 0.05% per side
-- Kelly criterion position sizing (half-Kelly, 25% cap per asset)
-- 7% dynamic trailing stop loss
+Seven hard circuit breakers (never disabled):
 
-**Reward function:**
-```
-Reward = 0.6 × Sharpe Ratio + 0.4 × Calmar Ratio
-```
+| Breaker | Threshold | Action |
+|---|---|---|
+| Daily loss limit | -3% portfolio | Halt trading for the day |
+| Max drawdown | -8% from peak | Pause, alert human |
+| Position size | >25% single position | Reject order |
+| Portfolio heat | >80% deployed | No new entries |
+| VIX spike | VIX > 35 | Go to cash |
+| Consecutive losses | 5 in a row | Reduce position size 50% |
+| Flash crash | >20% drop in 1 bar | Halt, alert human |
 
----
-
-### RL Agent (`src/rl/agent.js`)
-Cross-Entropy Method + Q-learning hybrid, regime-aware.
-
-**Algorithm:**
-1. Sample candidate factor weights (exploit elite population or explore randomly)
-2. Backtest the weights on historical OHLCV data
-3. Record episode score (Sharpe + Calmar reward)
-4. Update elite population (top 25% of episodes)
-5. Derive new weights as weighted mean of elites
-6. Adapt epsilon (exploration rate) based on improvement trend
-
-**Regime detection:**
-```
-regime = bull/bear × lowvol/medvol/highvol × trending/ranging/declining
-```
-The agent maintains per-regime populations and best weights, enabling specialization.
-
-**Persistence:** `localStorage` key `stockbot_rl_v3` — survives page refreshes.
+**Resume after halt:** requires explicit human confirmation — never automatic.
 
 ---
 
-### Risk Management (`src/risk/kelly.js`)
-- Half-Kelly position sizing based on signal strength and confidence
-- Maximum 25% of portfolio per single asset
-- 7% trailing stop loss (dynamic)
+## Data Sources (All Free Tier)
 
----
-
-## Dashboard Screens
-
-| Screen | Description |
-|--------|-------------|
-| **Dashboard** | Signal heatmap, top 20 screened stocks, live RL factor weights |
-| **Signals** | Per-asset deep-dive: factor decomposition, price chart, indicators |
-| **Backtest** | Equity curve, max drawdown, per-asset performance table |
-| **Train** | RL agent controls, live weight visualization, episode log, regime stats |
-| **Paper** | Simulated trade execution log with P&L tracking |
-
----
-
-## Data Sources
-
-| Source | Usage | Notes |
-|--------|-------|-------|
-| Polygon.io (free) | Grouped daily bars, per-ticker OHLCV | 15-min delayed, 5 req/min |
-| Polygon.io (paid) | WebSocket real-time prices | Roadmap |
-| Anthropic API | News sentiment | Optional / Roadmap |
-| Alpaca Markets | Paper + live order execution | Roadmap |
+| Source | Data | Frequency |
+|--------|------|-----------|
+| Alpaca (free) | 1-min OHLCV bars (IEX), paper execution | REST poll every 60s |
+| Polygon.io (free) | News articles, daily screener bars | Poll every 5 min |
+| yfinance (free) | VIX, P/E, earnings, revenue, options chains | Daily cache + 1-min regime |
+| HuggingFace API (free) | FinBERT sentiment inference | Per article |
+| Reddit public JSON | Social sentiment (WSB, stocks, investing) | Poll every 5 min |
 
 ---
 
 ## Environment Setup
 
 ```bash
-cp .env.example .env.local
-# Edit .env.local:
-# VITE_POLYGON_API_KEY=your_key
-# VITE_ANTHROPIC_API_KEY=your_key  (optional)
+# Backend (from stockbot/)
+cp .env.example .env
+# Required: ALPACA_API_KEY, ALPACA_SECRET_KEY, DATABASE_URL, POLYGON_API_KEY
+uvicorn main:app --port 8000
 
+# Frontend (from stockbot/frontend/)
 npm install
-npm run dev       # http://localhost:3000
-```
+npm run dev    # → http://localhost:5173 (proxied to :8000)
 
-### Mock Mode
-If `VITE_POLYGON_API_KEY` is not set, the app runs entirely on synthetic price data. All features (signals, backtest, RL training) work in mock mode.
+# PostgreSQL must be running:
+brew services start postgresql@14
+```
 
 ---
 
-## Deployment
+## Deployment (Railway)
 
 ```bash
-# One-time setup
-npm install -g vercel
-vercel link
+# Link to Railway project
+railway link
 
-# Deploy
-vercel --prod
+# Set env vars
+railway variables set ACTIVE_PIPELINE=b
+railway variables set ENABLE_ALPACA_WS=false
 
-# Set env vars in Vercel dashboard:
-# VITE_POLYGON_API_KEY
-# VITE_ANTHROPIC_API_KEY (optional)
+# Deploy (auto-deploys on git push to main)
+git push origin main
+
+# Check status
+railway logs
 ```
+
+**Live URL:** `https://stockbot-production-cbde.up.railway.app`
 
 ---
 
@@ -225,15 +216,15 @@ vercel --prod
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| 1 | Historical data pipeline + technical indicators | Done |
-| 2 | Multi-factor signal engine | Done |
-| 3 | Vectorized backtester | Done |
-| 4 | CEM + Q-learning RL agent | Done |
-| 5 | S&P 500 screener (grouped bars) | Done |
-| 6 | Paper trading dashboard | Done |
-| 7 | WebSocket real-time prices | Roadmap |
-| 8 | News sentiment (Anthropic API) | Roadmap |
-| 9 | Black-Litterman portfolio optimization | Roadmap |
-| 10 | Live broker integration (Alpaca) | Roadmap |
-| 11 | Multi-timeframe signals (1h + 1d) | Roadmap |
-| 12 | Walk-forward optimization | Roadmap |
+| 1 | Data pipeline (Alpaca bars, TimescaleDB) | Done |
+| 2 | Feature engineering (30 FFSA features) | Done |
+| 3 | ML signal models (LightGBM, Transformer, TCN) | Done (inactive — IC~0 live) |
+| 4 | Paper trading (Pipeline A) | Done (underperformed) |
+| 5 | Pipeline B (rules-based signal engine) | Done — ACTIVE |
+| 6 | A/B testing framework (Pipeline A vs B) | Done |
+| 7 | ATR-adaptive exits (per-ticker volatility) | Done |
+| 8 | Sub-agents (risk, latency, profit, drift, screener) | Done |
+| 9 | Daily performance plots | Done |
+| - | Validate live IC > 0.05 (Pipeline B) | In progress |
+| - | 3 months paper trading meeting Sharpe >= 1.5 | Pending |
+| - | Live broker integration | Pending (requires human approval) |
