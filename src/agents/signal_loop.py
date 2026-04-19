@@ -47,27 +47,44 @@ ACTION_NAMES = [
 STATE_DIM = 29
 
 # Signal quality thresholds for entry gating
-SIZING_COST_THRESHOLD = 0.001   # min |pred_return| to consider entry (liquid mega-cap round-trip cost ~0.02-0.05%)
+SIZING_COST_THRESHOLD = 0.0015  # min |pred_return| — only enter on stronger signals (was 0.001)
 SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # dir_prob inside this range → skip
 SIZING_REVERSAL_BARS = 2
 
 # Anti-churn controls
-SIZING_MAX_TRADES_PER_DAY = 8       # cap total round-trips per day
-SIZING_TICKER_COOLDOWN_BARS = 30    # 30 min cooldown after exiting a ticker
+SIZING_MAX_TRADES_PER_DAY = 5       # fewer, higher-quality trades (was 8)
+SIZING_TICKER_COOLDOWN_BARS = 60    # 1 hour cooldown — stop re-entering noise (was 30)
 
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
 
-# Exit thresholds calibrated to equity intraday microstructure.
-# Mega-cap 1m vol ≈ 0.02%, so 10-bar range ≈ 0.06%.
-SIZING_STOP_LOSS = 0.004       # 0.4% — ~5× 1min vol → 3σ 15-bar move
-SIZING_TRAILING_STOP = 0.005   # 0.5% — locks in gains within realistic range
-SIZING_TAKE_PROFIT = 0.006     # 0.6% — reachable within signal horizon
-# [P1] Shortened from 15 to 10 — 89% of trades were timing out at max_hold.
-# Signal alpha decays fast; holding past the edge window bleeds.
-SIZING_MAX_HOLD_BARS = 10      # 10 min — tighter window to capture alpha
+# Exit thresholds — ATR-adaptive with floors.
+# ATR here is computed on 1-minute bars (atr_14 / close), so values are small:
+#   AAPL ≈ 0.07%, NVDA ≈ 0.09%, MSTR ≈ 0.14%, CVX ≈ 0.04%.
+# Multipliers are scaled accordingly to produce meaningful intraday stops.
+# R:R stays ~2.3:1 regardless of volatility.
+SIZING_STOP_LOSS_ATR_MULT = 15     # stop = ATR × 15  (NVDA: 0.09%×15 = 1.35%)
+SIZING_TRAILING_STOP_ATR_MULT = 20 # trailing = ATR × 20  (NVDA: 0.09%×20 = 1.8%)
+SIZING_TAKE_PROFIT_ATR_MULT = 35   # target = ATR × 35  (NVDA: 0.09%×35 = 3.15%)
+SIZING_STOP_LOSS_FLOOR = 0.005     # 0.5% minimum stop (ultra-low-vol stocks)
+SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
+SIZING_TAKE_PROFIT_FLOOR = 0.015   # 1.5% minimum take profit
+SIZING_MAX_HOLD_BARS = 45      # 45 min — give trades time to develop momentum
+DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
 
 logger = structlog.get_logger(__name__)
+
+
+def _atr_exits(atr_pct: float) -> tuple[float, float, float]:
+    """Compute (stop_loss, trailing_stop, take_profit) from per-ticker ATR%.
+
+    Returns percentages scaled to the stock's volatility with hard floors
+    so low-vol stocks still have meaningful thresholds.
+    """
+    sl = max(atr_pct * SIZING_STOP_LOSS_ATR_MULT, SIZING_STOP_LOSS_FLOOR)
+    ts = max(atr_pct * SIZING_TRAILING_STOP_ATR_MULT, SIZING_TRAILING_STOP_FLOOR)
+    tp = max(atr_pct * SIZING_TAKE_PROFIT_ATR_MULT, SIZING_TAKE_PROFIT_FLOOR)
+    return sl, ts, tp
 
 
 # ─── RL agent loader ──────────────────────────────────────────────────────────
@@ -307,14 +324,17 @@ class SignalLoop:
             peak = self._peak_prices.get(ticker, p.last_price)
             bars = self._bars_held.get(ticker, 0)
 
+            atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
+            sl, ts, tp = _atr_exits(atr_pct)
+
             if entry_dir > 0:
-                stop_loss_price = round(entry_price * (1 - SIZING_STOP_LOSS), 2)
-                take_profit_price = round(entry_price * (1 + SIZING_TAKE_PROFIT), 2)
-                trailing_stop_price = round(peak * (1 - SIZING_TRAILING_STOP), 2)
+                stop_loss_price = round(entry_price * (1 - sl), 2)
+                take_profit_price = round(entry_price * (1 + tp), 2)
+                trailing_stop_price = round(peak * (1 - ts), 2)
             else:
-                stop_loss_price = round(entry_price * (1 + SIZING_STOP_LOSS), 2)
-                take_profit_price = round(entry_price * (1 - SIZING_TAKE_PROFIT), 2)
-                trailing_stop_price = round(peak * (1 + SIZING_TRAILING_STOP), 2)
+                stop_loss_price = round(entry_price * (1 + sl), 2)
+                take_profit_price = round(entry_price * (1 - tp), 2)
+                trailing_stop_price = round(peak * (1 + ts), 2)
 
             positions.append({
                 "ticker": ticker,
@@ -326,14 +346,17 @@ class SignalLoop:
                 "unrealized_pnl": round(p.unrealized_pnl, 2),
                 "unrealized_pnl_pct": round(p.unrealized_pnl_pct, 4),
                 "stop_loss_price": stop_loss_price,
+                "stop_loss_pct": round(sl, 4),
                 "take_profit_price": take_profit_price,
-                "trailing_stop_pct": SIZING_TRAILING_STOP,
+                "take_profit_pct": round(tp, 4),
+                "trailing_stop_pct": round(ts, 4),
                 "trailing_stop_price": trailing_stop_price,
                 "peak_price": round(peak, 2),
                 "bars_held": bars,
                 "max_hold_bars": SIZING_MAX_HOLD_BARS,
                 "bars_remaining": max(0, SIZING_MAX_HOLD_BARS - bars),
                 "entry_direction": entry_dir,
+                "atr_pct": round(atr_pct, 4),
             })
         return positions
 
@@ -364,6 +387,8 @@ class SignalLoop:
             if sizing is None:
                 continue
 
+            atr_pct = self._ticker_atr.get(sig.ticker, DEFAULT_ATR_PCT)
+            sl, ts, tp = _atr_exits(atr_pct)
             sig_dict = sig.to_dict()
             result.append({
                 **sig_dict,
@@ -372,10 +397,11 @@ class SignalLoop:
                 "recommended_size_pct": round(sizing.size_pct, 4),
                 "recommended_notional": round(sizing.notional, 2),
                 "sizing_stages": sizing.to_dict()["stages"],
-                "stop_loss_pct": SIZING_STOP_LOSS,
-                "take_profit_pct": SIZING_TAKE_PROFIT,
-                "trailing_stop_pct": SIZING_TRAILING_STOP,
+                "stop_loss_pct": round(sl, 4),
+                "take_profit_pct": round(tp, 4),
+                "trailing_stop_pct": round(ts, 4),
                 "max_hold_bars": SIZING_MAX_HOLD_BARS,
+                "atr_pct": round(atr_pct, 4),
             })
         return result
 
@@ -420,6 +446,18 @@ class SignalLoop:
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
+            "exit_mode": "atr_adaptive",
+            "atr_multipliers": {
+                "stop_loss": SIZING_STOP_LOSS_ATR_MULT,
+                "trailing_stop": SIZING_TRAILING_STOP_ATR_MULT,
+                "take_profit": SIZING_TAKE_PROFIT_ATR_MULT,
+            },
+            "atr_floors": {
+                "stop_loss": SIZING_STOP_LOSS_FLOOR,
+                "trailing_stop": SIZING_TRAILING_STOP_FLOOR,
+                "take_profit": SIZING_TAKE_PROFIT_FLOOR,
+            },
+            "ticker_atr": {t: round(a, 4) for t, a in self._ticker_atr.items()},
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -817,28 +855,32 @@ class SignalLoop:
             # Position predates this deployment — force max_hold exit
             self._bars_held[ticker] = SIZING_MAX_HOLD_BARS
 
+        # ATR-adaptive exit thresholds
+        atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
+        sl, ts, tp = _atr_exits(atr_pct)
+
         # Unrealized PnL
         unrealized = (price - entry_price) / entry_price
         if entry_dir < 0:
             unrealized = -unrealized
 
-        # Stop loss
-        if unrealized < -SIZING_STOP_LOSS:
+        # Stop loss (ATR-scaled)
+        if unrealized < -sl:
             return "stop_loss"
 
-        # Take profit
-        if unrealized > SIZING_TAKE_PROFIT:
+        # Take profit (ATR-scaled)
+        if unrealized > tp:
             return "take_profit"
 
-        # Trailing stop
+        # Trailing stop (ATR-scaled)
         peak = self._peak_prices.get(ticker, price)
         if entry_dir > 0:
             drop = (peak - price) / peak if peak > 0 else 0.0
-            if drop > SIZING_TRAILING_STOP:
+            if drop > ts:
                 return "trailing_stop"
         else:
             rise = (price - peak) / peak if peak > 0 else 0.0
-            if rise > SIZING_TRAILING_STOP:
+            if rise > ts:
                 return "trailing_stop"
 
         # Max hold
@@ -956,12 +998,18 @@ class SignalLoop:
                     self._pending_exit_reasons[ticker] = exit_reason
                     # Start cooldown to prevent immediate re-entry churn
                     self._ticker_cooldown[ticker] = SIZING_TICKER_COOLDOWN_BARS
+                    atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
+                    _sl, _ts, _tp = _atr_exits(atr_pct)
                     logger.info(
                         "sizing_exit",
                         ticker=ticker,
                         reason=exit_reason,
                         bars_held=self._bars_held.get(ticker, 0),
                         cooldown_bars=SIZING_TICKER_COOLDOWN_BARS,
+                        atr_pct=round(atr_pct, 4),
+                        stop=round(_sl, 4),
+                        trail=round(_ts, 4),
+                        target=round(_tp, 4),
                     )
                 else:
                     # Still holding — update tracking state

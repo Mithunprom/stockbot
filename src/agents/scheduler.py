@@ -231,6 +231,23 @@ def create_scheduler(
             misfire_grace_time=600,
         )
 
+    # ── Data Retention: daily cleanup at 05:00 ET (before market) ──────────────
+    from src.data.db import prune_old_data
+    scheduler.add_job(
+        prune_old_data,
+        trigger=CronTrigger(
+            day_of_week="mon-sat",
+            hour=5,
+            minute=0,
+            timezone="America/New_York",
+        ),
+        id="data_retention",
+        name="Data Retention (daily prune)",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     logger.info(
         "scheduler_configured",
         jobs=[j.id for j in scheduler.get_jobs()],

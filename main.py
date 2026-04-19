@@ -25,8 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.config import get_settings
-from src.data.alpaca_ws import AlpacaDataStreamClient
-from src.data.db import get_session_factory, init_db
+from src.data.alpaca_ws import AlpacaDataStreamClient, RestBarPoller
+from src.data.db import get_session_factory, init_db, prune_old_data
 from src.data.news import NewsPoller
 from src.data.options_flow import OptionsFlowPoller
 
@@ -72,8 +72,9 @@ async def lifespan(app: FastAPI):
         environment=settings.environment,
     )
 
-    # Initialize TimescaleDB schema (idempotent)
+    # Initialize DB schema (idempotent) + prune old data
     await init_db()
+    await prune_old_data()
     session_factory = get_session_factory()
 
     # ── Trading universe (screener → config → defaults) ───────────────────────
@@ -90,20 +91,30 @@ async def lifespan(app: FastAPI):
     _live_feature_computer: LiveFeatureComputer | None = None
     stream_task = None
 
+    async def _on_1m_bar(ticker: str, bar_time: Any) -> None:
+        if _live_feature_computer is not None:
+            await _live_feature_computer.on_bar(ticker, bar_time)
+
+    rest_bar_poller = None
     if _ws_enabled:
         alpaca_stream = AlpacaDataStreamClient(tickers=universe, feed="iex")
-
-        async def _on_1m_bar(ticker: str, bar_time: Any) -> None:
-            if _live_feature_computer is not None:
-                await _live_feature_computer.on_bar(ticker, bar_time)
-
         alpaca_stream.on_1m_bar = _on_1m_bar
         stream_task = asyncio.create_task(
             alpaca_stream.start(), name="alpaca_data_stream"
         )
         logger.info("alpaca_stream_started", tickers=len(universe), feed="iex")
     else:
-        logger.info("alpaca_ws_disabled — signal loop uses REST backfill")
+        # REST bar poller — fetches 1-min bars via Alpaca REST every minute
+        # and triggers LiveFeatureComputer, replacing the WebSocket feed
+        rest_bar_poller = RestBarPoller(
+            tickers=universe,
+            on_bar_callback=_on_1m_bar,
+            poll_interval=60,
+        )
+        stream_task = asyncio.create_task(
+            rest_bar_poller.start(), name="rest_bar_poller"
+        )
+        logger.info("rest_bar_poller_started", tickers=len(universe))
 
     options_poller = OptionsFlowPoller(universe=universe, poll_interval_seconds=300)
     options_task = asyncio.create_task(
@@ -192,42 +203,62 @@ async def lifespan(app: FastAPI):
     # ── Phase 5: Signal loop ──────────────────────────────────────────────────
     from src.agents.signal_loop import SignalLoop
 
-    _signal_loop = SignalLoop(
-        universe=universe,
-        ensemble=ensemble,
-        alpaca=alpaca_router,
-        circuit_breakers=circuit_breakers,
-        pos_manager=pos_manager,
-        session_factory=session_factory,
-        feature_cols=feature_cols,
-        broadcast_fn=broadcast_dashboard,
-        pipeline_id="pipeline_a",
-    )
+    use_pipeline_b = settings.active_pipeline == "b" and not settings.ab_test_enabled
 
-    # ── A/B Testing: Pipeline B (rules-based) ────────────────────────────────
+    if not use_pipeline_b:
+        # Pipeline A (ML-based) — always created for A/B mode or standalone A
+        _signal_loop = SignalLoop(
+            universe=universe,
+            ensemble=ensemble,
+            alpaca=alpaca_router,
+            circuit_breakers=circuit_breakers,
+            pos_manager=pos_manager,
+            session_factory=session_factory,
+            feature_cols=feature_cols,
+            broadcast_fn=broadcast_dashboard,
+            pipeline_id="pipeline_a",
+        )
+
+    # ── A/B Testing OR Pipeline B standalone ─────────────────────────────────
     signal_task_b = None
-    if settings.ab_test_enabled:
-        from src.agents.ab_runner import ABTestRunner
+    if settings.ab_test_enabled or use_pipeline_b:
         from src.agents.signal_loop_b import SignalLoopB
         from src.data.fundamentals import FundamentalsCache
         from src.data.market_regime import MarketRegimeMonitor
         from src.data.social_stocktwits import StockTwitsFeed
         from src.models.pipeline_b import PipelineBEngine
 
-        # Split capital between Pipeline A and Pipeline B
-        split = settings.ab_capital_split
-        capital_a = initial_portfolio * split
-        capital_b = initial_portfolio * (1.0 - split)
-        pos_manager._portfolio_value = capital_a
-        pos_manager._peak_value = capital_a
+        if settings.ab_test_enabled:
+            from src.agents.ab_runner import ABTestRunner
+            # Split capital between Pipeline A and Pipeline B
+            split = settings.ab_capital_split
+            capital_a = initial_portfolio * split
+            capital_b = initial_portfolio * (1.0 - split)
+            pos_manager._portfolio_value = capital_a
+            pos_manager._peak_value = capital_a
+        else:
+            # Pipeline B standalone — gets full capital
+            capital_b = initial_portfolio
 
-        # Pipeline B manages positions purely in-memory (no broker sync).
-        # Since both pipelines share one Alpaca account, only Pipeline A syncs
-        # from the broker. Pipeline B tracks its own positions via open/close calls.
+        # Pipeline B manages positions purely in-memory (no broker sync)
+        # when in A/B mode. In standalone mode, it syncs from the broker.
         pos_manager_b = PositionManager(
             initial_portfolio=capital_b,
-            broker_sync_enabled=False,
+            broker_sync_enabled=use_pipeline_b,  # sync when B is standalone
+            universe=universe,
         )
+
+        if use_pipeline_b:
+            # Sync existing broker positions into Pipeline B's pos_manager
+            try:
+                await pos_manager_b.sync_from_broker(alpaca_router)
+                logger.info(
+                    "pipeline_b_positions_synced",
+                    count=len(pos_manager_b._positions),
+                    heat=round(pos_manager_b.portfolio_heat, 3),
+                )
+            except Exception as exc:
+                logger.warning("pipeline_b_position_sync_failed", error=str(exc))
 
         # Separate circuit breakers for Pipeline B so one pipeline's
         # losses don't halt the other.
@@ -288,21 +319,29 @@ async def lifespan(app: FastAPI):
             pipeline_id="pipeline_b",
         )
 
-        # Create and start A/B runner
-        _ab_runner = ABTestRunner(
-            signal_loop_a=_signal_loop,
-            signal_loop_b=_signal_loop_b,
-            pos_manager_a=pos_manager,
-            pos_manager_b=pos_manager_b,
-            circuit_breakers_a=circuit_breakers,
-            circuit_breakers_b=circuit_breakers_b,
-        )
-        await _ab_runner.start()
-        logger.info(
-            "ab_test_started",
-            capital_a=round(capital_a, 2),
-            capital_b=round(capital_b, 2),
-        )
+        if settings.ab_test_enabled:
+            # Create and start A/B runner (manages both pipelines)
+            _ab_runner = ABTestRunner(
+                signal_loop_a=_signal_loop,
+                signal_loop_b=_signal_loop_b,
+                pos_manager_a=pos_manager,
+                pos_manager_b=pos_manager_b,
+                circuit_breakers_a=circuit_breakers,
+                circuit_breakers_b=circuit_breakers_b,
+            )
+            await _ab_runner.start()
+            logger.info(
+                "ab_test_started",
+                capital_a=round(capital_a, 2),
+                capital_b=round(capital_b, 2),
+            )
+        else:
+            # Pipeline B standalone — use it as the primary signal loop
+            _signal_loop = _signal_loop_b
+            signal_task = asyncio.create_task(
+                _signal_loop_b.start(), name="signal_loop_b"
+            )
+            logger.info("pipeline_b_standalone_started", capital=round(capital_b, 2))
     else:
         signal_task = asyncio.create_task(
             _signal_loop.start(), name="signal_loop"
@@ -417,12 +456,14 @@ async def lifespan(app: FastAPI):
         await _signal_loop.stop()
     if _ws_enabled:
         await alpaca_stream.stop()
+    elif rest_bar_poller is not None:
+        await rest_bar_poller.stop()
     await options_poller.stop()
     await news_poller.stop()
     shutdown_tasks = [stream_task, options_task, news_task]
     if not settings.ab_test_enabled:
         shutdown_tasks.append(signal_task)
-    if settings.ab_test_enabled:
+    if settings.ab_test_enabled or use_pipeline_b:
         shutdown_tasks.extend([t for t in [
             locals().get("fundamentals_task"),
             locals().get("regime_task"),
@@ -682,11 +723,14 @@ async def root() -> JSONResponse:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    settings = get_settings()
+    active = "ab" if settings.ab_test_enabled else settings.active_pipeline
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "0.1.0",
-        "mode": get_settings().alpaca_mode,
+        "mode": settings.alpaca_mode,
+        "active_pipeline": active,
         "signal_loop_active": _signal_loop is not None,
     }
 
@@ -826,6 +870,10 @@ async def diagnostics() -> JSONResponse:
                 "sizing_cost_threshold": SIZING_COST_THRESHOLD,
                 "dir_prob_dead_zone": list(SIZING_DIR_PROB_DEAD_ZONE),
             },
+            "exit_mode": summary.get("exit_mode"),
+            "atr_multipliers": summary.get("atr_multipliers", {}),
+            "atr_floors": summary.get("atr_floors", {}),
+            "ticker_atr": summary.get("ticker_atr", {}),
             "signal_gate_analysis": gate_analysis,
             "signals_passing": n_pass,
             "signals_blocked": n_fail,

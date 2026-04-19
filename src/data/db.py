@@ -420,3 +420,62 @@ async def init_db() -> None:
                 logger.warning("compression_skip %s: %s", table, exc)
 
     logger.info("db_initialized")
+
+
+# ─── Data retention ──────────────────────────────────────────────────────────
+
+# Tables and their time columns, with how many days to keep.
+# feature_matrix is the biggest space consumer (~15 MB/day).
+_RETENTION_POLICIES: list[tuple[str, str, int]] = [
+    ("feature_matrix", "time", 7),
+    ("ohlcv_1m", "time", 14),
+    ("ohlcv_5m", "time", 14),
+    ("signals", "time", 7),
+    ("news_raw", "published_at", 14),
+    ("prediction_outcomes", "predicted_at", 14),
+]
+
+
+async def prune_old_data() -> dict[str, int]:
+    """Delete rows older than the retention window per table.
+
+    Called on startup and periodically by the scheduler.
+    Returns a dict of table_name → rows_deleted.
+    """
+    from datetime import timedelta, timezone
+
+    engine = get_engine()
+    now = datetime.now(timezone.utc)
+    results: dict[str, int] = {}
+
+    async with engine.begin() as conn:
+        for table, time_col, keep_days in _RETENTION_POLICIES:
+            cutoff = now - timedelta(days=keep_days)
+            try:
+                r = await conn.execute(
+                    text(f"DELETE FROM {table} WHERE {time_col} < :cutoff"),
+                    {"cutoff": cutoff},
+                )
+                results[table] = r.rowcount
+            except Exception as exc:
+                logger.warning("retention_delete_failed", table=table, error=str(exc))
+                results[table] = -1
+
+    deleted_any = any(v > 0 for v in results.values())
+    if deleted_any:
+        # VACUUM outside a transaction to reclaim disk space
+        try:
+            raw_engine = create_async_engine(
+                get_settings().database_url,
+                isolation_level="AUTOCOMMIT",
+            )
+            async with raw_engine.connect() as conn:
+                for table, _, _ in _RETENTION_POLICIES:
+                    if results.get(table, 0) > 0:
+                        await conn.execute(text(f"VACUUM {table}"))
+            await raw_engine.dispose()
+        except Exception as exc:
+            logger.warning("retention_vacuum_failed", error=str(exc))
+
+    logger.info("retention_prune_complete", deleted=results)
+    return results

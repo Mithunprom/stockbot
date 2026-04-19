@@ -515,3 +515,125 @@ async def backfill_crypto(
         except Exception as exc:
             logger.error("crypto_backfill_error %s: %s", ticker, exc)
         await asyncio.sleep(0.35)
+
+
+# ─── REST bar poller (fallback when WS is disabled) ──────────────────────────
+
+class RestBarPoller:
+    """Polls Alpaca REST API every minute for latest bars.
+
+    Replaces the WebSocket feed when ENABLE_ALPACA_WS=false.
+    Fetches the last 5 minutes of 1-min bars per ticker, writes to ohlcv_1m,
+    and calls on_bar_callback so LiveFeatureComputer can update features.
+    """
+
+    def __init__(
+        self,
+        tickers: list[str],
+        on_bar_callback: Callable[[str, datetime], Coroutine] | None = None,
+        poll_interval: int = 60,
+    ) -> None:
+        self.tickers = [t for t in tickers if not _is_crypto(t)]
+        self._on_bar = on_bar_callback
+        self._poll_interval = poll_interval
+        self._running = False
+
+    async def start(self) -> None:
+        """Poll in a loop during market hours."""
+        self._running = True
+        try:
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        except ImportError:
+            logger.error("rest_bar_poller: alpaca-py not installed")
+            return
+
+        settings = get_settings()
+        client = StockHistoricalDataClient(
+            api_key=settings.alpaca_api_key,
+            secret_key=settings.alpaca_secret_key,
+        )
+        tf = TimeFrame(1, TimeFrameUnit.Minute)
+
+        logger.info("rest_bar_poller_started", tickers=len(self.tickers))
+
+        while self._running:
+            try:
+                if not self._is_market_hours():
+                    await asyncio.sleep(self._poll_interval)
+                    continue
+
+                now = datetime.now(timezone.utc)
+                start = now - timedelta(minutes=5)
+
+                # Fetch bars for all tickers at once
+                req = StockBarsRequest(
+                    symbol_or_symbols=self.tickers,
+                    timeframe=tf,
+                    start=start,
+                    end=now,
+                    feed=ALPACA_FEED,
+                )
+                bars_response = client.get_stock_bars(req)
+                bar_data = bars_response.data if hasattr(bars_response, "data") else bars_response
+
+                rows: list[dict[str, Any]] = []
+                latest_per_ticker: dict[str, datetime] = {}
+                for sym, bar_list in bar_data.items():
+                    for bar in bar_list:
+                        bar_time = bar.timestamp
+                        rows.append({
+                            "time": bar_time,
+                            "ticker": str(sym),
+                            "open": float(bar.open),
+                            "high": float(bar.high),
+                            "low": float(bar.low),
+                            "close": float(bar.close),
+                            "volume": float(bar.volume),
+                            "vwap": float(bar.vwap or bar.close),
+                            "transactions": int(bar.trade_count or 0),
+                        })
+                        if str(sym) not in latest_per_ticker or bar_time > latest_per_ticker[str(sym)]:
+                            latest_per_ticker[str(sym)] = bar_time
+
+                if rows:
+                    await _write_bars(OHLCV1m, rows)
+                    logger.info(
+                        "rest_bar_poll_complete",
+                        bars=len(rows),
+                        tickers=len(latest_per_ticker),
+                    )
+
+                    # Trigger feature computation for each ticker with new data
+                    if self._on_bar:
+                        for ticker, bar_time in latest_per_ticker.items():
+                            try:
+                                await self._on_bar(ticker, bar_time)
+                            except Exception as exc:
+                                logger.warning(
+                                    "rest_bar_feature_callback_error",
+                                    ticker=ticker,
+                                    error=str(exc),
+                                )
+
+            except Exception as exc:
+                logger.error("rest_bar_poll_error", error=str(exc))
+
+            await asyncio.sleep(self._poll_interval)
+
+    async def stop(self) -> None:
+        self._running = False
+
+    @staticmethod
+    def _is_market_hours() -> bool:
+        """Check if US stock market is currently open."""
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("America/New_York"))
+        # Weekday check (0=Mon ... 4=Fri)
+        if now.weekday() > 4:
+            return False
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        return market_open <= now <= market_close

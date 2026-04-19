@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     ab_test_enabled: bool = False
     ab_capital_split: float = 0.5  # fraction of capital for Pipeline A (rest → B)
 
+    # ─── Pipeline selection ───────────────────────────────────────────────────
+    # "a" = ML-based pipeline (default), "b" = rules-based pipeline only
+    # When ab_test_enabled=True, this is ignored (both pipelines run).
+    active_pipeline: Literal["a", "b"] = "a"
+
     # ─── Trading mode (resolved from yaml config) ─────────────────────────────
     _trading_config: dict | None = None
 
