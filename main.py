@@ -66,10 +66,13 @@ async def lifespan(app: FastAPI):
     global _signal_loop, _signal_loop_b, _ab_runner
 
     settings = get_settings()
+    active = "ab" if settings.ab_test_enabled else settings.active_pipeline
     logger.info(
         "stockbot_starting",
         mode=settings.alpaca_mode,
         environment=settings.environment,
+        active_pipeline=active,
+        ab_test_enabled=settings.ab_test_enabled,
     )
 
     # Initialize DB schema (idempotent) + prune old data
