@@ -731,9 +731,10 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": "0.1.0",
+        "version": "0.2.0",
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
+        "ab_test_enabled": settings.ab_test_enabled,
         "signal_loop_active": _signal_loop is not None,
     }
 
