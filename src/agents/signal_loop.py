@@ -52,8 +52,8 @@ SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # dir_prob inside this range → skip
 SIZING_REVERSAL_BARS = 2
 
 # Anti-churn controls
-SIZING_MAX_TRADES_PER_DAY = 5       # fewer, higher-quality trades (was 8)
-SIZING_TICKER_COOLDOWN_BARS = 60    # 1 hour cooldown — stop re-entering noise (was 30)
+SIZING_MAX_TRADES_PER_DAY = 15      # allow more trades — Pipeline B signals are selective
+SIZING_TICKER_COOLDOWN_BARS = 20    # 20-minute cooldown (was 60 — too restrictive for Pipeline B)
 
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries

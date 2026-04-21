@@ -88,8 +88,10 @@ def regime_label(regime_val: int) -> str:
 # ─── Signal loop gate parameters ─────────────────────────────────────────────
 
 # (threshold, size_scale) per regime — used in signal_loop._act_on_signal()
+# Pipeline B signals max out ~0.40, so choppy threshold was lowered to 0.40
+# to avoid blocking all entries. Size scaling still provides risk reduction.
 REGIME_GATE: dict[int, tuple[float, float]] = {
     REGIME_TRENDING:  (0.40, 1.00),   # normal operation
-    REGIME_CHOPPY:    (0.55, 0.70),   # tighter threshold, smaller size
-    REGIME_HIGH_VOL:  (0.55, 0.50),   # same threshold, half size
+    REGIME_CHOPPY:    (0.40, 0.70),   # same threshold, smaller size (was 0.55)
+    REGIME_HIGH_VOL:  (0.45, 0.50),   # slightly raised, half size (was 0.55)
 }
