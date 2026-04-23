@@ -36,18 +36,14 @@ logger = structlog.get_logger(__name__)
 _DEFAULT_UNIVERSE: list[str] = [
     # Core mega-cap tech
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
-    # Semiconductors
-    "AVGO", "AMD", "SNDK",
+    # Semiconductors / storage
+    "AVGO", "AMD", "MU", "SMCI", "SNDK", "WDC",
     # Financials
     "JPM", "V", "MA",
     # AI / high-momentum
     "PLTR", "ARM", "MSTR",
     # Energy
     "XOM", "CVX",
-    # Consumer / healthcare
-    "LLY", "UNH", "COST", "NFLX",
-    # Crypto removed — LightGBM trained on equities only; noise predictions
-    # caused stop-loss churn and ~5% portfolio loss. Re-add when crypto model exists.
 ]
 
 # ─── Module-level singletons (populated in lifespan) ──────────────────────────

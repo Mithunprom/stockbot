@@ -63,13 +63,13 @@ DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gatin
 #   AAPL ≈ 0.07%, NVDA ≈ 0.09%, MSTR ≈ 0.14%, CVX ≈ 0.04%.
 # Multipliers are scaled accordingly to produce meaningful intraday stops.
 # R:R stays ~2.3:1 regardless of volatility.
-SIZING_STOP_LOSS_ATR_MULT = 15     # stop = ATR × 15  (NVDA: 0.09%×15 = 1.35%)
-SIZING_TRAILING_STOP_ATR_MULT = 20 # trailing = ATR × 20  (NVDA: 0.09%×20 = 1.8%)
-SIZING_TAKE_PROFIT_ATR_MULT = 35   # target = ATR × 35  (NVDA: 0.09%×35 = 3.15%)
-SIZING_STOP_LOSS_FLOOR = 0.005     # 0.5% minimum stop (ultra-low-vol stocks)
-SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
-SIZING_TAKE_PROFIT_FLOOR = 0.015   # 1.5% minimum take profit
-SIZING_MAX_HOLD_BARS = 45      # 45 min — give trades time to develop momentum
+SIZING_STOP_LOSS_ATR_MULT = 20     # stop = ATR × 20  (wider to avoid noise exits)
+SIZING_TRAILING_STOP_ATR_MULT = 25 # trailing = ATR × 25
+SIZING_TAKE_PROFIT_ATR_MULT = 45   # target = ATR × 45  (let winners run longer)
+SIZING_STOP_LOSS_FLOOR = 0.008     # 0.8% minimum stop (was 0.5% — too tight)
+SIZING_TRAILING_STOP_FLOOR = 0.012 # 1.2% minimum trailing (was 0.8%)
+SIZING_TAKE_PROFIT_FLOOR = 0.025   # 2.5% minimum take profit (was 1.5%)
+SIZING_MAX_HOLD_BARS = 60      # 60 min — more time to develop (was 45)
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
 
 logger = structlog.get_logger(__name__)

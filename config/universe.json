@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-04-06T16:33:50.633874+00:00",
-  "source": "screener_agent",
-  "count": 17,
+  "updated_at": "2026-04-22T00:00:00+00:00",
+  "source": "manual",
+  "count": 20,
   "symbols": [
     "AAPL",
     "MSFT",
@@ -11,7 +11,10 @@
     "TSLA",
     "AVGO",
     "AMD",
+    "MU",
+    "SMCI",
     "SNDK",
+    "WDC",
     "JPM",
     "V",
     "MA",

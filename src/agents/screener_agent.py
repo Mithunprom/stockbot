@@ -41,16 +41,14 @@ MAX_PRICE = 2000.0
 ANCHOR_TICKERS: list[str] = [
     # Core mega-cap tech (high liquidity, tight spreads)
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
-    # Semiconductors
-    "AVGO", "AMD", "SNDK",
+    # Semiconductors / storage
+    "AVGO", "AMD", "MU", "SMCI", "SNDK", "WDC",
     # Financials
     "JPM", "V", "MA",
     # High-momentum / AI
     "PLTR", "ARM", "MSTR",
     # Energy
     "XOM", "CVX",
-    # Crypto REMOVED — LightGBM is equity-only; noise predictions caused
-    # stop-loss churn and ~5% portfolio loss. Re-add when crypto model exists.
 ]
 
 # Crypto tickers — excluded until a crypto-specific model is trained.

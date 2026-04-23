@@ -93,6 +93,7 @@ _SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single sector
 
 # Stage 5: Minimum viable trade
 _MIN_NOTIONAL = 100.0      # $100 minimum trade
+_MAX_NOTIONAL = 8000.0     # $8k hard cap per position (matches small account)
 _MIN_SHARES_FRACTIONAL = 0.01   # Paper mode minimum
 _MIN_SHARES_WHOLE = 1.0         # Live mode minimum
 
@@ -275,6 +276,8 @@ class SmartPositionSizer:
 
         # ── Stage 5: Minimum Viable Check ────────────────────────────────────
         notional = stage4 * portfolio_value
+        # Hard cap: never exceed _MAX_NOTIONAL per position
+        notional = min(notional, _MAX_NOTIONAL)
         shares = notional / max(price, 0.01)
 
         min_shares = (
