@@ -184,19 +184,31 @@ class SignalLoopB(SignalLoop):
             await self._act_on_signal(sig, price, None, regime=regime_map.get(ticker, 1))
 
         # Process new entry signals
+        # Pipeline B minimum ensemble filter: only pass signals with
+        # sufficient multi-factor confirmation to execution layer.
+        # The sizing entry gate provides a second filter on dir_prob/pred_return.
+        PIPELINE_B_MIN_ENSEMBLE = 0.20
         for sig in signals:
             if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
                 continue
             if sig.ticker in self._pm._positions:
                 continue  # already handled by exit checks above
+
+            # Filter: require minimum ensemble strength before even checking regime
+            if abs(sig.ensemble_signal) < PIPELINE_B_MIN_ENSEMBLE:
+                continue
+
+            # Filter: block entries in risk_off regime
+            from src.data.market_regime import get_market_regime as _get_regime
+            regime_snap = _get_regime()
+            if hasattr(regime_snap, 'regime') and regime_snap.regime == "risk_off":
+                logger.debug("pipeline_b_regime_block", ticker=sig.ticker, regime="risk_off")
+                continue
+
             regime = regime_map.get(sig.ticker, 1)
-            from src.features.regime import REGIME_GATE
-            threshold, _size_scale = REGIME_GATE.get(regime, (self.SIGNAL_ENTRY_THRESHOLD, 1.0))
-            should_act = self._sizing_mode or abs(sig.ensemble_signal) >= threshold
-            if should_act:
-                price = prices.get(sig.ticker, 0.0)
-                if price > 0:
-                    await self._act_on_signal(sig, price, None, regime=regime)
+            price = prices.get(sig.ticker, 0.0)
+            if price > 0:
+                await self._act_on_signal(sig, price, None, regime=regime)
 
         # 5. Sync positions from broker
         try:

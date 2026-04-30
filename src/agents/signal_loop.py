@@ -47,8 +47,8 @@ ACTION_NAMES = [
 STATE_DIM = 29
 
 # Signal quality thresholds for entry gating
-SIZING_COST_THRESHOLD = 0.0015  # min |pred_return| — only enter on stronger signals (was 0.001)
-SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # dir_prob inside this range → skip
+SIZING_COST_THRESHOLD = 0.005   # min |pred_return| — 3x tighter, only strong signals pass
+SIZING_DIR_PROB_DEAD_ZONE = (0.42, 0.58)  # wider dead zone — filters weak signals
 SIZING_REVERSAL_BARS = 2
 
 # Anti-churn controls
@@ -63,13 +63,13 @@ DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gatin
 #   AAPL ≈ 0.07%, NVDA ≈ 0.09%, MSTR ≈ 0.14%, CVX ≈ 0.04%.
 # Multipliers are scaled accordingly to produce meaningful intraday stops.
 # R:R stays ~2.3:1 regardless of volatility.
-SIZING_STOP_LOSS_ATR_MULT = 20     # stop = ATR × 20  (wider to avoid noise exits)
-SIZING_TRAILING_STOP_ATR_MULT = 25 # trailing = ATR × 25
-SIZING_TAKE_PROFIT_ATR_MULT = 45   # target = ATR × 45  (let winners run longer)
-SIZING_STOP_LOSS_FLOOR = 0.008     # 0.8% minimum stop (was 0.5% — too tight)
-SIZING_TRAILING_STOP_FLOOR = 0.012 # 1.2% minimum trailing (was 0.8%)
-SIZING_TAKE_PROFIT_FLOOR = 0.025   # 2.5% minimum take profit (was 1.5%)
-SIZING_MAX_HOLD_BARS = 60      # 60 min — more time to develop (was 45)
+SIZING_STOP_LOSS_ATR_MULT = 12     # tighter stop: cut losers faster
+SIZING_TRAILING_STOP_ATR_MULT = 10 # tight trailing: lock in gains after favorable move
+SIZING_TAKE_PROFIT_ATR_MULT = 25   # achievable take profit target (was 45 — unreachable)
+SIZING_STOP_LOSS_FLOOR = 0.005     # 0.5% minimum stop
+SIZING_TRAILING_STOP_FLOOR = 0.006 # 0.6% minimum trailing
+SIZING_TAKE_PROFIT_FLOOR = 0.012   # 1.2% take profit floor (reachable in 30 bars)
+SIZING_MAX_HOLD_BARS = 30          # 30 min max hold — avoid slow bleeds
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
 
 logger = structlog.get_logger(__name__)

@@ -34,11 +34,11 @@ logger = structlog.get_logger(__name__)
 class PipelineBWeights:
     """Weight allocation across Pipeline B's signal dimensions."""
 
-    regime: float = 0.20
+    regime: float = 0.25       # +5%: macro direction is critical for filtering
     fundamentals: float = 0.25
     technicals: float = 0.30
     sentiment: float = 0.20
-    social: float = 0.05
+    social: float = 0.00       # zeroed until real data available (was dead weight)
 
     def validate(self) -> None:
         total = self.regime + self.fundamentals + self.technicals + self.sentiment + self.social
@@ -59,16 +59,26 @@ def _score_technicals(row: dict[str, float]) -> float:
     """
     score = 0.0
 
-    # ── RSI mean reversion ───────────────────────────────────────────────────
+    # ── RSI mean reversion (with trend confirmation) ───────────────────────
+    # Only give full credit for oversold/overbought if momentum confirms reversal.
+    # Prevents buying into falling knives (SMCI -6.9%, PLTR -5.3%).
     rsi = row.get("rsi_14", 50.0)
+    macd_hist = row.get("macd_hist", 0.0)
+    mtf_confluence = row.get("mtf_confluence", 0.0)
     if rsi < 30:
-        score += 0.40
+        if macd_hist > 0 or mtf_confluence > 0:
+            score += 0.40       # confirmed reversal — full credit
+        else:
+            score += 0.15       # unconfirmed dip — reduced
     elif rsi < 40:
-        score += 0.15
+        score += 0.10
     elif rsi > 70:
-        score -= 0.40
+        if macd_hist < 0 or mtf_confluence < 0:
+            score -= 0.40       # confirmed overbought — full credit
+        else:
+            score -= 0.15       # unconfirmed — reduced
     elif rsi > 60:
-        score -= 0.15
+        score -= 0.10
 
     # ── MACD momentum ────────────────────────────────────────────────────────
     macd_hist = row.get("macd_hist", 0.0)
@@ -338,25 +348,46 @@ class PipelineBEngine:
         )
         ensemble = max(-1.0, min(1.0, ensemble))
 
+        # ── Multi-factor confirmation gate ───────────────────────────────────
+        # Require at least 2 of 4 signal dimensions to agree on direction.
+        # Prevents entries driven by a single noisy indicator (e.g. RSI dip
+        # with no fundamental/sentiment support).
+        n_bullish = sum([
+            tech_score > 0.10,
+            fund_score > 0.05,
+            regime_score > 0.05,
+            sentiment_score > 0.05,
+        ])
+        n_bearish = sum([
+            tech_score < -0.10,
+            fund_score < -0.05,
+            regime_score < -0.05,
+            sentiment_score < -0.05,
+        ])
+        if ensemble > 0 and n_bullish < 2:
+            ensemble *= 0.3   # suppress weakly-confirmed bullish signals
+        elif ensemble < 0 and n_bearish < 2:
+            ensemble *= 0.3   # suppress weakly-confirmed bearish signals
+
+        ensemble = max(-1.0, min(1.0, ensemble))
+
         # ── Map to EnsembleSignal fields ─────────────────────────────────────
-        # The SmartPositionSizer reads lgbm_dir_prob and lgbm_pred_return
-        # to determine conviction and expected return. We map Pipeline B's
-        # composite scores into these fields for execution compatibility.
+        # Steeper mapping so only strong, multi-factor-confirmed signals
+        # pass the entry gate (SIZING_COST_THRESHOLD = 0.005).
         #
-        # lgbm_dir_prob: map ensemble [-1,+1] → [0.2, 0.8]
-        #   This keeps values within the sizer's conviction buckets:
-        #   [0.55, 0.65) → 2% cap, [0.65, 0.80) → 4% cap, [0.80+] → 6% cap
-        dir_prob = 0.5 + ensemble * 0.30
+        # lgbm_dir_prob: map ensemble [-1,+1] → [0.05, 0.95]
+        #   Steeper slope means weak signals stay in the dead zone (0.42-0.58).
+        dir_prob = 0.5 + ensemble * 0.45
         dir_prob = max(0.05, min(0.95, dir_prob))
 
         # lgbm_pred_return: synthetic expected return proportional to signal
-        # The entry gate requires abs(pred_return) > 0.003 (SIZING_COST_THRESHOLD).
-        # Scale so a moderate signal (±0.125) maps to ±0.003 (passes gate).
-        # Strong signal (±1.0) → ±0.024 expected return.
-        pred_return = ensemble * 0.024
+        # Ensemble of ±0.143 → pred_return ±0.005 (passes SIZING_COST_THRESHOLD).
+        # Only confirmed multi-factor signals reach this level.
+        pred_return = ensemble * 0.035
 
         # Direction: +1 bullish, -1 bearish, 0 neutral
-        if abs(ensemble) < 0.10:
+        # Raised neutral threshold to filter weak signals
+        if abs(ensemble) < 0.15:
             direction = 0.0
             confidence = 0.0
         else:

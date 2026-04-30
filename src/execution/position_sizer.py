@@ -62,8 +62,9 @@ SECTOR_MAP: dict[str, str] = {
 # ─── Pipeline configuration ─────────────────────────────────────────────────
 
 # Stage 1: Signal-proportional base sizing
-_BASE_MIN_PCT = 0.02       # 2% at weakest conviction (dir_prob ≈ 0.55)
-_BASE_MAX_PCT = 0.08       # 8% at strongest conviction (dir_prob ≈ 1.0)
+# Tuned for $10k account — minimum $2k positions, max $4-5k before ATR scaling
+_BASE_MIN_PCT = 0.22       # 22% at weakest conviction → $2.2k on $10k
+_BASE_MAX_PCT = 0.50       # 50% at strongest conviction → $5k on $10k (capped by _MAX_NOTIONAL)
 
 # Stage 2: ATR volatility normalization
 # Scale positions so each trade risks roughly the same $ amount.
@@ -76,23 +77,25 @@ _ATR_UPSCALE_CAP = 2.0     # Max upscale for low-vol stocks (prevent oversizing)
 # Stage 3: Kelly fraction caps per conviction bucket
 _KELLY_BUCKETS: list[tuple[float, float, float]] = [
     # (dir_prob_lo, dir_prob_hi, max_pct)
-    (0.55, 0.65, 0.04),    # low conviction → cap at 4%
-    (0.65, 0.80, 0.06),    # mid conviction → cap at 6%
-    (0.80, 1.01, 0.08),    # high conviction → cap at 8%
+    # Tuned for $10k account — need ≥20% to hit $2k minimum
+    (0.55, 0.65, 0.25),    # low conviction → cap at 25% ($2.5k)
+    (0.65, 0.80, 0.40),    # mid conviction → cap at 40% ($4k)
+    (0.80, 1.01, 0.60),    # high conviction → cap at 60% ($6k, capped by _MAX_NOTIONAL at $8k)
 ]
 
 # Stage 4: Portfolio constraints
 _HEAT_TIERS: list[tuple[float, float]] = [
     # (heat_threshold, size_multiplier)
-    (0.50, 1.00),   # heat < 50%: full size
-    (0.65, 0.50),   # 50% ≤ heat < 65%: half size
-    (0.80, 0.25),   # 65% ≤ heat < 80%: quarter size
-    (1.00, 0.00),   # heat ≥ 80%: no new entries
+    # Relaxed for $10k account — $2k+ positions mean 3-4 positions fill 60-80%
+    (0.70, 1.00),   # heat < 70%: full size
+    (0.85, 0.50),   # 70% ≤ heat < 85%: half size
+    (0.95, 0.25),   # 85% ≤ heat < 95%: quarter size
+    (1.00, 0.00),   # heat ≥ 95%: no new entries
 ]
-_SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single sector
+_SECTOR_CAP_PCT = 0.60     # Max 60% of portfolio in any single sector (small account needs room)
 
 # Stage 5: Minimum viable trade
-_MIN_NOTIONAL = 100.0      # $100 minimum trade
+_MIN_NOTIONAL = 2000.0     # $2k minimum trade (small account — fewer, larger positions)
 _MAX_NOTIONAL = 8000.0     # $8k hard cap per position (matches small account)
 _MIN_SHARES_FRACTIONAL = 0.01   # Paper mode minimum
 _MIN_SHARES_WHOLE = 1.0         # Live mode minimum
