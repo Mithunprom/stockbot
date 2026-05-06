@@ -47,8 +47,8 @@ ACTION_NAMES = [
 STATE_DIM = 29
 
 # Signal quality thresholds for entry gating
-SIZING_COST_THRESHOLD = 0.005   # min |pred_return| — 3x tighter, only strong signals pass
-SIZING_DIR_PROB_DEAD_ZONE = (0.42, 0.58)  # wider dead zone — filters weak signals
+SIZING_COST_THRESHOLD = 0.003   # min |pred_return| — multi-factor gate is the primary filter
+SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # standard dead zone — multi-factor gate handles quality
 SIZING_REVERSAL_BARS = 2
 
 # Anti-churn controls

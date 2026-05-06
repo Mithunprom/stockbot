@@ -187,7 +187,7 @@ class SignalLoopB(SignalLoop):
         # Pipeline B minimum ensemble filter: only pass signals with
         # sufficient multi-factor confirmation to execution layer.
         # The sizing entry gate provides a second filter on dir_prob/pred_return.
-        PIPELINE_B_MIN_ENSEMBLE = 0.20
+        PIPELINE_B_MIN_ENSEMBLE = 0.10
         for sig in signals:
             if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
                 continue
