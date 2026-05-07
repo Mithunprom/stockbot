@@ -425,14 +425,16 @@ async def init_db() -> None:
 # ─── Data retention ──────────────────────────────────────────────────────────
 
 # Tables and their time columns, with how many days to keep.
-# feature_matrix is the biggest space consumer (~15 MB/day).
+# Aggressive retention to keep disk under control (was at 96% capacity).
 _RETENTION_POLICIES: list[tuple[str, str, int]] = [
-    ("feature_matrix", "time", 7),
-    ("ohlcv_1m", "time", 14),
-    ("ohlcv_5m", "time", 14),
+    ("feature_matrix", "time", 3),          # biggest consumer, 3 days enough
+    ("ohlcv_1m", "time", 7),                # 7 days (was 14)
+    ("ohlcv_5m", "time", 7),                # 7 days (was 14)
+    ("ohlcv_1h", "time", 30),               # NEW: was missing, grew forever
     ("signals", "time", 7),
-    ("news_raw", "published_at", 14),
-    ("prediction_outcomes", "predicted_at", 14),
+    ("news_raw", "published_at", 7),        # 7 days (was 14)
+    ("options_flow", "time", 7),            # NEW: was missing, grew forever
+    ("prediction_outcomes", "timestamp", 7), # FIXED: was "predicted_at" (wrong column name — never pruned)
 ]
 
 
@@ -463,7 +465,10 @@ async def prune_old_data() -> dict[str, int]:
 
     deleted_any = any(v > 0 for v in results.values())
     if deleted_any:
-        # VACUUM outside a transaction to reclaim disk space
+        # VACUUM FULL outside a transaction to actually reclaim disk space.
+        # Plain VACUUM only marks space reusable but doesn't shrink files.
+        # VACUUM FULL rewrites the table and returns space to the OS.
+        # Note: VACUUM FULL locks the table — acceptable during off-hours prune.
         try:
             raw_engine = create_async_engine(
                 get_settings().database_url,
@@ -472,7 +477,9 @@ async def prune_old_data() -> dict[str, int]:
             async with raw_engine.connect() as conn:
                 for table, _, _ in _RETENTION_POLICIES:
                     if results.get(table, 0) > 0:
-                        await conn.execute(text(f"VACUUM {table}"))
+                        logger.info("vacuum_full_start", table=table)
+                        await conn.execute(text(f"VACUUM FULL {table}"))
+                        logger.info("vacuum_full_done", table=table)
             await raw_engine.dispose()
         except Exception as exc:
             logger.warning("retention_vacuum_failed", error=str(exc))
