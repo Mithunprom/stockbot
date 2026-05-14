@@ -231,11 +231,13 @@ class SmartPositionSizer:
                 bucket_cap = cap
                 break
 
-        # If Kelly fraction is positive (proven edge), allow up to half-Kelly
-        # but never exceed the conviction bucket cap
+        # If Kelly fraction is positive (proven edge), use full Kelly as limit.
+        # Half-Kelly was too conservative: on $10k account with $2k minimum,
+        # kelly/2 = 11% = $1.1k which is below the $2k floor → zero trades.
+        # The bucket caps + heat tiers + sector caps + max_notional already
+        # provide 4 layers of position size safety.
         if kelly_fraction > 0:
-            kelly_limit = kelly_fraction / 2.0  # half-Kelly for safety
-            stage3 = min(stage2, bucket_cap, kelly_limit)
+            stage3 = min(stage2, bucket_cap, kelly_fraction)
         else:
             # No proven edge yet — use bucket cap for data collection.
             # Pipeline B needs meaningful positions to validate signals.
