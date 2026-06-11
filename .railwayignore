@@ -1,23 +1,23 @@
 # Keep railway up uploads small (<100MB) — a ~1GB working tree times out.
-# The backend needs: src/, main.py, config/, scripts/, models/lgbm,
-# models/rl_agent, and the single best TCN/Transformer checkpoint.
+# Patterns are anchored with a leading slash: an unanchored `data/` also
+# matches `src/data/` and breaks the image (ModuleNotFoundError).
 
-# Local-only apps and docs
-mobile/
-frontend/
-docs/
-reports/
-data/
+# Local-only apps and docs (repo root only)
+/mobile/
+/frontend/
+/docs/
+/reports/
+/data/
 
 # Tooling state
-.claude/
-.git/
+/.claude/
+/.git/
 .pytest_cache/
 __pycache__/
 *.log
 
 # Model checkpoints: ship only the best (loaders select best-by-metric anyway)
-models/tcn/*
-!models/tcn/step_001472_sharpe_5.217.pt
-models/transformer/*
-!models/transformer/step_000555_sharpe_5.201.pt
+/models/tcn/*
+!/models/tcn/step_001472_sharpe_5.217.pt
+/models/transformer/*
+!/models/transformer/step_000555_sharpe_5.201.pt
