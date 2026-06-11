@@ -91,15 +91,8 @@ class SignalLoopB(SignalLoop):
         if not market_open and not has_crypto:
             return
 
-        # Decrement per-ticker cooldowns
-        expired = []
-        for t, remaining in self._ticker_cooldown.items():
-            if remaining <= 1:
-                expired.append(t)
-            else:
-                self._ticker_cooldown[t] = remaining - 1
-        for t in expired:
-            del self._ticker_cooldown[t]
+        # Cooldowns + cached IC / PDT state (inherited)
+        await self._tick_maintenance()
 
         # 1. Fetch features + prices from DB (inherited method)
         features_map, regime_map, latest_feature_time = await self._fetch_features()
@@ -183,36 +176,30 @@ class SignalLoopB(SignalLoop):
                 )
             await self._act_on_signal(sig, price, None, regime=regime_map.get(ticker, 1))
 
-        # Process new entry signals
+        # Process new entry signals — ranked + capped via inherited
+        # _execute_entries (prevents same-tick multi-entry blowups).
         # Pipeline B minimum ensemble filter: only pass signals with
         # sufficient multi-factor confirmation to execution layer.
         # The sizing entry gate provides a second filter on dir_prob/pred_return.
         PIPELINE_B_MIN_ENSEMBLE = 0.10
-        for sig in signals:
-            if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
-                continue
-            if sig.ticker in self._pm._positions:
-                continue  # already handled by exit checks above
-
-            # Filter: require minimum ensemble strength before even checking regime
-            if abs(sig.ensemble_signal) < PIPELINE_B_MIN_ENSEMBLE:
-                continue
-
-            # Filter: block entries in risk_off regime
-            from src.data.market_regime import get_market_regime as _get_regime
-            regime_snap = _get_regime()
-            if hasattr(regime_snap, 'regime') and regime_snap.regime == "risk_off":
-                logger.debug("pipeline_b_regime_block", ticker=sig.ticker, regime="risk_off")
-                continue
-
-            regime = regime_map.get(sig.ticker, 1)
-            price = prices.get(sig.ticker, 0.0)
-            if price > 0:
-                await self._act_on_signal(sig, price, None, regime=regime)
+        from src.data.market_regime import get_market_regime as _get_regime
+        regime_snap = _get_regime()
+        risk_off = hasattr(regime_snap, 'regime') and regime_snap.regime == "risk_off"
+        if risk_off:
+            logger.debug("pipeline_b_regime_block", regime="risk_off")
+        else:
+            candidates = [
+                s for s in signals
+                if (market_open or s.ticker in self.CRYPTO_TICKERS)
+                and s.ticker not in self._pm._positions
+                and abs(s.ensemble_signal) >= PIPELINE_B_MIN_ENSEMBLE
+            ]
+            await self._execute_entries(candidates, prices, regime_map)
 
         # 5. Sync positions from broker
         try:
             await self._pm.sync_from_broker(self._alpaca)
+            await self._recover_entry_state()
         except Exception as exc:
             logger.warning("position_sync_failed", error=str(exc), pipeline="B")
 

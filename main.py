@@ -347,6 +347,33 @@ async def lifespan(app: FastAPI):
         )
         logger.info("signal_loop_started")
 
+    # ── Signal loop watchdog ──────────────────────────────────────────────────
+    # The Pipeline A task died silently on 2026-05-14 and nothing traded for
+    # 8 days. Restart the loop if its task ever finishes unexpectedly.
+    watchdog_task = None
+    if not settings.ab_test_enabled:
+        async def _signal_loop_watchdog() -> None:
+            nonlocal signal_task
+            while True:
+                await asyncio.sleep(300)
+                if signal_task.done():
+                    err: str = ""
+                    if not signal_task.cancelled():
+                        try:
+                            exc = signal_task.exception()
+                            err = str(exc) if exc else "completed without error"
+                        except Exception:
+                            err = "unknown"
+                    logger.critical("signal_loop_task_died_restarting", error=err)
+                    _signal_loop._stopped = False
+                    signal_task = asyncio.create_task(
+                        _signal_loop.start(), name="signal_loop_restarted"
+                    )
+
+        watchdog_task = asyncio.create_task(
+            _signal_loop_watchdog(), name="signal_loop_watchdog"
+        )
+
     # ── Phase 6: Sub-agent scheduler ─────────────────────────────────────────
     from src.agents.critique_agent import CritiqueAgent
     from src.agents.drift_agent import DriftAgent
@@ -461,6 +488,7 @@ async def lifespan(app: FastAPI):
     await news_poller.stop()
     shutdown_tasks = [stream_task, options_task, news_task]
     if not settings.ab_test_enabled:
+        shutdown_tasks.append(watchdog_task)
         shutdown_tasks.append(signal_task)
     if settings.ab_test_enabled or use_pipeline_b:
         shutdown_tasks.extend([t for t in [
@@ -727,9 +755,10 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": "0.2.0",
+        "version": "0.3.0",
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
+        "running_loop": getattr(_signal_loop, "_pipeline_id", None),
         "ab_test_enabled": settings.ab_test_enabled,
         "signal_loop_active": _signal_loop is not None,
     }
@@ -858,10 +887,19 @@ async def diagnostics() -> JSONResponse:
             "market_open": summary.get("market_open", False),
             "sizing_mode": summary.get("sizing_mode", False),
             "kelly_fraction": summary.get("kelly_fraction", 0.0),
+            "kelly_mode": summary.get("kelly_mode", "inactive"),
             "kelly_entries_blocked": summary.get("kelly_entries_blocked", False),
             "kelly_n_trades": summary.get("kelly_n_trades", 0),
+            "kelly_lookback_days": summary.get("kelly_lookback_days"),
+            "probation_entries_today": summary.get("probation_entries_today", 0),
+            "daytrade_count": summary.get("daytrade_count", 0),
+            "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
+            "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),
+            "tickers_ic_blocked": summary.get("tickers_ic_blocked", []),
             "n_trades_today": summary.get("n_trades_today", 0),
             "max_trades_per_day": summary.get("max_trades_per_day", 8),
+            "max_open_positions": summary.get("max_open_positions"),
+            "heat_ceiling": summary.get("heat_ceiling"),
             "tickers_on_cooldown": summary.get("tickers_on_cooldown", []),
             "n_open_positions": summary.get("n_open_positions", 0),
             "portfolio_heat": summary.get("portfolio_heat", 0.0),
@@ -879,7 +917,8 @@ async def diagnostics() -> JSONResponse:
             "signals_blocked": n_fail,
         }
 
-    result["pipeline_a"] = _pipeline_diagnostics(_signal_loop, "pipeline_a")
+    primary_label = getattr(_signal_loop, "_pipeline_id", "pipeline_a")
+    result[primary_label] = _pipeline_diagnostics(_signal_loop, primary_label)
     if _ab_runner is not None and _signal_loop_b is not None:
         result["pipeline_b"] = _pipeline_diagnostics(_signal_loop_b, "pipeline_b")
 

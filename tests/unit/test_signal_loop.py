@@ -116,3 +116,219 @@ def test_position_size_respects_cap():
     size = pm.compute_position_size("AAPL", recent_returns=[0.0001] * 30)
     assert size <= pm.portfolio_value * pm.max_position_pct
     assert size > 0
+
+
+# ─── Swing-mode exit geometry ──────────────────────────────────────────────────
+
+def test_atr_exits_geometry():
+    """Stops/targets scale with daily vol, respect floors/caps, and TP ≈ 2× stop."""
+    from src.agents.signal_loop import (
+        _atr_exits,
+        SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP,
+        SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP,
+    )
+    # Low-vol name (AAPL-like 1m ATR) → floors apply
+    sl_lo, ts_lo, tp_lo = _atr_exits(0.0004)
+    assert sl_lo >= SIZING_STOP_LOSS_FLOOR
+    assert tp_lo >= SIZING_TAKE_PROFIT_FLOOR
+    # High-vol name (SMCI-like) → caps apply
+    sl_hi, ts_hi, tp_hi = _atr_exits(0.0030)
+    assert sl_hi <= SIZING_STOP_LOSS_CAP
+    assert tp_hi <= SIZING_TAKE_PROFIT_CAP
+    # Monotonic in volatility, and reward ≥ risk
+    assert sl_hi >= sl_lo and tp_hi >= tp_lo
+    assert tp_lo >= 1.8 * sl_lo
+
+
+# ─── Kelly governor (window + probation, no deadlock) ─────────────────────────
+
+def _stamp(days_ago: float):
+    from datetime import datetime, timedelta, timezone
+    return datetime.now(timezone.utc) - timedelta(days=days_ago)
+
+
+def test_kelly_window_prunes_stale_trades():
+    """Outcomes older than the lookback never freeze the governor."""
+    from src.agents.signal_loop import KELLY_LOOKBACK_DAYS
+    loop = _make_loop()
+    # 30 old losing trades (the May disaster) — all outside the window
+    loop._sizing_recent_outcomes = [
+        (_stamp(KELLY_LOOKBACK_DAYS + 5), -0.01) for _ in range(30)
+    ]
+    assert loop._kelly_mode() == "inactive"   # pruned → not enough recent data
+    assert loop._sizing_recent_outcomes == []
+
+
+def test_kelly_probation_allows_single_probe():
+    """Negative recent expectancy degrades to probation, not a permanent block."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.005
+    sig.lgbm_dir_prob = 0.62
+
+    # No IC history → no probe (probes require demonstrated positive IC)
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Positive-IC ticker → one probe allowed
+    loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+    assert loop._sizing_entry_gate_open(sig)
+
+    # Probe budget spent → blocked until tomorrow
+    loop._probation_entries_today = 1
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_ticker_ic_gate_blocks_proven_negative():
+    """Tickers the model is provably wrong on (e.g. JPM −0.32) are skipped."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._ticker_ic = {"JPM": (-0.32, TICKER_IC_MIN_N + 100)}
+
+    sig = EnsembleSignal(ticker="JPM", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.61
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Insufficient sample fails open (other gates still apply)
+    loop._ticker_ic = {"JPM": (-0.32, 10)}
+    assert loop._sizing_entry_gate_open(sig)
+
+
+# ─── PDT-aware exits ───────────────────────────────────────────────────────────
+
+def _exit_fixture(loop, ticker="AAPL", entry_price=100.0, days_ago_entered=0):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    et_today = datetime.now(ZoneInfo("America/New_York")).date()
+    loop._entry_prices[ticker] = entry_price
+    loop._entry_directions[ticker] = 1
+    loop._entry_dates[ticker] = et_today - timedelta(days=days_ago_entered)
+    loop._peak_prices[ticker] = entry_price
+    loop._ticker_atr[ticker] = 0.0005  # → stop 1.09%, tp 2.2%
+
+
+def test_pdt_defers_same_day_max_hold():
+    """Same-day non-stop exits wait for the next session (not a day trade then)."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    loop = _make_loop()
+    pm = loop._pm
+    pm.portfolio_value = 10_000.0   # under the $25k PDT threshold
+    _exit_fixture(loop, days_ago_entered=0)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+    loop._daytrade_count = 0
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    # flat price → only max_hold can fire, but it's a same-day round trip
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) is None
+
+
+def test_pdt_allows_same_day_stop_loss_with_budget():
+    loop = _make_loop()
+    loop._pm.portfolio_value = 10_000.0
+    _exit_fixture(loop, days_ago_entered=0)
+    loop._bars_held["AAPL"] = 5
+    loop._daytrade_count = 0
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    # -2% on a ~1.1% stop → stop_loss, budget available → allowed
+    assert loop._check_sizing_exit("AAPL", 98.0, sig) == "stop_loss"
+    # Budget exhausted → even the stop defers (Alpaca would reject it anyway)
+    loop._daytrade_count = 3
+    assert loop._check_sizing_exit("AAPL", 98.0, sig) is None
+
+
+def test_next_day_exits_unrestricted():
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    loop = _make_loop()
+    loop._pm.portfolio_value = 10_000.0
+    _exit_fixture(loop, days_ago_entered=1)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+    loop._daytrade_count = 3   # no budget — irrelevant for overnight positions
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "max_hold"
+
+
+def test_stagnation_exit_frees_dead_capital():
+    from src.agents.signal_loop import SIZING_STAGNATION_BARS
+    loop = _make_loop()
+    loop._pm.portfolio_value = 10_000.0
+    _exit_fixture(loop, days_ago_entered=2)
+    loop._bars_held["AAPL"] = SIZING_STAGNATION_BARS
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    # +0.1% after two days → dead trade
+    assert loop._check_sizing_exit("AAPL", 100.1, sig) == "stagnation"
+
+
+# ─── Entry discipline ──────────────────────────────────────────────────────────
+
+def test_execute_entries_caps_per_tick():
+    """Best signals first, hard cap per tick — no more 6-position bursts."""
+    import asyncio
+    from src.agents.signal_loop import MAX_ENTRIES_PER_TICK
+    loop = _make_loop()
+    fills: list[str] = []
+
+    async def fake_act(sig, price, feat, regime=0):
+        fills.append(sig.ticker)
+        return True
+
+    loop._act_on_signal = fake_act
+    sigs = []
+    for i, t in enumerate(["NVDA", "AMD", "SMCI", "GOOGL", "AMZN"]):
+        s = EnsembleSignal(ticker=t, timestamp=_stamp(0))
+        s.lgbm_pred_return = 0.001 * (i + 1)   # AMZN strongest
+        sigs.append(s)
+    prices = {t: 100.0 for t in ["NVDA", "AMD", "SMCI", "GOOGL", "AMZN"]}
+
+    n = asyncio.run(loop._execute_entries(sigs, prices, {}))
+    assert n == MAX_ENTRIES_PER_TICK
+    assert len(fills) == MAX_ENTRIES_PER_TICK
+    assert fills[0] == "AMZN"   # ranked by |pred_return|
+
+
+def test_sector_position_cap_blocks_third_semi():
+    from src.agents.signal_loop import MAX_POSITIONS_PER_SECTOR
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._pm.open_position("NVDA", "long", 10, 100.0)
+    loop._pm.open_position("AMD", "long", 10, 100.0)
+
+    sig = EnsembleSignal(ticker="SMCI", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.65
+    assert loop._sector_position_count("SMCI") == MAX_POSITIONS_PER_SECTOR
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Different sector still allowed
+    sig2 = EnsembleSignal(ticker="XOM", timestamp=_stamp(0))
+    sig2.lgbm_pred_return = 0.009
+    sig2.lgbm_dir_prob = 0.65
+    assert loop._sizing_entry_gate_open(sig2)
+
+
+def test_heat_ceiling_blocks_entries():
+    from src.agents.signal_loop import PORTFOLIO_HEAT_CEILING
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    pm = loop._pm
+    pm.portfolio_value = 10_000.0
+    pm.open_position("AAPL", "long", 35, 100.0)
+    pm.open_position("XOM", "long", 30, 100.0)
+    assert pm.managed_heat >= PORTFOLIO_HEAT_CEILING
+
+    sig = EnsembleSignal(ticker="CVX", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.65
+    assert not loop._sizing_entry_gate_open(sig)

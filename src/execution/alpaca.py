@@ -71,7 +71,9 @@ class AlpacaOrderRouter:
 
     LIMIT_OFFSET_PCT = 0.001       # 0.1% from mid-price
     FILL_POLL_INTERVAL = 1.0       # seconds between fill status checks
-    FILL_TIMEOUT = 60.0            # seconds before canceling unfilled order
+    FILL_TIMEOUT = 20.0            # seconds before canceling unfilled order —
+                                   # marketable limits fill in seconds or not at
+                                   # all, and each order blocks the 60s tick
 
     def __init__(self, circuit_breakers: CircuitBreakers) -> None:
         self._cb = circuit_breakers

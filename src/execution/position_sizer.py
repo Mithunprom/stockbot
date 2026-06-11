@@ -36,12 +36,15 @@ SECTOR_MAP: dict[str, str] = {
     "GOOGL": "tech",
     "PLTR": "tech",
     "MSTR": "tech",
-    # Semiconductors
+    # Semiconductors / memory & storage
     "NVDA": "semis",
     "AVGO": "semis",
     "AMD": "semis",
     "ARM": "semis",
     "SNDK": "semis",
+    "MU": "semis",
+    "SMCI": "semis",
+    "WDC": "semis",
     # Financials
     "JPM": "financials",
     "V": "financials",
@@ -62,41 +65,46 @@ SECTOR_MAP: dict[str, str] = {
 # ─── Pipeline configuration ─────────────────────────────────────────────────
 
 # Stage 1: Signal-proportional base sizing
-# Tuned for $10k account — minimum $2k positions, max $4-5k before ATR scaling
-_BASE_MIN_PCT = 0.22       # 22% at weakest conviction → $2.2k on $10k
-_BASE_MAX_PCT = 0.50       # 50% at strongest conviction → $5k on $10k (capped by _MAX_NOTIONAL)
+# Sized so 2-3 swing positions fit under the 60% heat ceiling and every
+# position stays below the 25% circuit-breaker position cap.
+_BASE_MIN_PCT = 0.10       # 10% at weakest conviction → $1k on $10k
+_BASE_MAX_PCT = 0.22       # 22% at strongest conviction → $2.2k on $10k
 
 # Stage 2: ATR volatility normalization
 # Scale positions so each trade risks roughly the same $ amount.
-# High-ATR tickers get smaller positions; low-ATR tickers get larger.
-_TARGET_ATR_PCT = 0.012    # Universe median ATR_pct (~1.2% for mega-cap equities)
-_ATR_FLOOR = 0.001         # Floor ATR_pct to prevent divide-by-zero / huge sizes
-_ATR_CEIL = 0.05           # Ceil ATR_pct to prevent tiny sizes on flash-crash bars
-_ATR_UPSCALE_CAP = 2.0     # Max upscale for low-vol stocks (prevent oversizing)
+# atr_pct arrives as a 1-MINUTE ATR ratio; it is converted to a daily-sigma
+# estimate (×sqrt(390)) before comparing against the daily target. The old
+# code compared 1m ATR (~0.001) against a daily target (0.012), so every
+# ticker hit the 2× upscale cap and volatility scaling did nothing.
+_DAILY_VOL_SQRT_BARS = 19.75  # sqrt(390 one-minute bars)
+_TARGET_ATR_PCT = 0.015    # Target daily sigma (~1.5% for mega-cap equities)
+_ATR_FLOOR = 0.0002        # Floor 1m ATR_pct to prevent divide-by-zero / huge sizes
+_ATR_CEIL = 0.01           # Ceil 1m ATR_pct to prevent tiny sizes on flash-crash bars
+_ATR_UPSCALE_CAP = 1.3     # Max upscale for low-vol stocks (prevent oversizing)
 
 # Stage 3: Kelly fraction caps per conviction bucket
 _KELLY_BUCKETS: list[tuple[float, float, float]] = [
-    # (dir_prob_lo, dir_prob_hi, max_pct)
-    # Tuned for $10k account — need ≥20% to hit $2k minimum
-    (0.55, 0.65, 0.25),    # low conviction → cap at 25% ($2.5k)
-    (0.65, 0.80, 0.40),    # mid conviction → cap at 40% ($4k)
-    (0.80, 1.01, 0.60),    # high conviction → cap at 60% ($6k, capped by _MAX_NOTIONAL at $8k)
+    # (dir_prob_lo, dir_prob_hi, max_pct) — all below the 25% breaker cap
+    (0.55, 0.65, 0.15),    # low conviction → cap at 15% ($1.5k on $10k)
+    (0.65, 0.80, 0.20),    # mid conviction → cap at 20% ($2k)
+    (0.80, 1.01, 0.24),    # high conviction → cap at 24% ($2.4k)
 ]
+_KELLY_POSITIVE_FLOOR = 0.10  # small positive Kelly shouldn't zero out sizing
 
 # Stage 4: Portfolio constraints
 _HEAT_TIERS: list[tuple[float, float]] = [
-    # (heat_threshold, size_multiplier)
-    # Relaxed for $10k account — $2k+ positions mean 3-4 positions fill 60-80%
-    (0.70, 1.00),   # heat < 70%: full size
-    (0.85, 0.50),   # 70% ≤ heat < 85%: half size
-    (0.95, 0.25),   # 85% ≤ heat < 95%: quarter size
-    (1.00, 0.00),   # heat ≥ 95%: no new entries
+    # (heat_threshold, size_multiplier) — aligned with the signal loop's
+    # 60% portfolio heat ceiling
+    (0.45, 1.00),   # heat < 45%: full size
+    (0.60, 0.50),   # 45% ≤ heat < 60%: half size
+    (1.00, 0.00),   # heat ≥ 60%: no new entries
 ]
-_SECTOR_CAP_PCT = 0.60     # Max 60% of portfolio in any single sector (small account needs room)
+_SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single sector
 
 # Stage 5: Minimum viable trade
-_MIN_NOTIONAL = 2000.0     # $2k minimum trade (small account — fewer, larger positions)
-_MAX_NOTIONAL = 8000.0     # $8k hard cap per position (matches small account)
+_MIN_NOTIONAL = 1000.0     # $1k minimum trade (probation probes stay viable)
+_MAX_NOTIONAL = 2500.0     # hard $ cap per position on small accounts
+_MAX_NOTIONAL_PCT = 0.10   # on larger accounts: cap at 10% of portfolio
 _MIN_SHARES_FRACTIONAL = 0.01   # Paper mode minimum
 _MIN_SHARES_WHOLE = 1.0         # Live mode minimum
 
@@ -219,7 +227,8 @@ class SmartPositionSizer:
         # vol_scalar > 1 for calm stocks (bigger position ok),
         # vol_scalar < 1 for volatile stocks (reduce position).
         clamped_atr = max(min(atr_pct, _ATR_CEIL), _ATR_FLOOR)
-        vol_scalar = min(_TARGET_ATR_PCT / clamped_atr, _ATR_UPSCALE_CAP)
+        daily_vol = clamped_atr * _DAILY_VOL_SQRT_BARS
+        vol_scalar = min(_TARGET_ATR_PCT / daily_vol, _ATR_UPSCALE_CAP)
         stage2 = stage1 * vol_scalar
 
         # ── Stage 3: Kelly Fraction Cap ──────────────────────────────────────
@@ -231,16 +240,13 @@ class SmartPositionSizer:
                 bucket_cap = cap
                 break
 
-        # If Kelly fraction is positive (proven edge), use full Kelly as limit.
-        # Half-Kelly was too conservative: on $10k account with $2k minimum,
-        # kelly/2 = 11% = $1.1k which is below the $2k floor → zero trades.
-        # The bucket caps + heat tiers + sector caps + max_notional already
-        # provide 4 layers of position size safety.
+        # Positive Kelly (proven edge) caps size, floored so a barely-positive
+        # Kelly doesn't zero out trades. Non-positive Kelly is handled by the
+        # signal loop's probation logic (probe-sized entries), so the bucket
+        # cap applies unchanged here.
         if kelly_fraction > 0:
-            stage3 = min(stage2, bucket_cap, kelly_fraction)
+            stage3 = min(stage2, bucket_cap, max(kelly_fraction, _KELLY_POSITIVE_FLOOR))
         else:
-            # No proven edge yet — use bucket cap for data collection.
-            # Pipeline B needs meaningful positions to validate signals.
             stage3 = min(stage2, bucket_cap)
 
         # ── Stage 4: Portfolio Constraints ───────────────────────────────────
@@ -281,8 +287,8 @@ class SmartPositionSizer:
 
         # ── Stage 5: Minimum Viable Check ────────────────────────────────────
         notional = stage4 * portfolio_value
-        # Hard cap: never exceed _MAX_NOTIONAL per position
-        notional = min(notional, _MAX_NOTIONAL)
+        # Hard cap: $ cap on small accounts, % cap on larger ones
+        notional = min(notional, max(_MAX_NOTIONAL, _MAX_NOTIONAL_PCT * portfolio_value))
         shares = notional / max(price, 0.01)
 
         min_shares = (

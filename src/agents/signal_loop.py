@@ -49,41 +49,86 @@ STATE_DIM = 29
 # Signal quality thresholds for entry gating
 SIZING_COST_THRESHOLD = 0.003   # min |pred_return| — multi-factor gate is the primary filter
 SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # standard dead zone — multi-factor gate handles quality
-SIZING_REVERSAL_BARS = 2
+SIZING_REVERSAL_BARS = 3
 
-# Anti-churn controls
-SIZING_MAX_TRADES_PER_DAY = 15      # allow more trades — Pipeline B signals are selective
-SIZING_TICKER_COOLDOWN_BARS = 20    # 20-minute cooldown (was 60 — too restrictive for Pipeline B)
+# Anti-churn / entry discipline
+SIZING_MAX_TRADES_PER_DAY = 4       # swing cadence: few, high-conviction entries
+SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
+MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
+MAX_OPEN_POSITIONS = 4              # hard cap on concurrent positions
+PORTFOLIO_HEAT_CEILING = 0.60       # no new entries above 60% deployed
+MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sector
+ENTRY_WINDOW_ET = ((9, 40), (15, 30))  # no entries in first 10 / last 29 minutes
 
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
 
-# Exit thresholds — ATR-adaptive with floors.
-# ATR here is computed on 1-minute bars (atr_14 / close), so values are small:
-#   AAPL ≈ 0.07%, NVDA ≈ 0.09%, MSTR ≈ 0.14%, CVX ≈ 0.04%.
-# Multipliers are scaled accordingly to produce meaningful intraday stops.
-# R:R stays ~2.3:1 regardless of volatility.
-SIZING_STOP_LOSS_ATR_MULT = 12     # tighter stop: cut losers faster
-SIZING_TRAILING_STOP_ATR_MULT = 10 # tight trailing: lock in gains after favorable move
-SIZING_TAKE_PROFIT_ATR_MULT = 25   # achievable take profit target (was 45 — unreachable)
-SIZING_STOP_LOSS_FLOOR = 0.005     # 0.5% minimum stop
-SIZING_TRAILING_STOP_FLOOR = 0.006 # 0.6% minimum trailing
-SIZING_TAKE_PROFIT_FLOOR = 0.012   # 1.2% take profit floor (reachable in 30 bars)
-SIZING_MAX_HOLD_BARS = 30          # 30 min max hold — avoid slow bleeds
+# Exit thresholds — scaled to DAILY volatility (swing horizon, 1–3 day holds).
+# atr_pct is computed on 1-minute bars; daily sigma ≈ atr_1m × sqrt(390).
+# The old 30-bar max hold meant TP/stop almost never fired (max_hold hit ~100%
+# of exits) and every round trip was a PDT day trade on a <$25k account.
+DAILY_VOL_SQRT_BARS = 19.75        # sqrt(390 one-minute bars per session)
+SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma
+SIZING_TRAILING_DVOL_MULT = 0.8    # trail ≈ 0.8× daily sigma
+SIZING_TAKE_PROFIT_DVOL_MULT = 2.2 # TP ≈ 2× stop → 2:1 reward:risk
+SIZING_STOP_LOSS_FLOOR = 0.010     # 1.0% minimum stop
+SIZING_STOP_LOSS_CAP = 0.025       # 2.5% maximum stop
+SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
+SIZING_TRAILING_STOP_CAP = 0.020   # 2.0% maximum trailing
+SIZING_TAKE_PROFIT_FLOOR = 0.020   # 2.0% take profit floor
+SIZING_TAKE_PROFIT_CAP = 0.050     # 5.0% take profit cap
+SIZING_MAX_HOLD_BARS = 1170        # ~3 trading days of market-hours 1m bars
+SIZING_STAGNATION_BARS = 780       # ~2 trading days
+SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% after 2 days → dead trade, free capital
+CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
 
+# Kelly governor — self-recovering (replaces the permanent Kelly stop).
+# The old gate (kelly ≤ 0 with ≥20 all-time trades → block ALL entries) was a
+# deadlock: no trades → window never refreshes → blocked forever. This stalled
+# production from 2026-05-27 to 2026-06-11. Now: only recent trades count, and
+# negative Kelly degrades to probation (1 small probe/day) instead of a halt,
+# so the window keeps refreshing and size must be re-earned, never bricked.
+KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
+KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
+KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
+KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
+
+# Per-ticker live IC gate — stop trading names the model is provably wrong on
+# (e.g. JPM live IC −0.32 on 2026-05-27 yet it was the top-ranked entry signal)
+TICKER_IC_BLOCK_THRESHOLD = -0.02
+TICKER_IC_MIN_N = 100              # require enough filled predictions to judge
+TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
+
+# PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades
+# per rolling 5 business days. A same-day round trip is a day trade, so the
+# default plan is to hold overnight; the day-trade budget is reserved for
+# stop-losses (and rich take-profits) only.
+PDT_EQUITY_THRESHOLD = 25_000.0
+PDT_MAX_DAY_TRADES = 3
+PDT_REFRESH_TICKS = 5              # refresh daytrade_count from broker every N ticks
+
 logger = structlog.get_logger(__name__)
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(value, hi))
 
 
 def _atr_exits(atr_pct: float) -> tuple[float, float, float]:
     """Compute (stop_loss, trailing_stop, take_profit) from per-ticker ATR%.
 
-    Returns percentages scaled to the stock's volatility with hard floors
-    so low-vol stocks still have meaningful thresholds.
+    atr_pct is the 1-minute ATR ratio; it is scaled by sqrt(390) to a daily
+    sigma estimate so thresholds are reachable over a 1–3 day swing hold.
+    Floors and caps keep low-vol names meaningful and high-vol names sane.
     """
-    sl = max(atr_pct * SIZING_STOP_LOSS_ATR_MULT, SIZING_STOP_LOSS_FLOOR)
-    ts = max(atr_pct * SIZING_TRAILING_STOP_ATR_MULT, SIZING_TRAILING_STOP_FLOOR)
-    tp = max(atr_pct * SIZING_TAKE_PROFIT_ATR_MULT, SIZING_TAKE_PROFIT_FLOOR)
+    daily_vol = _clamp(atr_pct, 0.0002, 0.01) * DAILY_VOL_SQRT_BARS
+    sl = _clamp(daily_vol * SIZING_STOP_LOSS_DVOL_MULT,
+                SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP)
+    ts = _clamp(daily_vol * SIZING_TRAILING_DVOL_MULT,
+                SIZING_TRAILING_STOP_FLOOR, SIZING_TRAILING_STOP_CAP)
+    tp = _clamp(daily_vol * SIZING_TAKE_PROFIT_DVOL_MULT,
+                SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
     return sl, ts, tp
 
 
@@ -185,13 +230,16 @@ class SignalLoop:
         # Sizing mode state tracking (per-ticker)
         self._entry_directions: dict[str, int] = {}      # +1 long, -1 short
         self._entry_prices: dict[str, float] = {}
+        self._entry_dates: dict[str, Any] = {}           # ticker → ET date of entry (PDT)
         self._peak_prices: dict[str, float] = {}
         self._bars_held: dict[str, int] = {}
         self._reversal_counts: dict[str, int] = {}
         self._sizing_returns_history: list[float] = [0.0] * 20
-        self._sizing_recent_outcomes: list[float] = []
+        # Rolling Kelly window: (exit_time_utc, pnl_pct) — only recent trades count
+        self._sizing_recent_outcomes: list[tuple[datetime, float]] = []
         self._sizing_n_trades_today: int = 0
         self._ticker_cooldown: dict[str, int] = {}  # ticker → bars remaining
+        self._exit_fail_cooldown: dict[str, int] = {}  # ticker → bars before exit retry
 
         # Per-ticker ATR cache (refreshed each tick from feature_matrix)
         self._ticker_atr: dict[str, float] = {}
@@ -199,12 +247,21 @@ class SignalLoop:
         # Data freshness flag — set False when features are stale to block new entries
         self._data_fresh: bool = True
 
-        # Kelly gate — blocks new entries when rolling Kelly fraction < 0.
-        # Updated after each closed trade. Starts at 0 (conservative: no trades
-        # until enough history proves positive expected value).
+        # Kelly governor — degrades sizing on negative recent expectancy instead
+        # of blocking entries forever (the old behavior deadlocked the system).
         self._kelly_fraction: float = 0.0
-        self._kelly_min_trades: int = 20  # need ≥20 closed trades to compute
+        self._kelly_min_trades: int = KELLY_MIN_TRADES
+        self._probation_entries_today: int = 0
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
+
+        # Per-ticker live IC cache: ticker → (ic, n_predictions)
+        self._ticker_ic: dict[str, tuple[float, int]] = {}
+        self._ic_refresh_countdown: int = 0
+
+        # PDT day-trade budget tracking (refreshed from broker)
+        self._daytrade_count: int = 0
+        self._pdt_refresh_countdown: int = 0
+        self._pdt_deferred_logged: set[str] = set()  # throttle deferral logs
 
         # Live IC Tracker — set via set_ic_tracker() after construction
         # (tracker is created after signal loop in main.py startup sequence)
@@ -261,25 +318,30 @@ class SignalLoop:
         logger.info("signal_loop_stopped")
 
     async def _seed_kelly_from_db(self) -> None:
-        """Load recent closed trade PnLs from DB to bootstrap Kelly gate.
+        """Load RECENT closed trade PnLs from DB to bootstrap the Kelly governor.
 
-        Without this, the Kelly gate would need 20 new trades before it
-        can decide whether to block entries. By seeding from history, the
-        gate activates immediately on startup.
+        Only trades closed within KELLY_LOOKBACK_DAYS count: trades made under
+        an older exit/sizing config are not representative of the current
+        system, and an all-time window once froze the bot permanently (stale
+        losses from May kept Kelly negative with no way to refresh).
 
         Filters by pipeline_id so each pipeline only sees its own history,
         and excludes crypto tickers (old crypto trades had noise signals).
         """
+        from datetime import timedelta
+
         from sqlalchemy import select as _sel
         from src.data.db import Trade as _T
 
+        cutoff = datetime.now(timezone.utc) - timedelta(days=KELLY_LOOKBACK_DAYS)
         try:
             async with self._sf() as session:
                 query = (
-                    _sel(_T.pnl)
+                    _sel(_T.exit_time, _T.pnl_pct)
                     .where(
                         _T.exit_time.isnot(None),
-                        _T.pnl.isnot(None),
+                        _T.exit_time >= cutoff,
+                        _T.pnl_pct.isnot(None),
                         ~_T.ticker.in_(list(self.CRYPTO_TICKERS)),
                     )
                     .order_by(_T.exit_time.desc())
@@ -290,23 +352,28 @@ class SignalLoop:
                     query = query.where(_T.pipeline_id == self._pipeline_id)
 
                 result = await session.execute(query)
-                pnls = [float(r) for r in result.scalars().all() if r is not None]
+                rows = [
+                    (ts, float(p)) for ts, p in result.all()
+                    if ts is not None and p is not None
+                ]
 
-            if pnls:
-                self._sizing_recent_outcomes = list(reversed(pnls))
+            if rows:
+                self._sizing_recent_outcomes = list(reversed(rows))
                 self._update_kelly()
                 logger.info(
                     "kelly_seeded_from_db",
-                    n_trades=len(pnls),
+                    n_trades=len(rows),
+                    lookback_days=KELLY_LOOKBACK_DAYS,
                     kelly=round(self._kelly_fraction, 4),
+                    mode=self._kelly_mode(),
                     pipeline=self._pipeline_id,
                 )
             else:
-                # No history for this pipeline — start fresh (no Kelly gate)
                 logger.info(
-                    "kelly_no_history",
+                    "kelly_no_recent_history",
                     pipeline=self._pipeline_id,
-                    note="Kelly gate inactive until 20+ trades",
+                    lookback_days=KELLY_LOOKBACK_DAYS,
+                    note=f"Kelly governor inactive until {KELLY_MIN_TRADES}+ recent trades",
                 )
         except Exception as exc:
             logger.warning("kelly_seed_failed", error=str(exc))
@@ -377,7 +444,7 @@ class SignalLoop:
                 ticker=sig.ticker,
                 dir_prob=float(sig.lgbm_dir_prob),
                 pred_return=float(sig.lgbm_pred_return),
-                atr_pct=self._ticker_atr.get(sig.ticker, 0.01),
+                atr_pct=self._ticker_atr.get(sig.ticker, DEFAULT_ATR_PCT),
                 price=sig.price if hasattr(sig, "price") else 0.0,
                 portfolio_value=self._pm.portfolio_value,
                 portfolio_heat=self._pm.managed_heat,
@@ -433,24 +500,31 @@ class SignalLoop:
             "market_open": self._is_market_hours(),
             "sizing_mode": self._sizing_mode,
             "kelly_fraction": round(self._kelly_fraction, 4),
-            "kelly_gate_active": (
-                len(self._sizing_recent_outcomes) >= self._kelly_min_trades
-            ),
-            "kelly_entries_blocked": (
-                len(self._sizing_recent_outcomes) >= self._kelly_min_trades
-                and self._kelly_fraction <= 0
-            ),
+            "kelly_mode": self._kelly_mode(),
+            "kelly_gate_active": self._kelly_mode() != "inactive",
+            "kelly_entries_blocked": False,  # probation replaces hard block
             "kelly_n_trades": len(self._sizing_recent_outcomes),
+            "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
+            "probation_entries_today": self._probation_entries_today,
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
+            "max_open_positions": MAX_OPEN_POSITIONS,
+            "heat_ceiling": PORTFOLIO_HEAT_CEILING,
+            "daytrade_count": self._daytrade_count,
+            "pdt_budget_remaining": max(0, PDT_MAX_DAY_TRADES - self._daytrade_count),
+            "ticker_ic_tracked": len(self._ticker_ic),
+            "tickers_ic_blocked": [
+                t for t, (ic, n) in self._ticker_ic.items()
+                if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+            ],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
-            "exit_mode": "atr_adaptive",
+            "exit_mode": "daily_vol_swing",
             "atr_multipliers": {
-                "stop_loss": SIZING_STOP_LOSS_ATR_MULT,
-                "trailing_stop": SIZING_TRAILING_STOP_ATR_MULT,
-                "take_profit": SIZING_TAKE_PROFIT_ATR_MULT,
+                "stop_loss_dvol": SIZING_STOP_LOSS_DVOL_MULT,
+                "trailing_stop_dvol": SIZING_TRAILING_DVOL_MULT,
+                "take_profit_dvol": SIZING_TAKE_PROFIT_DVOL_MULT,
             },
             "atr_floors": {
                 "stop_loss": SIZING_STOP_LOSS_FLOOR,
@@ -469,15 +543,7 @@ class SignalLoop:
         if not market_open and not has_crypto:
             return
 
-        # Decrement per-ticker cooldowns (1 bar = 1 minute)
-        expired = []
-        for t, remaining in self._ticker_cooldown.items():
-            if remaining <= 1:
-                expired.append(t)
-            else:
-                self._ticker_cooldown[t] = remaining - 1
-        for t in expired:
-            del self._ticker_cooldown[t]
+        await self._tick_maintenance()
 
         # 1. Fetch latest features + prices from DB
         features_map, regime_map, latest_feature_time = await self._fetch_features()
@@ -600,35 +666,38 @@ class SignalLoop:
                 )
                 await self._act_on_signal(sig, price, feat_np, regime=regime_map.get(ticker, 1))
 
-        for sig in signals:
-            # Gate equity tickers on market hours; crypto runs 24/7
-            if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
-                continue
-            # Skip tickers already handled by sizing exit above
-            if self._sizing_mode and sig.ticker in self._pm._positions:
-                continue
-            regime = regime_map.get(sig.ticker, 1)  # default: choppy
-            # Regime-aware threshold: choppy/high-vol require stronger signal
-            from src.features.regime import REGIME_GATE
-            threshold, _size_scale = REGIME_GATE.get(regime, (self.SIGNAL_ENTRY_THRESHOLD, 1.0))
-            # In sizing mode, use LightGBM entry gate instead of ensemble threshold
-            should_act = (
-                self._sizing_mode
-                or abs(sig.ensemble_signal) >= threshold
-            )
-            if should_act:
-                price = prices.get(sig.ticker, 0.0)
-                if price > 0:
-                    features_arr = _uf.get(sig.ticker, {}).get("1m") if _uf else None
-                    feat_np = (
-                        features_arr.numpy() if features_arr is not None
-                        else None
-                    )
-                    await self._act_on_signal(sig, price, feat_np, regime=regime)
+        if self._sizing_mode:
+            # Ranked entry pass: best signals first, capped per tick, so a
+            # burst of correlated signals can't open 6 positions in one bar.
+            candidates = [
+                s for s in signals
+                if (market_open or s.ticker in self.CRYPTO_TICKERS)
+                and s.ticker not in self._pm._positions
+            ]
+            await self._execute_entries(candidates, prices, regime_map, _uf)
+        else:
+            for sig in signals:
+                # Gate equity tickers on market hours; crypto runs 24/7
+                if not market_open and sig.ticker not in self.CRYPTO_TICKERS:
+                    continue
+                regime = regime_map.get(sig.ticker, 1)  # default: choppy
+                # Regime-aware threshold: choppy/high-vol require stronger signal
+                from src.features.regime import REGIME_GATE
+                threshold, _size_scale = REGIME_GATE.get(regime, (self.SIGNAL_ENTRY_THRESHOLD, 1.0))
+                if abs(sig.ensemble_signal) >= threshold:
+                    price = prices.get(sig.ticker, 0.0)
+                    if price > 0:
+                        features_arr = _uf.get(sig.ticker, {}).get("1m") if _uf else None
+                        feat_np = (
+                            features_arr.numpy() if features_arr is not None
+                            else None
+                        )
+                        await self._act_on_signal(sig, price, feat_np, regime=regime)
 
         # 5. Sync position state from broker (catches fills we missed)
         try:
             await self._pm.sync_from_broker(self._alpaca)
+            await self._recover_entry_state()
         except Exception as exc:
             logger.warning("position_sync_failed", error=str(exc))
 
@@ -744,23 +813,248 @@ class SignalLoop:
             sector_notionals[sector] = sector_notionals.get(sector, 0.0) + pos.notional
         return sector_notionals
 
+    # ── Per-tick maintenance ──────────────────────────────────────────────────
+
+    async def _tick_maintenance(self) -> None:
+        """Decrement cooldowns and refresh cached broker/IC state."""
+        for cooldowns in (self._ticker_cooldown, self._exit_fail_cooldown):
+            expired = []
+            for t, remaining in cooldowns.items():
+                if remaining <= 1:
+                    expired.append(t)
+                else:
+                    cooldowns[t] = remaining - 1
+            for t in expired:
+                del cooldowns[t]
+
+        await self._maybe_refresh_ticker_ic()
+        await self._maybe_refresh_daytrade_count()
+
+    async def _maybe_refresh_ticker_ic(self) -> None:
+        """Refresh the per-ticker live IC cache from the IC tracker (hourly)."""
+        if self._ic_tracker is None:
+            return
+        self._ic_refresh_countdown -= 1
+        if self._ic_refresh_countdown > 0:
+            return
+        self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
+        try:
+            by_ticker = await self._ic_tracker._compute_per_ticker_ic(window_days=7)
+            self._ticker_ic = {
+                t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
+                for t, v in (by_ticker or {}).items()
+            }
+            blocked = [
+                t for t, (ic, n) in self._ticker_ic.items()
+                if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+            ]
+            logger.info(
+                "ticker_ic_refreshed",
+                n_tickers=len(self._ticker_ic),
+                ic_blocked=blocked or None,
+            )
+        except Exception as exc:
+            # Fail open: missing IC data never blocks trading by itself
+            logger.warning("ticker_ic_refresh_failed", error=str(exc))
+
+    async def _maybe_refresh_daytrade_count(self) -> None:
+        """Refresh the rolling 5-day day-trade count from the broker."""
+        self._pdt_refresh_countdown -= 1
+        if self._pdt_refresh_countdown > 0:
+            return
+        self._pdt_refresh_countdown = PDT_REFRESH_TICKS
+        try:
+            account = await self._alpaca.get_account()
+            self._daytrade_count = int(account.get("daytrade_count", 0) or 0)
+        except Exception as exc:
+            logger.warning("daytrade_count_refresh_failed", error=str(exc))
+
+    async def _recover_entry_state(self) -> None:
+        """Rebuild entry dates/prices for broker positions we lost track of.
+
+        After a restart/redeploy, sync_from_broker restores positions but the
+        in-memory entry metadata (entry date for PDT, bars held) is gone.
+        Recover entry_time from the open Trade row in the DB; if none exists,
+        assume the position was opened on a previous day (allows normal exits).
+        """
+        missing = [t for t in self._pm._positions if t not in self._entry_dates]
+        if not missing:
+            return
+
+        from zoneinfo import ZoneInfo
+        from sqlalchemy import select as _sel
+        from src.data.db import Trade as _T
+
+        et = ZoneInfo("America/New_York")
+        today = datetime.now(et).date()
+        for ticker in missing:
+            entry_date = None
+            try:
+                async with self._sf() as session:
+                    result = await session.execute(
+                        _sel(_T.entry_time)
+                        .where(_T.ticker == ticker, _T.exit_time.is_(None))
+                        .order_by(_T.entry_time.desc())
+                        .limit(1)
+                    )
+                    row = result.scalar_one_or_none()
+                if row is not None:
+                    entry_date = row.astimezone(et).date()
+            except Exception as exc:
+                logger.warning("entry_state_recovery_failed", ticker=ticker, error=str(exc))
+
+            if entry_date is None:
+                # Unknown origin — treat as opened yesterday so exits work
+                from datetime import timedelta as _td
+                entry_date = today - _td(days=1)
+
+            self._entry_dates[ticker] = entry_date
+            days_held = max(0, np.busday_count(entry_date, today))
+            self._bars_held.setdefault(ticker, int(days_held) * 390)
+            pos = self._pm._positions.get(ticker)
+            if pos is not None:
+                self._entry_prices.setdefault(ticker, pos.avg_entry_price)
+                self._entry_directions.setdefault(ticker, 1 if pos.side == "long" else -1)
+                self._peak_prices.setdefault(ticker, pos.last_price or pos.avg_entry_price)
+            logger.info(
+                "entry_state_recovered",
+                ticker=ticker,
+                entry_date=str(entry_date),
+                bars_held=self._bars_held.get(ticker, 0),
+            )
+
+    # ── Entry execution (ranked, capped) ─────────────────────────────────────
+
+    async def _execute_entries(
+        self,
+        candidates: list[EnsembleSignal],
+        prices: dict[str, float],
+        regime_map: dict[str, int],
+        uf: dict | None = None,
+    ) -> int:
+        """Execute up to MAX_ENTRIES_PER_TICK entries, best signal first.
+
+        Processing in conviction order with a per-tick cap (and re-checking
+        heat/sector gates after every fill) prevents the same-tick multi-entry
+        race that opened 6 correlated positions at 150% heat on 2026-05-22.
+        """
+        ranked = sorted(
+            candidates,
+            key=lambda s: abs(float(s.lgbm_pred_return)),
+            reverse=True,
+        )
+        entries = 0
+        for sig in ranked:
+            if entries >= MAX_ENTRIES_PER_TICK:
+                break
+            price = prices.get(sig.ticker, 0.0)
+            if price <= 0:
+                continue
+            features_arr = uf.get(sig.ticker, {}).get("1m") if uf else None
+            feat_np = features_arr.numpy() if features_arr is not None else None
+            regime = regime_map.get(sig.ticker, 1)
+            entered = await self._act_on_signal(sig, price, feat_np, regime=regime)
+            if entered:
+                entries += 1
+        return entries
+
     # ── Sizing-mode entry/exit gating ────────────────────────────────────────
 
+    def _kelly_mode(self) -> str:
+        """Current Kelly governor mode: inactive / normal / probation."""
+        self._prune_kelly_window()
+        if len(self._sizing_recent_outcomes) < self._kelly_min_trades:
+            return "inactive"
+        return "normal" if self._kelly_fraction > 0 else "probation"
+
+    def _prune_kelly_window(self) -> None:
+        """Drop outcomes older than the lookback window."""
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=KELLY_LOOKBACK_DAYS)
+        pruned = [
+            (ts, p) for ts, p in self._sizing_recent_outcomes
+            if ts is not None and ts >= cutoff
+        ]
+        if len(pruned) != len(self._sizing_recent_outcomes):
+            self._sizing_recent_outcomes = pruned
+
+    def _in_entry_window(self) -> bool:
+        """True if current ET time is within the allowed entry window."""
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+        now = datetime.now(ZoneInfo("America/New_York"))
+        (h0, m0), (h1, m1) = ENTRY_WINDOW_ET
+        start = now.replace(hour=h0, minute=m0, second=0, microsecond=0)
+        end = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
+        return start <= now <= end
+
+    def _sector_position_count(self, ticker: str) -> int:
+        """Number of open positions in the same sector as `ticker`."""
+        sector = SECTOR_MAP.get(ticker, "other")
+        return sum(
+            1 for t in self._pm._positions
+            if SECTOR_MAP.get(t, "other") == sector
+        )
+
+    def _ticker_ic_blocked(self, ticker: str) -> bool:
+        """True if live IC proves the signal is wrong on this ticker."""
+        ic, n = self._ticker_ic.get(ticker, (0.0, 0))
+        return n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+
+    def _is_same_day_entry(self, ticker: str) -> bool:
+        """True if the position was opened today (ET) — selling it would be a day trade."""
+        entry_date = self._entry_dates.get(ticker)
+        if entry_date is None:
+            return True  # unknown → conservative until recovery fills it in
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+        return entry_date == datetime.now(ZoneInfo("America/New_York")).date()
+
+    def _pdt_exit_allowed(self, reason: str, unrealized: float, stop_pct: float) -> bool:
+        """Decide whether a SAME-DAY exit may consume a PDT day trade.
+
+        Accounts ≥ $25k are exempt. Below that, the rolling budget is
+        3 day trades per 5 business days, reserved for risk control:
+          - stop_loss: allowed while any budget remains
+          - take_profit: allowed only with ≥2 budget left (locking real gains)
+          - everything else (trailing/max_hold/stagnation/reversal): deferred
+            to the next session, where the exit is PDT-free.
+        """
+        if self._pm.portfolio_value >= PDT_EQUITY_THRESHOLD:
+            return True
+        budget = PDT_MAX_DAY_TRADES - self._daytrade_count
+        if reason == "stop_loss":
+            return budget >= 1
+        if reason == "take_profit":
+            return budget >= 2
+        return False
+
     def _sizing_entry_gate_open(self, sig: EnsembleSignal) -> bool:
-        """Check if LightGBM signal warrants entry (sizing mode).
+        """Check if the signal warrants a new entry (sizing mode).
 
         Gates:
           0. Data freshness — features must be recent (WebSocket may be down)
+          0b. Entry time window — skip open/close noise (9:40–15:30 ET)
           1. Daily trade cap not exceeded
           2. Per-ticker cooldown elapsed (prevents re-entry churn)
-          3. Kelly gate: once 20+ trades confirm negative EV, STOP trading
-          4. LightGBM pred_return exceeds cost threshold
-          5. dir_prob is outside the dead zone (0.45-0.55)
+          3. Kelly governor — probation allows 1 small probe/day on a
+             positive-IC ticker instead of blocking everything forever
+          4. Per-ticker live IC — never enter names the model is wrong on
+          5. Position-count cap + portfolio heat ceiling + sector cap
+          6. Signal quality: pred_return above cost, dir_prob outside dead zone
         """
         ticker = sig.ticker
 
         # Gate 0: Data freshness — don't enter on stale features
         if not self._data_fresh:
+            return False
+
+        # Gate 0b: Entry time window (equities; crypto is blocked elsewhere)
+        if not self._in_entry_window():
             return False
 
         # Gate 1: Daily trade cap
@@ -774,14 +1068,46 @@ class SignalLoop:
             logger.debug("sizing_cooldown_active", ticker=ticker, bars=cooldown_remaining)
             return False
 
-        # Gate 3: Kelly stop — if 20+ trades prove negative EV, stop bleeding
-        if (len(self._sizing_recent_outcomes) >= self._kelly_min_trades
-                and self._kelly_fraction <= 0):
-            logger.debug("sizing_kelly_stop", kelly=round(self._kelly_fraction, 4),
-                         n=len(self._sizing_recent_outcomes))
+        # Gate 3: Kelly governor — negative recent expectancy → probation
+        if self._kelly_mode() == "probation":
+            ic, n = self._ticker_ic.get(ticker, (0.0, 0))
+            probe_ok = (
+                self._probation_entries_today < 1
+                and n >= TICKER_IC_MIN_N
+                and ic >= KELLY_PROBATION_MIN_TICKER_IC
+            )
+            if not probe_ok:
+                logger.debug(
+                    "sizing_kelly_probation_skip",
+                    ticker=ticker,
+                    kelly=round(self._kelly_fraction, 4),
+                    probes_used=self._probation_entries_today,
+                    ticker_ic=round(ic, 3),
+                )
+                return False
+
+        # Gate 4: Per-ticker live IC — model demonstrably wrong on this name
+        if self._ticker_ic_blocked(ticker):
+            ic, n = self._ticker_ic.get(ticker, (0.0, 0))
+            logger.debug("sizing_ticker_ic_block", ticker=ticker, ic=round(ic, 3), n=n)
             return False
 
-        # Gate 4+5: Signal quality
+        # Gate 5: Portfolio shape — position count, heat ceiling, sector cap
+        if len(self._pm._positions) >= MAX_OPEN_POSITIONS:
+            logger.debug("sizing_max_positions", n=len(self._pm._positions))
+            return False
+        if self._pm.managed_heat >= PORTFOLIO_HEAT_CEILING:
+            logger.debug("sizing_heat_ceiling", heat=round(self._pm.managed_heat, 3))
+            return False
+        if self._sector_position_count(ticker) >= MAX_POSITIONS_PER_SECTOR:
+            logger.debug(
+                "sizing_sector_position_cap",
+                ticker=ticker,
+                sector=SECTOR_MAP.get(ticker, "other"),
+            )
+            return False
+
+        # Gate 6: Signal quality
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
         lo, hi = SIZING_DIR_PROB_DEAD_ZONE
@@ -794,9 +1120,10 @@ class SignalLoop:
         f* = (p * b - q) / b
         where p = win rate, b = avg_win/avg_loss, q = 1-p
 
-        Uses half-Kelly for safety. Updated after every closed trade.
+        Outcomes are pnl_pct (scale-invariant) within KELLY_LOOKBACK_DAYS.
         """
-        outcomes = self._sizing_recent_outcomes
+        self._prune_kelly_window()
+        outcomes = [p for _, p in self._sizing_recent_outcomes]
         if len(outcomes) < self._kelly_min_trades:
             return
 
@@ -817,11 +1144,12 @@ class SignalLoop:
         self._kelly_fraction = (p * b - q) / max(b, 1e-9)
         logger.info(
             "kelly_updated",
-            kelly_full=round(self._kelly_fraction, 4),
-            kelly_half=round(max(0, self._kelly_fraction / 2), 4),
+            kelly=round(self._kelly_fraction, 4),
+            mode=self._kelly_mode(),
             win_rate=round(p, 3),
             win_loss_ratio=round(b, 3),
             n_trades=len(outcomes),
+            lookback_days=KELLY_LOOKBACK_DAYS,
         )
 
     def _sizing_signal_direction(self, sig: EnsembleSignal) -> int:
@@ -852,8 +1180,9 @@ class SignalLoop:
             self._entry_prices[ticker] = entry_price
             self._entry_directions[ticker] = entry_dir
             self._peak_prices[ticker] = pos.last_price or entry_price
-            # Position predates this deployment — force max_hold exit
-            self._bars_held[ticker] = SIZING_MAX_HOLD_BARS
+            # Treat as one day old: normal exit logic applies (a forced
+            # max_hold here used to dump every position on each redeploy)
+            self._bars_held.setdefault(ticker, 390)
 
         # ATR-adaptive exit thresholds
         atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
@@ -864,48 +1193,80 @@ class SignalLoop:
         if entry_dir < 0:
             unrealized = -unrealized
 
+        reason: str | None = None
+
         # Stop loss (ATR-scaled)
         if unrealized < -sl:
-            return "stop_loss"
+            reason = "stop_loss"
 
         # Take profit (ATR-scaled)
-        if unrealized > tp:
-            return "take_profit"
+        elif unrealized > tp:
+            reason = "take_profit"
 
-        # Trailing stop (ATR-scaled)
-        peak = self._peak_prices.get(ticker, price)
-        if entry_dir > 0:
-            drop = (peak - price) / peak if peak > 0 else 0.0
-            if drop > ts:
-                return "trailing_stop"
         else:
-            rise = (price - peak) / peak if peak > 0 else 0.0
-            if rise > ts:
-                return "trailing_stop"
+            # Trailing stop (ATR-scaled)
+            peak = self._peak_prices.get(ticker, price)
+            if entry_dir > 0:
+                drop = (peak - price) / peak if peak > 0 else 0.0
+                if drop > ts:
+                    reason = "trailing_stop"
+            else:
+                rise = (price - peak) / peak if peak > 0 else 0.0
+                if rise > ts:
+                    reason = "trailing_stop"
 
-        # Max hold
         bars = self._bars_held.get(ticker, 0)
-        if bars >= SIZING_MAX_HOLD_BARS:
-            return "max_hold"
+        if reason is None:
+            # Max hold (~3 trading days)
+            if bars >= SIZING_MAX_HOLD_BARS:
+                reason = "max_hold"
+            # Stagnation: dead trade going nowhere — free up the capital
+            elif bars >= SIZING_STAGNATION_BARS and abs(unrealized) < SIZING_STAGNATION_PNL:
+                reason = "stagnation"
 
-        # Signal reversal (2 consecutive bars of opposite direction)
-        current_dir = self._sizing_signal_direction(sig)
-        if current_dir != 0 and current_dir != entry_dir:
-            self._reversal_counts[ticker] = self._reversal_counts.get(ticker, 0) + 1
-        else:
-            self._reversal_counts[ticker] = 0
-        if self._reversal_counts.get(ticker, 0) >= SIZING_REVERSAL_BARS:
-            return "signal_reversal"
+        if reason is None:
+            # Signal reversal (N consecutive bars of opposite direction)
+            current_dir = self._sizing_signal_direction(sig)
+            if current_dir != 0 and current_dir != entry_dir:
+                self._reversal_counts[ticker] = self._reversal_counts.get(ticker, 0) + 1
+            else:
+                self._reversal_counts[ticker] = 0
+            if self._reversal_counts.get(ticker, 0) >= SIZING_REVERSAL_BARS:
+                reason = "signal_reversal"
 
-        return None
+        if reason is None:
+            return None
+
+        # PDT guard: a same-day round trip is a day trade. On a <$25k account
+        # only stop-losses (and rich take-profits) may spend the budget; all
+        # other exits wait for the next session, where they are PDT-free.
+        if self._is_same_day_entry(ticker):
+            catastrophic = unrealized < -(sl * CATASTROPHIC_STOP_MULT)
+            if catastrophic:
+                reason = "stop_loss"
+            if not self._pdt_exit_allowed(reason, unrealized, sl):
+                if ticker not in self._pdt_deferred_logged:
+                    self._pdt_deferred_logged.add(ticker)
+                    logger.info(
+                        "exit_deferred_pdt",
+                        ticker=ticker,
+                        reason=reason,
+                        unrealized=round(unrealized, 4),
+                        daytrades_used=self._daytrade_count,
+                    )
+                return None
+
+        return reason
 
     def _clear_sizing_state(self, ticker: str) -> None:
         """Clear per-ticker sizing state after position close."""
         self._entry_directions.pop(ticker, None)
         self._entry_prices.pop(ticker, None)
+        self._entry_dates.pop(ticker, None)
         self._peak_prices.pop(ticker, None)
         self._bars_held.pop(ticker, None)
         self._reversal_counts.pop(ticker, None)
+        self._pdt_deferred_logged.discard(ticker)
 
     def _rl_action_to_side_and_size(
         self, action: int, ticker: str, price: float
@@ -960,10 +1321,14 @@ class SignalLoop:
         price: float,
         features_arr: np.ndarray | None = None,
         regime: int = 0,
-    ) -> None:
-        """Use SmartPositionSizer (or RL/threshold fallback) to decide and execute."""
+    ) -> bool:
+        """Use SmartPositionSizer (or RL/threshold fallback) to decide and execute.
+
+        Returns True only when a new entry order FILLED (used by the per-tick
+        entry cap); exits and skips return False.
+        """
         if self._cb.is_halted:
-            return
+            return False
 
         ticker = sig.ticker
         has_position = ticker in self._pm._positions
@@ -972,22 +1337,21 @@ class SignalLoop:
         if not has_position and self._other_pm is not None:
             if ticker in self._other_pm._positions:
                 logger.debug("ab_ticker_conflict_skip", ticker=ticker, pipeline=self._pipeline_id)
-                return
+                return False
 
-        # Regime logging (sizing constraints are handled inside SmartPositionSizer)
         from src.features.regime import REGIME_GATE, regime_label
         _, size_scale = REGIME_GATE.get(regime, (0.40, 1.0))
-        if size_scale < 1.0 and not has_position:
-            logger.info(
-                "regime_size_scaled",
-                ticker=ticker,
-                regime=regime_label(regime),
-                size_scale=size_scale,
-            )
 
-        # ── Position-sizing mode (LightGBM gates entry/exit, RL sizes) ────────
+        is_entry = False
+        # ── Position-sizing mode (model gates entry/exit, sizer sizes) ────────
         if self._sizing_mode:
             if has_position:
+                # Back off after a failed exit order instead of re-firing
+                # every minute (the April XOM loop spammed hundreds of sells)
+                if self._exit_fail_cooldown.get(ticker, 0) > 0:
+                    self._bars_held[ticker] = self._bars_held.get(ticker, 0) + 1
+                    return False
+
                 # Check exit conditions
                 exit_reason = self._check_sizing_exit(ticker, price, sig)
                 if exit_reason:
@@ -1021,23 +1385,23 @@ class SignalLoop:
                         else:
                             self._peak_prices[ticker] = min(self._peak_prices[ticker], price)
                     self._sizing_returns_history.append(0.0)
-                    return
+                    return False
             else:
                 # Block crypto entries — LightGBM was trained on equities only.
                 if ticker in self.CRYPTO_TICKERS:
                     logger.debug("sizing_skip_crypto", ticker=ticker)
-                    return
+                    return False
 
-                # Check entry gate (includes Kelly check)
+                # Check entry gate (Kelly governor, IC, heat, sector, quality)
                 if not self._sizing_entry_gate_open(sig):
-                    return
+                    return False
 
                 direction = self._sizing_signal_direction(sig)
                 if direction == 0:
-                    return
+                    return False
                 # Phase 5: no shorts
                 if direction < 0:
-                    return
+                    return False
 
                 # ── Smart Position Sizer: 6-stage pipeline ───────────────────
                 sector_notionals = self._compute_sector_notionals()
@@ -1045,7 +1409,7 @@ class SignalLoop:
                     ticker=ticker,
                     dir_prob=float(sig.lgbm_dir_prob),
                     pred_return=float(sig.lgbm_pred_return),
-                    atr_pct=self._ticker_atr.get(ticker, 0.01),
+                    atr_pct=self._ticker_atr.get(ticker, DEFAULT_ATR_PCT),
                     price=price,
                     portfolio_value=self._pm.portfolio_value,
                     portfolio_heat=self._pm.managed_heat,
@@ -1053,28 +1417,47 @@ class SignalLoop:
                     kelly_fraction=self._kelly_fraction,
                 )
                 if sizing is None:
-                    return
+                    return False
 
                 side = sizing.side
                 notional = sizing.notional
-                qty = sizing.shares
 
-                # Track entry state
-                self._entry_directions[ticker] = direction
-                self._entry_prices[ticker] = price
-                self._peak_prices[ticker] = price
-                self._bars_held[ticker] = 0
-                self._reversal_counts[ticker] = 0
-                self._sizing_n_trades_today += 1
+                # Conservative on uncertainty: shrink size in choppy/high-vol
+                # regimes (REGIME_GATE size scale was previously log-only)
+                if size_scale < 1.0:
+                    notional *= size_scale
+                    logger.info(
+                        "regime_size_scaled",
+                        ticker=ticker,
+                        regime=regime_label(regime),
+                        size_scale=size_scale,
+                    )
+
+                # Kelly probation: probe-sized entry to refresh the window
+                if self._kelly_mode() == "probation":
+                    notional = min(notional, KELLY_PROBATION_NOTIONAL)
+                    logger.info(
+                        "kelly_probation_probe",
+                        ticker=ticker,
+                        notional=round(notional, 2),
+                        kelly=round(self._kelly_fraction, 4),
+                    )
+
+                qty = round(notional / max(price, 0.01), 2)
+                if notional < 500.0 or qty < 0.01:
+                    logger.debug("sizing_entry_too_small_after_scaling",
+                                 ticker=ticker, notional=round(notional, 2))
+                    return False
+                is_entry = True
 
                 logger.info(
                     "sizing_entry",
                     ticker=ticker,
                     sizing="smart_pipeline",
-                    size_pct=round(sizing.size_pct, 4),
+                    size_pct=round(notional / max(self._pm.portfolio_value, 1.0), 4),
                     stages=f"{sizing.stage1_base_pct:.3f}→{sizing.stage2_atr_pct:.3f}→{sizing.stage3_kelly_pct:.3f}→{sizing.stage4_constraint_pct:.3f}",
                     direction="long" if direction > 0 else "short",
-                    lgbm_pred=round(sig.lgbm_pred_return, 5),
+                    pred=round(sig.lgbm_pred_return, 5),
                     atr=round(self._ticker_atr.get(ticker, 0.01), 4),
                 )
 
@@ -1126,7 +1509,7 @@ class SignalLoop:
         # ── Validation ────────────────────────────────────────────────────────
         if side == "buy":
             if notional < 10.0 or qty < 0.01:
-                return
+                return False
             proposed_pct = notional / max(self._pm.portfolio_value, 1.0)
             size_check = self._cb.check_position_size(proposed_pct)
             if size_check.triggered:
@@ -1135,7 +1518,7 @@ class SignalLoop:
                     ticker=ticker,
                     proposed_pct=f"{proposed_pct:.1%}",
                 )
-                return
+                return False
 
         # Sell exits use market orders (Alpaca rejects limit orders with
         # fractional qty, and we want guaranteed fills on exits).
@@ -1144,9 +1527,12 @@ class SignalLoop:
             limit_price = None  # market order
         else:
             quote = await self._alpaca.get_latest_quote(ticker)
-            mid = quote.get("mid", price)
+            mid = quote.get("mid", 0.0)
             if mid <= 0:
-                mid = price
+                # No live quote — a limit computed from a stale DB price sits
+                # below the market and gets canceled (May 26-27 cancel spam).
+                logger.warning("entry_skipped_no_quote", ticker=ticker)
+                return False
             limit_price = round(mid * (1 + AlpacaOrderRouter.LIMIT_OFFSET_PCT), 2)
 
         req = OrderRequest(
@@ -1169,6 +1555,22 @@ class SignalLoop:
                     qty=result.filled_qty,
                     entry_price=fill_price,
                 )
+                if self._sizing_mode and is_entry:
+                    # Track entry state only after a confirmed fill — canceled
+                    # orders used to consume the daily cap and corrupt state
+                    try:
+                        from zoneinfo import ZoneInfo
+                    except ImportError:
+                        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+                    self._entry_directions[ticker] = 1
+                    self._entry_prices[ticker] = fill_price
+                    self._entry_dates[ticker] = datetime.now(ZoneInfo("America/New_York")).date()
+                    self._peak_prices[ticker] = fill_price
+                    self._bars_held[ticker] = 0
+                    self._reversal_counts[ticker] = 0
+                    self._sizing_n_trades_today += 1
+                    if self._kelly_mode() == "probation":
+                        self._probation_entries_today += 1
                 await self._write_trade_entry(
                     ticker=ticker,
                     sig=sig,
@@ -1178,6 +1580,10 @@ class SignalLoop:
                     entry_time=filled_at,
                 )
             else:
+                # Selling a same-day entry consumes a PDT day trade — keep the
+                # local budget cache current between broker refreshes
+                if self._is_same_day_entry(ticker):
+                    self._daytrade_count += 1
                 # Capture entry price BEFORE closing position
                 pos = self._pm._positions.get(ticker)
                 entry_price = (
@@ -1189,13 +1595,16 @@ class SignalLoop:
                 self._consecutive_losses = (
                     self._consecutive_losses + 1 if pnl < 0 else 0
                 )
-                self._pm.record_return(pnl / max(entry_notional, 1.0))
+                pnl_pct = pnl / max(entry_notional, 1.0)
+                self._pm.record_return(pnl_pct)
                 # Determine exit reason for sizing mode
                 exit_reason = "signal_reversal"
                 if self._sizing_mode:
                     exit_reason = self._pending_exit_reasons.pop(ticker, "signal_reversal")
                     # Track outcome for recent win rate + Kelly computation
-                    self._sizing_recent_outcomes.append(pnl)
+                    self._sizing_recent_outcomes.append(
+                        (filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=timezone.utc), pnl_pct)
+                    )
                     if len(self._sizing_recent_outcomes) > 50:
                         self._sizing_recent_outcomes = self._sizing_recent_outcomes[-50:]
                     self._update_kelly()
@@ -1218,6 +1627,7 @@ class SignalLoop:
                 status=result.status,
                 ensemble_signal=round(sig.ensemble_signal, 4),
             )
+            return side == "buy" and is_entry
         else:
             logger.warning(
                 "order_not_executed",
@@ -1226,6 +1636,13 @@ class SignalLoop:
                 status=result.status,
                 error=result.error,
             )
+            if side == "sell":
+                # Don't re-fire the same exit every minute — back off, then
+                # let sync_from_broker reconcile actual broker state
+                self._exit_fail_cooldown[ticker] = 3
+            else:
+                self._ticker_cooldown[ticker] = 3
+            return False
 
     # ── Trade persistence ─────────────────────────────────────────────────────
 
@@ -1522,12 +1939,18 @@ class SignalLoop:
             self._last_reset_date = today
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
+            self._probation_entries_today = 0
             self._ticker_cooldown.clear()
+            self._pdt_deferred_logged.clear()
+            self._prune_kelly_window()
+            self._update_kelly()
             # Auto-clear daily_loss halts (structural halts like max_drawdown stay)
             self._cb.try_daily_reset()
             logger.info(
                 "daily_start_value_reset",
                 value=self._daily_start_value,
+                kelly=round(self._kelly_fraction, 4),
+                kelly_mode=self._kelly_mode(),
             )
 
     async def _sleep_until_next_minute(self) -> None:
