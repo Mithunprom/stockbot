@@ -343,14 +343,24 @@ class LiveICTracker:
     # ── Per-ticker IC breakdown ───────────────────────────────────────────────
 
     async def _compute_per_ticker_ic(
-        self, window_days: int = 7
+        self, window_days: int = 7, since: datetime | None = None
     ) -> dict[str, dict[str, Any]]:
         """Compute IC and directional accuracy per ticker.
+
+        Args:
+            window_days: Rolling window length.
+            since: Optional hard lower bound — predictions made before this are
+                excluded even if inside the window. Used by the signal loop to
+                avoid judging the current pipeline by a PREVIOUS pipeline's
+                prediction record (Pipeline B's June history once blocked
+                10/20 tickers for the freshly deployed Pipeline A).
 
         Returns:
             Dict mapping ticker -> {ic, dir_acc, n} for tickers with >= 20 predictions.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        if since is not None and since > cutoff:
+            cutoff = since
         result_map: dict[str, dict[str, Any]] = {}
 
         try:

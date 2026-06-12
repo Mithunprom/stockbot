@@ -47,10 +47,18 @@ ACTION_NAMES = [
 STATE_DIM = 29
 
 # Signal quality thresholds for entry gating.
-# Backtest 2026-05-18→06-11 (walk-forward, model trained ≤May 8): raising the
-# bar to pred>0.005 & dir_prob>0.60 improved BOTH the May rally leg and the
-# June chop leg vs the old 0.003/0.55 gates (fewer, better trades).
-SIZING_COST_THRESHOLD = 0.005   # min |pred_return|
+# Backtest 2026-05-18→06-11 (walk-forward, model trained ≤May 8): a high
+# conviction bar (≈top-8% |pred| & dir_prob>0.60) improved BOTH the May rally
+# leg and the June chop leg. The |pred| bar is a trailing percentile rather
+# than a fixed value: daily retrains shift the model's magnitude scale (the
+# 2026-06-12 production model peaked at 0.0022 mid-day — a fixed 0.005 gate
+# would have starved entries entirely).
+DYN_THRESH_PERCENTILE = 92         # |pred| must beat this trailing percentile
+DYN_THRESH_FLOOR = 0.002           # never gate below 0.2% predicted move
+DYN_THRESH_FALLBACK = 0.003        # used until enough samples accumulate
+DYN_THRESH_MIN_SAMPLES = 1000
+DYN_THRESH_WINDOW = 8000           # ≈1 trading day × 20 tickers × 390 bars
+SIZING_COST_THRESHOLD = DYN_THRESH_FALLBACK  # back-compat for diagnostics
 SIZING_DIR_PROB_DEAD_ZONE = (0.40, 0.60)  # long entries need P(up) ≥ 0.60
 SIZING_REVERSAL_BARS = 3
 
@@ -61,11 +69,12 @@ MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (20
 MAX_OPEN_POSITIONS = 4              # hard cap on concurrent positions
 PORTFOLIO_HEAT_CEILING = 0.60       # no new entries above 60% deployed
 MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sector
-# Late-day entries only: gated-entry forward returns by entry hour were positive
-# in BOTH backtest legs only for 14:00+ ET entries (morning entries: +522bps in
-# the May leg but −238bps in the June leg at the 1-day horizon). Late entry +
-# next-morning exit also minimizes overnight-beta exposure and is PDT-free.
-ENTRY_WINDOW_ET = ((14, 0), (15, 30))
+# All-day entries: the 14:00+ restriction was a PDT artifact (it protected
+# overnight holds forced by the day-trade limit). With account equity ≥$25k
+# (no PDT, since 2026-06-12) same-day exits are free, and the backtest shows
+# all-day entries + short holds beat late-only in BOTH legs (Sharpe 17-22 vs
+# 5-6, PF >16 vs 1.7, max DD 0.08%).
+ENTRY_WINDOW_ET = ((9, 40), (15, 30))
 
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
@@ -84,11 +93,12 @@ SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
 SIZING_TRAILING_STOP_CAP = 0.020   # 2.0% maximum trailing
 SIZING_TAKE_PROFIT_FLOOR = 0.020   # 2.0% take profit floor
 SIZING_TAKE_PROFIT_CAP = 0.050     # 5.0% take profit cap
-# Max hold 1 trading day: in the June backtest leg, gated longs were +43bps
-# at 4h but −20bps at 1d and −493bps at 3d — multi-day holds just accumulate
-# market beta. 1-day max hold improved BOTH legs vs 3-day.
-SIZING_MAX_HOLD_BARS = 390         # ~1 trading day of market-hours 1m bars
-SIZING_STAGNATION_BARS = 390       # unreachable while == max hold (kept for tuning)
+# Max hold 4 hours: the signal decays after ~4h (June leg gated longs +43bps
+# at 4h, −20bps at 1d, −493bps at 3d — longer holds only accumulate market
+# beta). Most exits fire earlier via signal_reversal/trailing; 1h/2h/4h max
+# holds backtested near-identically, 4h chosen as least turnover-sensitive.
+SIZING_MAX_HOLD_BARS = 240         # ~4 hours of market-hours 1m bars
+SIZING_STAGNATION_BARS = 240       # unreachable while == max hold (kept for tuning)
 SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
 CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
@@ -269,6 +279,13 @@ class SignalLoop:
         # Per-ticker live IC cache: ticker → (ic, n_predictions)
         self._ticker_ic: dict[str, tuple[float, int]] = {}
         self._ic_refresh_countdown: int = 0
+        # Set when the loop starts — the IC gate only judges predictions made
+        # by THIS loop incarnation (not a previous pipeline's record)
+        self._loop_started_at: datetime | None = None
+
+        # Rolling |pred_return| sample for the self-calibrating entry threshold
+        from collections import deque
+        self._pred_magnitudes: Any = deque(maxlen=DYN_THRESH_WINDOW)
 
         # PDT day-trade budget tracking (refreshed from broker)
         self._daytrade_count: int = 0
@@ -291,6 +308,7 @@ class SignalLoop:
 
     async def start(self) -> None:
         """Run signal loop until stop() is called."""
+        self._loop_started_at = datetime.now(timezone.utc)
         # Seed Kelly gate from DB history so it activates immediately
         try:
             await self._seed_kelly_from_db()
@@ -523,6 +541,8 @@ class SignalLoop:
             "heat_ceiling": PORTFOLIO_HEAT_CEILING,
             "daytrade_count": self._daytrade_count,
             "pdt_budget_remaining": max(0, PDT_MAX_DAY_TRADES - self._daytrade_count),
+            "dynamic_cost_threshold": round(self._dynamic_cost_threshold(), 5),
+            "pred_magnitude_samples": len(self._pred_magnitudes),
             "ticker_ic_tracked": len(self._ticker_ic),
             "tickers_ic_blocked": [
                 t for t, (ic, n) in self._ticker_ic.items()
@@ -628,6 +648,9 @@ class SignalLoop:
             signals = await self._ensemble.compute_universe(universe_features)
             self._latest_signals = signals
             logger.info("signal_loop_tick", n_signals=len(signals))
+
+        # 3a. Feed the dynamic entry-threshold sample
+        self._record_pred_magnitudes(signals)
 
         # 3b. Record predictions for live IC tracking (fire-and-forget)
         if self._ic_tracker is not None:
@@ -851,7 +874,9 @@ class SignalLoop:
             return
         self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
         try:
-            by_ticker = await self._ic_tracker._compute_per_ticker_ic(window_days=7)
+            by_ticker = await self._ic_tracker._compute_per_ticker_ic(
+                window_days=7, since=self._loop_started_at,
+            )
             self._ticker_ic = {
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
                 for t, v in (by_ticker or {}).items()
@@ -1015,6 +1040,26 @@ class SignalLoop:
         ic, n = self._ticker_ic.get(ticker, (0.0, 0))
         return n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
 
+    def _record_pred_magnitudes(self, signals: list[EnsembleSignal]) -> None:
+        """Feed the rolling |pred_return| sample for the dynamic threshold."""
+        for sig in signals:
+            pred = float(sig.lgbm_pred_return)
+            if pred != 0.0:
+                self._pred_magnitudes.append(abs(pred))
+
+    def _dynamic_cost_threshold(self) -> float:
+        """Entry bar for |pred_return|: trailing-percentile, self-calibrating.
+
+        A fixed bar breaks whenever the daily retrain shifts the model's
+        magnitude scale; a percentile keeps the gate at "top ~8% conviction"
+        regardless of calibration.
+        """
+        if len(self._pred_magnitudes) < DYN_THRESH_MIN_SAMPLES:
+            return DYN_THRESH_FALLBACK
+        pct = float(np.percentile(np.fromiter(self._pred_magnitudes, dtype=np.float64),
+                                  DYN_THRESH_PERCENTILE))
+        return max(pct, DYN_THRESH_FLOOR)
+
     def _is_same_day_entry(self, ticker: str) -> bool:
         """True if the position was opened today (ET) — selling it would be a day trade."""
         entry_date = self._entry_dates.get(ticker)
@@ -1119,11 +1164,12 @@ class SignalLoop:
             )
             return False
 
-        # Gate 6: Signal quality
+        # Gate 6: Signal quality (threshold self-calibrates to the live model)
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
         lo, hi = SIZING_DIR_PROB_DEAD_ZONE
-        signal_ok = abs(pred_ret) > SIZING_COST_THRESHOLD and not (lo < dir_prob < hi)
+        signal_ok = (abs(pred_ret) > self._dynamic_cost_threshold()
+                     and not (lo < dir_prob < hi))
         return signal_ok
 
     def _update_kelly(self) -> None:

@@ -252,6 +252,9 @@ class Params:
     cooldown: int = 60
     trades_per_day: int = 4
     pdt_max: int = 3
+    pdt_enabled: bool = True      # False = equity ≥ $25k (no day-trade limits)
+    dyn_thresh_pct: float | None = None  # e.g. 92 → cost threshold = trailing
+                                  # 92nd percentile of |pred| (self-calibrating)
     cost_bps: float = 2.0
     label: str = "baseline"
 
@@ -273,6 +276,21 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
     from src.execution.position_sizer import SmartPositionSizer, SECTOR_MAP
 
     sizer = SmartPositionSizer(mode="paper")
+
+    # Self-calibrating threshold: trailing percentile of |pred| over the prior
+    # 3 trading days (computed on the FULL prediction history so leg-start days
+    # have context). Robust to model-retrain magnitude shifts.
+    day_thr: dict = {}
+    if p.dyn_thresh_pct:
+        full = preds[["time", "pred_return"]].copy()
+        full["date_et"] = full.time.dt.tz_convert(ET).dt.date
+        dates = sorted(full.date_et.unique())
+        for i, d in enumerate(dates):
+            prior = full[full.date_et.isin(dates[max(0, i - 3):i])]
+            if len(prior) > 100:
+                base = float(np.nanpercentile(prior.pred_return.abs(), p.dyn_thresh_pct))
+                day_thr[d] = max(base, 0.002)
+
     lo = pd.Timestamp(start, tz="UTC")
     hi = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
     df = preds[(preds.time >= lo) & (preds.time < hi)].copy()
@@ -359,7 +377,7 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             if reason is None:
                 continue
             # PDT: same-day exits only for stops (budget≥1) / TP (budget≥2)
-            if pos["entry_date"] == today:
+            if p.pdt_enabled and pos["entry_date"] == today:
                 budget = p.pdt_max - day_trades_used(today)
                 catastrophic = unreal < -(sl * p.catastrophic_mult)
                 if catastrophic:
@@ -387,11 +405,12 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             continue
         pv = cash + sum(pos["qty"] * price_now.get(t, pos["last"])
                         for t, pos in positions.items())
+        thr = day_thr.get(today, p.cost_threshold) if p.dyn_thresh_pct else p.cost_threshold
         cands = [r for r in rows
                  if r.ticker not in positions
                  and r.ticker not in cooldowns
                  and np.isfinite(r.pred_return)
-                 and r.pred_return > p.cost_threshold
+                 and r.pred_return > thr
                  and r.dir_prob > p.dead_hi]
         cands.sort(key=lambda r: abs(r.pred_return), reverse=True)
         entered = 0

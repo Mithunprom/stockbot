@@ -335,3 +335,40 @@ def test_heat_ceiling_blocks_entries():
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.65
     assert not loop._sizing_entry_gate_open(sig)
+
+
+# ─── Dynamic entry threshold ───────────────────────────────────────────────────
+
+def test_dynamic_threshold_self_calibrates():
+    """Threshold tracks the trailing percentile of |pred|, with floor + fallback."""
+    from src.agents.signal_loop import (
+        DYN_THRESH_FALLBACK, DYN_THRESH_FLOOR, DYN_THRESH_MIN_SAMPLES,
+    )
+    loop = _make_loop()
+    # Too few samples → fallback
+    assert loop._dynamic_cost_threshold() == DYN_THRESH_FALLBACK
+
+    # Small-magnitude model (like the 2026-06-12 retrain): P92 of |pred| ≈ 0.0018
+    loop._pred_magnitudes.extend([0.001] * DYN_THRESH_MIN_SAMPLES + [0.002] * 100)
+    thr = loop._dynamic_cost_threshold()
+    assert DYN_THRESH_FLOOR <= thr < 0.0025   # calibrated near the floor
+
+    # Large-magnitude model → threshold scales up automatically
+    loop._pred_magnitudes.clear()
+    loop._pred_magnitudes.extend([0.004] * DYN_THRESH_MIN_SAMPLES + [0.02] * 200)
+    assert loop._dynamic_cost_threshold() > 0.004
+
+
+def test_gate_uses_dynamic_threshold():
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    sig = EnsembleSignal(ticker="XOM", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.004   # above floor, below a high calibrated bar
+    sig.lgbm_dir_prob = 0.70
+    # Fallback threshold (0.003) → passes
+    assert loop._sizing_entry_gate_open(sig)
+    # Calibrate to a strong-magnitude model → 0.004 no longer top-8%
+    from src.agents.signal_loop import DYN_THRESH_MIN_SAMPLES
+    loop._pred_magnitudes.extend([0.008] * (DYN_THRESH_MIN_SAMPLES + 500))
+    assert not loop._sizing_entry_gate_open(sig)

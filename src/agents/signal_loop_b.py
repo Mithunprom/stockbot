@@ -137,6 +137,7 @@ class SignalLoopB(SignalLoop):
         # 3. Compute Pipeline B signals (rules-based)
         signals = await self._pipeline_b.compute_universe(universe_feature_rows)
         self._latest_signals = signals
+        self._record_pred_magnitudes(signals)
         logger.info("signal_loop_b_tick", n_signals=len(signals), pipeline="B")
 
         # 3b. Record predictions for live IC tracking

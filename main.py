@@ -755,7 +755,7 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": "0.3.1",
+        "version": "0.3.2",
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),
@@ -847,12 +847,16 @@ async def diagnostics() -> JSONResponse:
 
         # Analyze latest signals against entry gates
         raw_signals = loop._latest_signals or []
+        cost_thr = (
+            loop._dynamic_cost_threshold()
+            if hasattr(loop, "_dynamic_cost_threshold") else SIZING_COST_THRESHOLD
+        )
         gate_analysis: list[dict[str, Any]] = []
         for sig in raw_signals[:10]:
             pred_ret = float(sig.lgbm_pred_return)
             dir_prob = float(sig.lgbm_dir_prob)
             lo, hi = SIZING_DIR_PROB_DEAD_ZONE
-            passes_pred = abs(pred_ret) > SIZING_COST_THRESHOLD
+            passes_pred = abs(pred_ret) > cost_thr
             passes_dir = not (lo < dir_prob < hi)
             passes_both = passes_pred and passes_dir
             cooldown_active = sig.ticker in loop._ticker_cooldown
@@ -905,7 +909,8 @@ async def diagnostics() -> JSONResponse:
             "portfolio_heat": summary.get("portfolio_heat", 0.0),
             "managed_heat": summary.get("managed_heat", 0.0),
             "thresholds": {
-                "sizing_cost_threshold": SIZING_COST_THRESHOLD,
+                "sizing_cost_threshold": round(cost_thr, 5),
+                "threshold_mode": "dynamic_percentile" if hasattr(loop, "_dynamic_cost_threshold") else "fixed",
                 "dir_prob_dead_zone": list(SIZING_DIR_PROB_DEAD_ZONE),
             },
             "exit_mode": summary.get("exit_mode"),
