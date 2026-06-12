@@ -172,7 +172,7 @@ def test_kelly_probation_allows_single_probe():
     assert loop._kelly_mode() == "probation"
 
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
-    sig.lgbm_pred_return = 0.005
+    sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
 
     # No IC history → no probe (probes require demonstrated positive IC)
@@ -259,14 +259,17 @@ def test_next_day_exits_unrestricted():
 
 
 def test_stagnation_exit_frees_dead_capital():
-    from src.agents.signal_loop import SIZING_STAGNATION_BARS
+    """Stagnation logic fires when its threshold sits below max hold."""
+    import src.agents.signal_loop as sl
     loop = _make_loop()
     loop._pm.portfolio_value = 10_000.0
     _exit_fixture(loop, days_ago_entered=2)
-    loop._bars_held["AAPL"] = SIZING_STAGNATION_BARS
-    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
-    # +0.1% after two days → dead trade
-    assert loop._check_sizing_exit("AAPL", 100.1, sig) == "stagnation"
+    with patch.object(sl, "SIZING_STAGNATION_BARS", 100), \
+         patch.object(sl, "SIZING_MAX_HOLD_BARS", 200):
+        loop._bars_held["AAPL"] = 150
+        sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+        # +0.1% after the stagnation window → dead trade
+        assert loop._check_sizing_exit("AAPL", 100.1, sig) == "stagnation"
 
 
 # ─── Entry discipline ──────────────────────────────────────────────────────────

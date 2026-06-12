@@ -46,9 +46,12 @@ ACTION_NAMES = [
 ]
 STATE_DIM = 29
 
-# Signal quality thresholds for entry gating
-SIZING_COST_THRESHOLD = 0.003   # min |pred_return| — multi-factor gate is the primary filter
-SIZING_DIR_PROB_DEAD_ZONE = (0.45, 0.55)  # standard dead zone — multi-factor gate handles quality
+# Signal quality thresholds for entry gating.
+# Backtest 2026-05-18→06-11 (walk-forward, model trained ≤May 8): raising the
+# bar to pred>0.005 & dir_prob>0.60 improved BOTH the May rally leg and the
+# June chop leg vs the old 0.003/0.55 gates (fewer, better trades).
+SIZING_COST_THRESHOLD = 0.005   # min |pred_return|
+SIZING_DIR_PROB_DEAD_ZONE = (0.40, 0.60)  # long entries need P(up) ≥ 0.60
 SIZING_REVERSAL_BARS = 3
 
 # Anti-churn / entry discipline
@@ -58,7 +61,11 @@ MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (20
 MAX_OPEN_POSITIONS = 4              # hard cap on concurrent positions
 PORTFOLIO_HEAT_CEILING = 0.60       # no new entries above 60% deployed
 MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sector
-ENTRY_WINDOW_ET = ((9, 40), (15, 30))  # no entries in first 10 / last 29 minutes
+# Late-day entries only: gated-entry forward returns by entry hour were positive
+# in BOTH backtest legs only for 14:00+ ET entries (morning entries: +522bps in
+# the May leg but −238bps in the June leg at the 1-day horizon). Late entry +
+# next-morning exit also minimizes overnight-beta exposure and is PDT-free.
+ENTRY_WINDOW_ET = ((14, 0), (15, 30))
 
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
@@ -77,9 +84,12 @@ SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
 SIZING_TRAILING_STOP_CAP = 0.020   # 2.0% maximum trailing
 SIZING_TAKE_PROFIT_FLOOR = 0.020   # 2.0% take profit floor
 SIZING_TAKE_PROFIT_CAP = 0.050     # 5.0% take profit cap
-SIZING_MAX_HOLD_BARS = 1170        # ~3 trading days of market-hours 1m bars
-SIZING_STAGNATION_BARS = 780       # ~2 trading days
-SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% after 2 days → dead trade, free capital
+# Max hold 1 trading day: in the June backtest leg, gated longs were +43bps
+# at 4h but −20bps at 1d and −493bps at 3d — multi-day holds just accumulate
+# market beta. 1-day max hold improved BOTH legs vs 3-day.
+SIZING_MAX_HOLD_BARS = 390         # ~1 trading day of market-hours 1m bars
+SIZING_STAGNATION_BARS = 390       # unreachable while == max hold (kept for tuning)
+SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
 CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
 
@@ -94,10 +104,12 @@ KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before actin
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
 
-# Per-ticker live IC gate — stop trading names the model is provably wrong on
-# (e.g. JPM live IC −0.32 on 2026-05-27 yet it was the top-ranked entry signal)
-TICKER_IC_BLOCK_THRESHOLD = -0.02
-TICKER_IC_MIN_N = 100              # require enough filled predictions to judge
+# Per-ticker live IC gate — stop trading names the model is provably wrong on.
+# Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
+# 15/20 tickers — they are noise. The gate therefore requires a large sample
+# and a strongly negative IC before blocking (sustained wrongness only).
+TICKER_IC_BLOCK_THRESHOLD = -0.05
+TICKER_IC_MIN_N = 300              # ≈1 week of filled predictions per ticker
 TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
 
 # PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades

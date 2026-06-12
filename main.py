@@ -755,7 +755,7 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": "0.3.0",
+        "version": "0.3.1",
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),
