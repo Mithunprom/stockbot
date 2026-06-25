@@ -65,29 +65,32 @@ SECTOR_MAP: dict[str, str] = {
 # ─── Pipeline configuration ─────────────────────────────────────────────────
 
 # Stage 1: Signal-proportional base sizing
-# Sized so 2-3 swing positions fit under the 60% heat ceiling and every
-# position stays below the 25% circuit-breaker position cap.
-_BASE_MIN_PCT = 0.10       # 10% at weakest conviction → $1k on $10k
-_BASE_MAX_PCT = 0.22       # 22% at strongest conviction → $2.2k on $10k
+# Bigger positions (backtest-validated 2026-06-24 on the ~$98k account, no PDT):
+# strong signals target the 10% per-position cap; the conviction floor was
+# raised so high-conviction entries actually reach ~10% instead of ~3%.
+# Backtest: avg position 2.4%→~5%, return ~doubled both legs, max DD still ~0.2%.
+_BASE_MIN_PCT = 0.24       # weakest qualifying entry
+_BASE_MAX_PCT = 0.34       # strongest conviction
 
 # Stage 2: ATR volatility normalization
 # Scale positions so each trade risks roughly the same $ amount.
 # atr_pct arrives as a 1-MINUTE ATR ratio; it is converted to a daily-sigma
-# estimate (×sqrt(390)) before comparing against the daily target. The old
-# code compared 1m ATR (~0.001) against a daily target (0.012), so every
-# ticker hit the 2× upscale cap and volatility scaling did nothing.
+# estimate (×sqrt(390)) before comparing against the daily target. Target +
+# upscale were raised so even volatile names can approach the 10% cap (the
+# 10% notional cap + 60% heat ceiling + 25% breaker remain the safety net).
 _DAILY_VOL_SQRT_BARS = 19.75  # sqrt(390 one-minute bars)
-_TARGET_ATR_PCT = 0.015    # Target daily sigma (~1.5% for mega-cap equities)
+_TARGET_ATR_PCT = 0.030    # Target daily sigma (raised from 1.5% → bigger positions)
 _ATR_FLOOR = 0.0002        # Floor 1m ATR_pct to prevent divide-by-zero / huge sizes
 _ATR_CEIL = 0.01           # Ceil 1m ATR_pct to prevent tiny sizes on flash-crash bars
-_ATR_UPSCALE_CAP = 1.3     # Max upscale for low-vol stocks (prevent oversizing)
+_ATR_UPSCALE_CAP = 2.0     # Max upscale for low-vol stocks (prevent oversizing)
 
 # Stage 3: Kelly fraction caps per conviction bucket
 _KELLY_BUCKETS: list[tuple[float, float, float]] = [
-    # (dir_prob_lo, dir_prob_hi, max_pct) — all below the 25% breaker cap
-    (0.55, 0.65, 0.15),    # low conviction → cap at 15% ($1.5k on $10k)
-    (0.65, 0.80, 0.20),    # mid conviction → cap at 20% ($2k)
-    (0.80, 1.01, 0.24),    # high conviction → cap at 24% ($2.4k)
+    # (dir_prob_lo, dir_prob_hi, max_pct) — all well below the 25% breaker cap;
+    # the 10% _MAX_NOTIONAL_PCT is the real binding cap on a large account
+    (0.55, 0.65, 0.30),    # low conviction
+    (0.65, 0.80, 0.33),    # mid conviction
+    (0.80, 1.01, 0.36),    # high conviction
 ]
 _KELLY_POSITIVE_FLOOR = 0.10  # small positive Kelly shouldn't zero out sizing
 

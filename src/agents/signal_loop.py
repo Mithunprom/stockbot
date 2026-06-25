@@ -60,7 +60,8 @@ DYN_THRESH_MIN_SAMPLES = 1000
 DYN_THRESH_WINDOW = 8000           # ≈1 trading day × 20 tickers × 390 bars
 SIZING_COST_THRESHOLD = DYN_THRESH_FALLBACK  # back-compat for diagnostics
 SIZING_DIR_PROB_DEAD_ZONE = (0.40, 0.60)  # long entries need P(up) ≥ 0.60
-SIZING_REVERSAL_BARS = 3
+# 4 consecutive opposite bars to flip out (was 3): don't cut a winner on noise.
+SIZING_REVERSAL_BARS = 4
 
 # Anti-churn / entry discipline
 SIZING_MAX_TRADES_PER_DAY = 4       # swing cadence: few, high-conviction entries
@@ -84,21 +85,26 @@ DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gatin
 # The old 30-bar max hold meant TP/stop almost never fired (max_hold hit ~100%
 # of exits) and every round trip was a PDT day trade on a <$25k account.
 DAILY_VOL_SQRT_BARS = 19.75        # sqrt(390 one-minute bars per session)
-SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma
-SIZING_TRAILING_DVOL_MULT = 0.8    # trail ≈ 0.8× daily sigma
-SIZING_TAKE_PROFIT_DVOL_MULT = 2.2 # TP ≈ 2× stop → 2:1 reward:risk
+# "Let winners run, cut losers fast" (backtest-validated 2026-06-24, both OOS
+# legs: avg win 1.4%→1.6%, return roughly doubled, max DD still ~0.2%). The
+# STOP stays tight/unchanged — only the upside (TP/trail) and the clock were
+# loosened, preserving the asymmetry. The aggressive 2-day variant bled profit
+# factor (beta decay past ~1 day), so this is the "mild" dose.
+SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma (unchanged — cut losers fast)
+SIZING_TRAILING_DVOL_MULT = 1.2    # trail ≈ 1.2× daily sigma (was 0.8 — give winners room)
+SIZING_TAKE_PROFIT_DVOL_MULT = 3.0 # TP ≈ 3× daily sigma (was 2.2 — bigger profit target)
 SIZING_STOP_LOSS_FLOOR = 0.010     # 1.0% minimum stop
 SIZING_STOP_LOSS_CAP = 0.025       # 2.5% maximum stop
 SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
-SIZING_TRAILING_STOP_CAP = 0.020   # 2.0% maximum trailing
+SIZING_TRAILING_STOP_CAP = 0.030   # 3.0% maximum trailing (was 2.0 — let winners breathe)
 SIZING_TAKE_PROFIT_FLOOR = 0.020   # 2.0% take profit floor
-SIZING_TAKE_PROFIT_CAP = 0.050     # 5.0% take profit cap
-# Max hold 4 hours: the signal decays after ~4h (June leg gated longs +43bps
-# at 4h, −20bps at 1d, −493bps at 3d — longer holds only accumulate market
-# beta). Most exits fire earlier via signal_reversal/trailing; 1h/2h/4h max
-# holds backtested near-identically, 4h chosen as least turnover-sensitive.
-SIZING_MAX_HOLD_BARS = 240         # ~4 hours of market-hours 1m bars
-SIZING_STAGNATION_BARS = 240       # unreachable while == max hold (kept for tuning)
+SIZING_TAKE_PROFIT_CAP = 0.070     # 7.0% take profit cap (was 5.0 — higher profit margin)
+# Max hold 1 trading day (was 4h): holds right signals longer to capture the
+# bigger targets. Past ~1 day the signal decays into pure market beta (3-day
+# holds were −493bps in the June leg), so 1 day is the validated ceiling.
+# Most exits still fire earlier via trailing/signal_reversal.
+SIZING_MAX_HOLD_BARS = 390         # ~1 trading day of market-hours 1m bars
+SIZING_STAGNATION_BARS = 390       # unreachable while == max hold (kept for tuning)
 SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
 CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)

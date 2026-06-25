@@ -42,11 +42,11 @@ CACHE.mkdir(exist_ok=True)
 ET = ZoneInfo("America/New_York")
 
 BARS_START = "2026-03-20"          # warmup for 200-bar rolling indicators
-BARS_END = "2026-06-12"
+BARS_END = "2026-06-21"            # through Fri Jun 20
 TRAIN_END = "2026-05-08"           # train ≤ this date
 VAL_END = "2026-05-15"             # val = (TRAIN_END, VAL_END] — metrics only
 TUNE_END = "2026-05-29"            # tune leg = (VAL_END, TUNE_END]
-                                   # validation leg = (TUNE_END, BARS_END]
+                                   # validation leg = (TUNE_END, BARS_END] = Jun 1-20
 FORWARD_N = 15
 DIRECTION_EPSILON = 0.0001
 
@@ -394,6 +394,7 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
                 "ticker": t, "entry": pos["entry_ts"], "exit": ts,
                 "entry_px": pos["entry_px"], "exit_px": fpx,
                 "pnl": pnl, "pnl_pct": fpx / pos["entry_px"] - 1,
+                "notional": pos["qty"] * pos["entry_px"],
                 "bars": pos["bars"], "reason": reason,
             })
             del positions[t]
@@ -477,6 +478,9 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         "win_rate": round(float((tdf.pnl > 0).mean()), 3) if len(tdf) else 0.0,
         "n_trades": len(tdf),
         "open_at_end": len(positions),
+        "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1) if len(tdf) else 0.0,
+        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl > 0).any() else 0.0,
+        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl < 0).any() else 0.0,
         "avg_hold_bars": round(float(tdf.bars.mean()), 0) if len(tdf) else 0,
         "exit_reasons": tdf.reason.value_counts().to_dict() if len(tdf) else {},
         "_trades": tdf,
