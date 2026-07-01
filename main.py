@@ -851,6 +851,13 @@ async def diagnostics() -> JSONResponse:
             loop._dynamic_cost_threshold()
             if hasattr(loop, "_dynamic_cost_threshold") else SIZING_COST_THRESHOLD
         )
+        # Kelly-probation blocks every ticker that isn't a valid probe target.
+        # Surfacing it here prevents the false "would_trade: true" that hid the
+        # 2026-06 probation deadlock (signal-quality passed, probation blocked).
+        probation_active = summary.get("kelly_mode") == "probation"
+        probe_eligible = set(summary.get("tickers_probe_eligible", []))
+        probe_budget_left = summary.get("probation_entries_today", 0) < 1
+
         gate_analysis: list[dict[str, Any]] = []
         for sig in raw_signals[:10]:
             pred_ret = float(sig.lgbm_pred_return)
@@ -860,6 +867,9 @@ async def diagnostics() -> JSONResponse:
             passes_dir = not (lo < dir_prob < hi)
             passes_both = passes_pred and passes_dir
             cooldown_active = sig.ticker in loop._ticker_cooldown
+            probation_block = probation_active and not (
+                probe_budget_left and sig.ticker in probe_eligible
+            )
 
             gate_analysis.append({
                 "ticker": sig.ticker,
@@ -869,12 +879,13 @@ async def diagnostics() -> JSONResponse:
                 "passes_pred_return_gate": passes_pred,
                 "passes_dir_prob_gate": passes_dir,
                 "passes_both_gates": passes_both,
-                "would_trade": passes_both and not cooldown_active,
+                "would_trade": passes_both and not cooldown_active and not probation_block,
                 "blocked_by": (
                     []
                     + (["pred_return_too_small"] if not passes_pred else [])
                     + (["dir_prob_in_dead_zone"] if not passes_dir else [])
                     + (["ticker_cooldown"] if cooldown_active else [])
+                    + (["kelly_probation"] if probation_block else [])
                     + (["managed_heat_too_high"] if summary.get("managed_heat", 0) >= 0.80 else [])
                 ),
             })
@@ -900,6 +911,7 @@ async def diagnostics() -> JSONResponse:
             "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),
             "tickers_ic_blocked": summary.get("tickers_ic_blocked", []),
+            "tickers_probe_eligible": summary.get("tickers_probe_eligible", []),
             "n_trades_today": summary.get("n_trades_today", 0),
             "max_trades_per_day": summary.get("max_trades_per_day", 8),
             "max_open_positions": summary.get("max_open_positions"),
