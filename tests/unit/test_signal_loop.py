@@ -178,13 +178,46 @@ def test_kelly_probation_allows_single_probe():
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
 
-    # Positive-IC ticker → one probe allowed
-    loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+    # Positive-IC ticker → one probe allowed. The probe reads the 30d probe
+    # cache (_ticker_ic_probe), NOT the 7d block cache — the 7d cache's ~250
+    # sample ceiling made n>=300 unreachable and deadlocked the governor.
+    loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
     assert loop._sizing_entry_gate_open(sig)
 
     # Probe budget spent → blocked until tomorrow
     loop._probation_entries_today = 1
     assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_kelly_probation_probe_ignores_7d_block_cache():
+    """Regression: a full 7d block cache must NOT satisfy the probe.
+
+    The 2026-06 deadlock was the probe reading the 7d cache whose n topped out
+    at ~250 (< TICKER_IC_MIN_N=300), so probation could never release. The probe
+    now reads only the 30d cache; a populated 7d cache alone leaves it blocked.
+    """
+    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+
+    # 7d block cache full & positive, but probe cache empty → still blocked
+    loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+    loop._ticker_ic_probe = {}
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Once the 30d probe cache clears the bar, the probe fires
+    loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+    assert loop._sizing_entry_gate_open(sig)
 
 
 def test_ticker_ic_gate_blocks_proven_negative():

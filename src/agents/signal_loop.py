@@ -125,8 +125,20 @@ KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal work
 # 15/20 tickers — they are noise. The gate therefore requires a large sample
 # and a strongly negative IC before blocking (sustained wrongness only).
 TICKER_IC_BLOCK_THRESHOLD = -0.05
-TICKER_IC_MIN_N = 300              # ≈1 week of filled predictions per ticker
+TICKER_IC_MIN_N = 300              # min filled predictions before the IC gate acts
 TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
+
+# The Kelly-probation probe uses a WIDER window than the 7-day IC-block gate.
+# A 7-day per-ticker window tops out at ~250 filled predictions/ticker, but the
+# probe requires TICKER_IC_MIN_N (300) — an unreachable bar that deadlocked the
+# governor: probation could never release its 1 probe/day, so no new trades ever
+# closed, so the rolling Kelly window never refreshed and stayed negative
+# forever. That halted ALL trading 2026-06-26 → 06-30 after two large losers on
+# 06-25 pushed Kelly to −0.28. The 30-day window yields ~600+/ticker (reachable)
+# and intentionally OMITS the `since=loop_started_at` filter so a redeploy can't
+# reset the sample count back below the bar and re-trigger the deadlock. The
+# block gate keeps the 7d + `since` behavior (judging only the live incarnation).
+KELLY_PROBE_IC_WINDOW_DAYS = 30
 
 # PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades
 # per rolling 5 business days. A same-day round trip is a day trade, so the
@@ -283,7 +295,12 @@ class SignalLoop:
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
 
         # Per-ticker live IC cache: ticker → (ic, n_predictions)
+        # _ticker_ic: 7d window + since=loop_start, feeds the IC-BLOCK gate.
+        # _ticker_ic_probe: 30d window, no `since`, feeds the Kelly-probation
+        # probe only (must stay reachable across redeploys — see
+        # KELLY_PROBE_IC_WINDOW_DAYS).
         self._ticker_ic: dict[str, tuple[float, int]] = {}
+        self._ticker_ic_probe: dict[str, tuple[float, int]] = {}
         self._ic_refresh_countdown: int = 0
         # Set when the loop starts — the IC gate only judges predictions made
         # by THIS loop incarnation (not a previous pipeline's record)
@@ -553,6 +570,12 @@ class SignalLoop:
             "tickers_ic_blocked": [
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+            ],
+            # Names the Kelly-probation probe may fire on (30d IC window). When
+            # Kelly is in probation and this is empty, ALL entries are blocked.
+            "tickers_probe_eligible": [
+                t for t, (ic, n) in self._ticker_ic_probe.items()
+                if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
@@ -887,14 +910,32 @@ class SignalLoop:
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
                 for t, v in (by_ticker or {}).items()
             }
+            # Wider 30d window for the Kelly-probation probe. No `since` filter:
+            # the probe must survive redeploys (a reset count re-deadlocks the
+            # governor). Skipped when Kelly is healthy to save a query.
+            self._ticker_ic_probe = {}
+            if self._kelly_mode() == "probation":
+                probe_by_ticker = await self._ic_tracker._compute_per_ticker_ic(
+                    window_days=KELLY_PROBE_IC_WINDOW_DAYS,
+                )
+                self._ticker_ic_probe = {
+                    t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
+                    for t, v in (probe_by_ticker or {}).items()
+                }
             blocked = [
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+            ]
+            probe_eligible = [
+                t for t, (ic, n) in self._ticker_ic_probe.items()
+                if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ]
             logger.info(
                 "ticker_ic_refreshed",
                 n_tickers=len(self._ticker_ic),
                 ic_blocked=blocked or None,
+                kelly_mode=self._kelly_mode(),
+                probe_eligible=probe_eligible or None,
             )
         except Exception as exc:
             # Fail open: missing IC data never blocks trading by itself
@@ -1131,9 +1172,12 @@ class SignalLoop:
             logger.debug("sizing_cooldown_active", ticker=ticker, bars=cooldown_remaining)
             return False
 
-        # Gate 3: Kelly governor — negative recent expectancy → probation
+        # Gate 3: Kelly governor — negative recent expectancy → probation.
+        # The probe uses the 30d IC cache (reachable across redeploys), NOT the
+        # 7d block cache whose ~250-sample ceiling made n>=300 unsatisfiable and
+        # deadlocked the governor (2026-06-26 → 06-30 halt).
         if self._kelly_mode() == "probation":
-            ic, n = self._ticker_ic.get(ticker, (0.0, 0))
+            ic, n = self._ticker_ic_probe.get(ticker, (0.0, 0))
             probe_ok = (
                 self._probation_entries_today < 1
                 and n >= TICKER_IC_MIN_N
