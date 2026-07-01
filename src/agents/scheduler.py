@@ -31,6 +31,7 @@ def create_scheduler(
     quant_research_agent: Any | None = None,
     drift_agent: Any | None = None,
     live_ic_tracker: Any | None = None,
+    forecast_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -229,6 +230,23 @@ def create_scheduler(
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=600,
+        )
+
+    # ── Forecast Email Agent: daily 07:00 ET (pre-market) Mon–Fri ─────────────
+    if forecast_agent is not None:
+        scheduler.add_job(
+            forecast_agent.run,
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour=7,
+                minute=0,
+                timezone="America/New_York",
+            ),
+            id="forecast_email_agent",
+            name="Forecast Email Agent (daily pre-market)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
         )
 
     # ── Data Retention: daily cleanup at 05:00 ET (before market) ──────────────

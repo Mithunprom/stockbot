@@ -65,6 +65,18 @@ class Settings(BaseSettings):
     # ─── AI ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = Field("", description="Anthropic API key")
 
+    # ─── Forecast email (daily pre-market ticker forecast) ────────────────────
+    # SMTP delivery — all optional; the ForecastEmailAgent skips sending (but
+    # still writes the JSON forecast) when creds are absent, so the bot never
+    # crashes on a missing secret. Gmail: use an App Password, not the login.
+    smtp_host: str = Field("", description="SMTP server host, e.g. smtp.gmail.com")
+    smtp_port: int = 587
+    smtp_user: str = Field("", description="SMTP username / from-address login")
+    smtp_password: str = Field("", description="SMTP password or app password")
+    forecast_email_from: str = Field("", description="From address (defaults to smtp_user)")
+    forecast_email_to: str = Field("", description="Comma-separated recipient list")
+    forecast_tickers: str = Field("SNDK", description="Comma-separated tickers to forecast")
+
     # ─── A/B Testing ──────────────────────────────────────────────────────────
     ab_test_enabled: bool = False
     ab_capital_split: float = 0.5  # fraction of capital for Pipeline A (rest → B)
