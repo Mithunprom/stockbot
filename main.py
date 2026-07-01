@@ -377,6 +377,7 @@ async def lifespan(app: FastAPI):
     # ── Phase 6: Sub-agent scheduler ─────────────────────────────────────────
     from src.agents.critique_agent import CritiqueAgent
     from src.agents.drift_agent import DriftAgent
+    from src.agents.forecast_agent import ForecastEmailAgent
     from src.agents.latency_agent import LatencyAgent
     from src.agents.live_ic_tracker import LiveICTracker
     from src.agents.profit_agent import ProfitAgent
@@ -402,11 +403,13 @@ async def lifespan(app: FastAPI):
     )
     live_ic_tracker = LiveICTracker(session_factory=session_factory)
     drift_agent = DriftAgent(lookback_days=7, live_ic_tracker=live_ic_tracker)
+    forecast_agent = ForecastEmailAgent()
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
     app.state.live_ic_tracker = live_ic_tracker
     app.state.drift_agent = drift_agent
+    app.state.forecast_agent = forecast_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -418,6 +421,7 @@ async def lifespan(app: FastAPI):
         quant_research_agent=quant_research_agent,
         drift_agent=drift_agent,
         live_ic_tracker=live_ic_tracker,
+        forecast_agent=forecast_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -799,6 +803,16 @@ async def get_ic_report() -> JSONResponse:
         return JSONResponse(content={"error": "IC tracker not initialized"}, status_code=503)
     report = await tracker.generate_report()
     return JSONResponse(content=report)
+
+
+@app.post("/admin/forecast/run")
+async def trigger_forecast() -> JSONResponse:
+    """Manually run the daily forecast agent (build + email). For on-demand tests."""
+    agent = getattr(app.state, "forecast_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Forecast agent not initialized"}, status_code=503)
+    result = await agent.run()
+    return JSONResponse(content=result)
 
 
 @app.post("/admin/research/daily")
