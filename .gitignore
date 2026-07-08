@@ -64,3 +64,6 @@ htmlcov/
 
 # Claude Code session data
 .claude/projects/
+
+# Pirated/third-party books — do not commit
+docs/stock_docs/course2/
