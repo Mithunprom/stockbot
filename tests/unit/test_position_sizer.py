@@ -31,10 +31,13 @@ def test_volatile_name_also_reaches_cap_but_with_wider_stops():
     calm = _size("V", dir_prob=0.70, pred_return=0.008, atr_pct=0.0005)
     vol = _size("MU", dir_prob=0.70, pred_return=0.010, atr_pct=0.0021)
     assert calm is not None and vol is not None
-    assert abs(vol.size_pct - 0.10) < 0.01
-    # volatile name gets a wider stop + target than the calm name
-    sl_calm, _, tp_calm = _atr_exits(0.0005)
-    sl_vol, _, tp_vol = _atr_exits(0.0021)
+    assert abs(vol.size_pct - _MAX_NOTIONAL_PCT) < 0.01
+    # volatile name gets a wider stop + target than the calm name.
+    # _atr_exits consumes a DAILY vol fraction; convert the 1m ATRs via the
+    # sqrt(390) fallback exactly as _daily_vol_for does without daily bars.
+    from src.agents.signal_loop import DAILY_VOL_SQRT_BARS
+    sl_calm, _, tp_calm = _atr_exits(0.0005 * DAILY_VOL_SQRT_BARS)
+    sl_vol, _, tp_vol = _atr_exits(0.0021 * DAILY_VOL_SQRT_BARS)
     assert sl_vol > sl_calm and tp_vol > tp_calm
 
 

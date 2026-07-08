@@ -127,12 +127,13 @@ def test_atr_exits_geometry():
         SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP,
         SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP,
     )
-    # Low-vol name (AAPL-like 1m ATR) → floors apply
-    sl_lo, ts_lo, tp_lo = _atr_exits(0.0004)
+    # _atr_exits now takes a TRUE daily-vol fraction (not 1m ATR).
+    # Low-vol name (JPM-like ~0.8% daily) → floors apply
+    sl_lo, ts_lo, tp_lo = _atr_exits(0.008)
     assert sl_lo >= SIZING_STOP_LOSS_FLOOR
     assert tp_lo >= SIZING_TAKE_PROFIT_FLOOR
-    # High-vol name (SMCI-like) → caps apply
-    sl_hi, ts_hi, tp_hi = _atr_exits(0.0030)
+    # High-vol name (SNDK-like ~12% daily) → caps apply
+    sl_hi, ts_hi, tp_hi = _atr_exits(0.12)
     assert sl_hi <= SIZING_STOP_LOSS_CAP
     assert tp_hi <= SIZING_TAKE_PROFIT_CAP
     # Monotonic in volatility, and reward ≥ risk
@@ -405,3 +406,102 @@ def test_gate_uses_dynamic_threshold():
     from src.agents.signal_loop import DYN_THRESH_MIN_SAMPLES
     loop._pred_magnitudes.extend([0.008] * (DYN_THRESH_MIN_SAMPLES + 500))
     assert not loop._sizing_entry_gate_open(sig)
+
+
+# ─── Confirmed-reversal exits + positive-IC gate (v0.3.4, 2026-07-07 diagnosis) ─
+
+def test_reversal_ignores_bare_sign_flips():
+    """A pred_return sign flip below the cost threshold must NOT count toward
+    reversal — sign-only flicker truncated 1-day holds to a 25-min median."""
+    loop = _make_loop()
+    loop._entry_directions["AAPL"] = 1
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = -0.0001   # opposite sign, but tiny (noise)
+    sig.lgbm_dir_prob = 0.55         # inside dead zone too
+    assert not loop._confirmed_opposite_signal(sig, entry_dir=1)
+
+
+def test_reversal_requires_tradeable_opposite_signal():
+    """Only an opposite signal that would itself qualify for entry counts."""
+    loop = _make_loop()
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = -0.009    # clears fallback cost threshold (0.003)
+    sig.lgbm_dir_prob = 0.20         # strong P(down), outside dead zone
+    assert loop._confirmed_opposite_signal(sig, entry_dir=1)
+
+    # Same magnitude but dir_prob in the dead zone → not confirmed
+    sig.lgbm_dir_prob = 0.50
+    assert not loop._confirmed_opposite_signal(sig, entry_dir=1)
+
+    # Same-direction signal never counts as a reversal
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.80
+    assert not loop._confirmed_opposite_signal(sig, entry_dir=1)
+
+
+def test_reversal_needs_sustained_confirmation():
+    """One confirmed opposite bar must not exit — SIZING_REVERSAL_BARS required."""
+    from src.agents.signal_loop import SIZING_REVERSAL_BARS
+    assert SIZING_REVERSAL_BARS >= 30, (
+        "reversal confirmation must span ~30+ bars; 4-bar flicker exits "
+        "destroyed the swing design (2026-07-07 diagnosis)"
+    )
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._bars_held["AAPL"] = 10
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = -0.009
+    sig.lgbm_dir_prob = 0.20
+
+    # Confirmed opposite bars accumulate but don't exit until the bar count
+    for _ in range(SIZING_REVERSAL_BARS - 1):
+        assert loop._check_sizing_exit("AAPL", 100.0, sig) is None
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "signal_reversal"
+
+
+def test_reversal_counter_resets_on_neutral_bar():
+    """A non-confirmed bar resets the reversal streak."""
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._bars_held["AAPL"] = 10
+
+    opposite = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    opposite.lgbm_pred_return = -0.009
+    opposite.lgbm_dir_prob = 0.20
+    neutral = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    neutral.lgbm_pred_return = -0.0001
+    neutral.lgbm_dir_prob = 0.50
+
+    for _ in range(10):
+        loop._check_sizing_exit("AAPL", 100.0, opposite)
+    assert loop._reversal_counts["AAPL"] == 10
+    loop._check_sizing_exit("AAPL", 100.0, neutral)
+    assert loop._reversal_counts["AAPL"] == 0
+
+
+def test_ticker_ic_gate_requires_positive_ic():
+    """At full sample, non-positive live IC blocks entry (was: only < −0.05)."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    sig = EnsembleSignal(ticker="WDC", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.70
+
+    # Mildly negative IC at full sample → blocked (previously slipped through)
+    loop._ticker_ic = {"WDC": (-0.01, TICKER_IC_MIN_N + 50)}
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Exactly zero → blocked (no proven edge, why pay costs)
+    loop._ticker_ic = {"WDC": (0.0, TICKER_IC_MIN_N + 50)}
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Positive IC at full sample → open
+    loop._ticker_ic = {"WDC": (0.04, TICKER_IC_MIN_N + 50)}
+    assert loop._sizing_entry_gate_open(sig)
+
+    # Small sample fails open regardless of IC sign
+    loop._ticker_ic = {"WDC": (-0.04, 50)}
+    assert loop._sizing_entry_gate_open(sig)

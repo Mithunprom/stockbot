@@ -60,8 +60,17 @@ DYN_THRESH_MIN_SAMPLES = 1000
 DYN_THRESH_WINDOW = 8000           # ≈1 trading day × 20 tickers × 390 bars
 SIZING_COST_THRESHOLD = DYN_THRESH_FALLBACK  # back-compat for diagnostics
 SIZING_DIR_PROB_DEAD_ZONE = (0.40, 0.60)  # long entries need P(up) ≥ 0.60
-# 4 consecutive opposite bars to flip out (was 3): don't cut a winner on noise.
-SIZING_REVERSAL_BARS = 4
+# Signal-reversal exit — CONFIRMED reversals only (2026-07-07 diagnosis).
+# The old rule (4 consecutive bars of opposite pred_return SIGN) truncated the
+# 1-day swing design into a 25-minute scalper: 59% of all exits fired via
+# reversal at a 49% win rate (coin flip), while max_hold exits — the trades
+# allowed to reach the designed horizon — won 71%. pred_return sign flips
+# constantly bar-to-bar; sign alone is noise, not information. Now a bar only
+# counts toward reversal when the opposite signal is itself TRADEABLE (clears
+# the dynamic cost threshold + dir_prob dead zone — the same bar an opposite
+# ENTRY would need), sustained for ~45 minutes. "The model genuinely flipped",
+# not "the model wobbled".
+SIZING_REVERSAL_BARS = 45
 
 # Anti-churn / entry discipline
 SIZING_MAX_TRADES_PER_DAY = 4       # swing cadence: few, high-conviction entries
@@ -81,24 +90,30 @@ ENTRY_WINDOW_ET = ((9, 40), (15, 30))
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
 
 # Exit thresholds — scaled to DAILY volatility (swing horizon, 1–3 day holds).
-# atr_pct is computed on 1-minute bars; daily sigma ≈ atr_1m × sqrt(390).
-# The old 30-bar max hold meant TP/stop almost never fired (max_hold hit ~100%
-# of exits) and every round trip was a PDT day trade on a <$25k account.
-DAILY_VOL_SQRT_BARS = 19.75        # sqrt(390 one-minute bars per session)
-# "Let winners run, cut losers fast" (backtest-validated 2026-06-24, both OOS
-# legs: avg win 1.4%→1.6%, return roughly doubled, max DD still ~0.2%). The
-# STOP stays tight/unchanged — only the upside (TP/trail) and the clock were
-# loosened, preserving the asymmetry. The aggressive 2-day variant bled profit
-# factor (beta decay past ~1 day), so this is the "mild" dose.
-SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma (unchanged — cut losers fast)
-SIZING_TRAILING_DVOL_MULT = 1.2    # trail ≈ 1.2× daily sigma (was 0.8 — give winners room)
-SIZING_TAKE_PROFIT_DVOL_MULT = 3.0 # TP ≈ 3× daily sigma (was 2.2 — bigger profit target)
+# The exit engine consumes a TRUE daily-vol estimate (daily ATR% from daily
+# bars, via _daily_vol_for). The old path scaled a 1-minute ATR by sqrt(390),
+# which badly UNDER-estimates vol for gappy names (SNDK ~9% real daily vs ~4%
+# from the 1-min proxy — overnight gaps aren't in intraday bars). That, plus
+# stop/TP caps calibrated for calm large-caps, forced volatile names into a
+# 2.5% stop and got them knocked out on ordinary noise (the WDC −6.3% / AMD
+# −5.3% gap-throughs on 06-25 that broke Kelly). DAILY_VOL_SQRT_BARS is kept
+# only as the fallback conversion when a true daily-vol figure isn't cached yet.
+DAILY_VOL_SQRT_BARS = 19.75        # sqrt(390) — fallback: 1m ATR → daily proxy
+DAILY_VOL_FLOOR = 0.005            # 0.5% min daily vol (keeps calm names sane)
+DAILY_VOL_CEIL = 0.15              # 15% max daily vol (clip flash-crash reads)
+# "Let winners run, cut losers fast." Mults unchanged; the CAPS are raised so
+# the ATR scaling actually reaches high-vol names instead of being clipped.
+# Calm names (JPM ~0.8% daily) stay on the floors — unchanged. Volatile names
+# (SNDK ~9%) now get proportional room: stop ~9.9%, trail ~10%, TP ~20%.
+SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma (cut losers fast)
+SIZING_TRAILING_DVOL_MULT = 1.2    # trail ≈ 1.2× daily sigma (give winners room)
+SIZING_TAKE_PROFIT_DVOL_MULT = 3.0 # TP ≈ 3× daily sigma (bigger profit target)
 SIZING_STOP_LOSS_FLOOR = 0.010     # 1.0% minimum stop
-SIZING_STOP_LOSS_CAP = 0.025       # 2.5% maximum stop
+SIZING_STOP_LOSS_CAP = 0.100       # 10% max stop (was 2.5% — clipped volatile names)
 SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
-SIZING_TRAILING_STOP_CAP = 0.030   # 3.0% maximum trailing (was 2.0 — let winners breathe)
+SIZING_TRAILING_STOP_CAP = 0.100   # 10% max trailing (was 3.0%)
 SIZING_TAKE_PROFIT_FLOOR = 0.020   # 2.0% take profit floor
-SIZING_TAKE_PROFIT_CAP = 0.070     # 7.0% take profit cap (was 5.0 — higher profit margin)
+SIZING_TAKE_PROFIT_CAP = 0.200     # 20% take profit cap (was 7.0%)
 # Max hold 1 trading day (was 4h): holds right signals longer to capture the
 # bigger targets. Past ~1 day the signal decays into pure market beta (3-day
 # holds were −493bps in the June leg), so 1 day is the validated ceiling.
@@ -127,6 +142,13 @@ KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal work
 TICKER_IC_BLOCK_THRESHOLD = -0.05
 TICKER_IC_MIN_N = 300              # min filled predictions before the IC gate acts
 TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
+# Entry now requires POSITIVE live IC once the sample is adequate (2026-07-07
+# diagnosis: the old "not strongly negative" bar never blocked anything while
+# AMD/WDC/AVGO/SMCI/ARM/SNDK bled −$605 combined). At n ≥ TICKER_IC_MIN_N a
+# non-positive IC means the signal demonstrably isn't working on that name —
+# there is no reason to pay costs trading it. The large-sample requirement
+# still protects against the noisy one-week IC sign flips.
+TICKER_IC_MIN_ENTRY = 0.0          # live IC must exceed this to enter (n≥MIN_N)
 
 # The Kelly-probation probe uses a WIDER window than the 7-day IC-block gate.
 # A 7-day per-ticker window tops out at ~250 filled predictions/ticker, but the
@@ -155,21 +177,59 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(value, hi))
 
 
-def _atr_exits(atr_pct: float) -> tuple[float, float, float]:
-    """Compute (stop_loss, trailing_stop, take_profit) from per-ticker ATR%.
+def _atr_exits(daily_vol: float) -> tuple[float, float, float]:
+    """Compute (stop_loss, trailing_stop, take_profit) from a DAILY-vol fraction.
 
-    atr_pct is the 1-minute ATR ratio; it is scaled by sqrt(390) to a daily
-    sigma estimate so thresholds are reachable over a 1–3 day swing hold.
-    Floors and caps keep low-vol names meaningful and high-vol names sane.
+    `daily_vol` is a true daily volatility ratio (daily ATR% / price), supplied
+    by SignalLoop._daily_vol_for (which prefers the real daily-bar ATR and falls
+    back to the 1-minute proxy × sqrt(390)). It is clamped to a sane band, then
+    scaled per threshold. The caps let volatile names get proportional room
+    while the floors keep calm names meaningful.
     """
-    daily_vol = _clamp(atr_pct, 0.0002, 0.01) * DAILY_VOL_SQRT_BARS
-    sl = _clamp(daily_vol * SIZING_STOP_LOSS_DVOL_MULT,
+    dv = _clamp(daily_vol, DAILY_VOL_FLOOR, DAILY_VOL_CEIL)
+    sl = _clamp(dv * SIZING_STOP_LOSS_DVOL_MULT,
                 SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP)
-    ts = _clamp(daily_vol * SIZING_TRAILING_DVOL_MULT,
+    ts = _clamp(dv * SIZING_TRAILING_DVOL_MULT,
                 SIZING_TRAILING_STOP_FLOOR, SIZING_TRAILING_STOP_CAP)
-    tp = _clamp(daily_vol * SIZING_TAKE_PROFIT_DVOL_MULT,
+    tp = _clamp(dv * SIZING_TAKE_PROFIT_DVOL_MULT,
                 SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
     return sl, ts, tp
+
+
+def _compute_daily_vols(tickers: list[str]) -> dict[str, float]:
+    """Daily ATR(14)/price per ticker from daily bars (yfinance, batched).
+
+    Returns {ticker: daily_atr_ratio}. Names with too little history are skipped
+    (the caller keeps the prior value / 1m fallback). Synchronous — call via a
+    thread from the event loop.
+    """
+    if not tickers:
+        return {}
+    import yfinance as yf
+
+    df = yf.download(tickers, period="2mo", interval="1d", progress=False,
+                     auto_adjust=True, group_by="ticker", threads=True)
+    out: dict[str, float] = {}
+    multi = len(tickers) > 1
+    for t in tickers:
+        try:
+            sub = df[t] if multi else df
+            h = sub["High"].astype(float)
+            l = sub["Low"].astype(float)
+            c = sub["Close"].astype(float)
+            if int(c.dropna().shape[0]) < 15:
+                continue
+            tr = np.maximum(
+                h - l,
+                np.maximum((h - c.shift()).abs(), (l - c.shift()).abs()),
+            ).dropna()
+            atr14 = float(tr.tail(14).mean())
+            last = float(c.dropna().iloc[-1])
+            if last > 0 and atr14 > 0:
+                out[t] = atr14 / last
+        except Exception:
+            continue
+    return out
 
 
 # ─── RL agent loader ──────────────────────────────────────────────────────────
@@ -283,6 +343,10 @@ class SignalLoop:
 
         # Per-ticker ATR cache (refreshed each tick from feature_matrix)
         self._ticker_atr: dict[str, float] = {}
+        # Per-ticker TRUE daily-vol cache (daily ATR% from daily bars), refreshed
+        # once/day. Feeds the exit engine; falls back to the 1m proxy when empty.
+        self._ticker_daily_vol: dict[str, float] = {}
+        self._daily_vol_refresh_countdown: int = 0
 
         # Data freshness flag — set False when features are stale to block new entries
         self._data_fresh: bool = True
@@ -445,7 +509,7 @@ class SignalLoop:
             bars = self._bars_held.get(ticker, 0)
 
             atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
-            sl, ts, tp = _atr_exits(atr_pct)
+            sl, ts, tp = _atr_exits(self._daily_vol_for(ticker))
 
             if entry_dir > 0:
                 stop_loss_price = round(entry_price * (1 - sl), 2)
@@ -508,7 +572,7 @@ class SignalLoop:
                 continue
 
             atr_pct = self._ticker_atr.get(sig.ticker, DEFAULT_ATR_PCT)
-            sl, ts, tp = _atr_exits(atr_pct)
+            sl, ts, tp = _atr_exits(self._daily_vol_for(sig.ticker))
             sig_dict = sig.to_dict()
             result.append({
                 **sig_dict,
@@ -893,6 +957,43 @@ class SignalLoop:
 
         await self._maybe_refresh_ticker_ic()
         await self._maybe_refresh_daytrade_count()
+        await self._maybe_refresh_daily_vol()
+
+    def _daily_vol_for(self, ticker: str) -> float:
+        """True daily volatility fraction for exit sizing.
+
+        Prefers the real daily-bar ATR% (self._ticker_daily_vol); falls back to
+        the 1-minute ATR proxy × sqrt(390) when the daily cache isn't populated
+        yet (e.g. right after startup). _atr_exits clamps the result to a sane
+        band, so a bad read can never produce a degenerate stop/target.
+        """
+        dv = self._ticker_daily_vol.get(ticker)
+        if dv is not None and dv > 0:
+            return dv
+        atr_1m = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
+        return _clamp(atr_1m, 0.0002, 0.01) * DAILY_VOL_SQRT_BARS
+
+    async def _maybe_refresh_daily_vol(self) -> None:
+        """Refresh the per-ticker true daily-vol cache once per trading day.
+
+        Computes daily ATR(14)/price from daily bars (yfinance, batched). Runs
+        in a thread so it never blocks the event loop, and fails open: a missing
+        read leaves the previous cache (or the 1m fallback) in place.
+        """
+        self._daily_vol_refresh_countdown -= 1
+        if self._daily_vol_refresh_countdown > 0:
+            return
+        # ~ once per trading day (390 one-minute ticks); refreshes on first tick.
+        self._daily_vol_refresh_countdown = 390
+        try:
+            equities = [t for t in self._universe if t not in self.CRYPTO_TICKERS]
+            vols = await asyncio.to_thread(_compute_daily_vols, equities)
+            if vols:
+                self._ticker_daily_vol.update(vols)
+                logger.info("daily_vol_refreshed", n=len(vols),
+                            sample={k: round(v, 4) for k, v in list(vols.items())[:5]})
+        except Exception as exc:
+            logger.warning("daily_vol_refresh_failed", error=str(exc))
 
     async def _maybe_refresh_ticker_ic(self) -> None:
         """Refresh the per-ticker live IC cache from the IC tracker (hourly)."""
@@ -1083,9 +1184,14 @@ class SignalLoop:
         )
 
     def _ticker_ic_blocked(self, ticker: str) -> bool:
-        """True if live IC proves the signal is wrong on this ticker."""
+        """True if live IC fails to prove the signal works on this ticker.
+
+        With an adequate sample (n ≥ TICKER_IC_MIN_N) the live IC must be
+        POSITIVE to trade the name (TICKER_IC_MIN_ENTRY). Below the sample
+        bar the gate stays open — small-sample ICs are noise either way.
+        """
         ic, n = self._ticker_ic.get(ticker, (0.0, 0))
-        return n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+        return n >= TICKER_IC_MIN_N and ic <= TICKER_IC_MIN_ENTRY
 
     def _record_pred_magnitudes(self, signals: list[EnsembleSignal]) -> None:
         """Feed the rolling |pred_return| sample for the dynamic threshold."""
@@ -1269,6 +1375,25 @@ class SignalLoop:
             return -1
         return 0
 
+    def _confirmed_opposite_signal(self, sig: EnsembleSignal, entry_dir: int) -> bool:
+        """True only when the model emits a TRADEABLE signal against the position.
+
+        A reversal bar must clear the same quality gates an opposite-direction
+        entry would need: |pred_return| above the dynamic cost threshold and
+        dir_prob outside the dead zone. Bare sign flips of pred_return are
+        bar-to-bar noise and must not count (2026-07-07 diagnosis: sign-only
+        reversal truncated 1-day swing holds to a 25-minute median).
+        """
+        current_dir = self._sizing_signal_direction(sig)
+        if current_dir == 0 or current_dir == entry_dir:
+            return False
+        pred_ret = float(sig.lgbm_pred_return)
+        if abs(pred_ret) <= self._dynamic_cost_threshold():
+            return False
+        lo, hi = SIZING_DIR_PROB_DEAD_ZONE
+        dir_prob = float(sig.lgbm_dir_prob)
+        return not (lo < dir_prob < hi)
+
     def _check_sizing_exit(
         self, ticker: str, price: float, sig: EnsembleSignal
     ) -> str | None:
@@ -1292,9 +1417,8 @@ class SignalLoop:
             # max_hold here used to dump every position on each redeploy)
             self._bars_held.setdefault(ticker, 390)
 
-        # ATR-adaptive exit thresholds
-        atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
-        sl, ts, tp = _atr_exits(atr_pct)
+        # ATR-adaptive exit thresholds (true daily vol)
+        sl, ts, tp = _atr_exits(self._daily_vol_for(ticker))
 
         # Unrealized PnL
         unrealized = (price - entry_price) / entry_price
@@ -1333,9 +1457,9 @@ class SignalLoop:
                 reason = "stagnation"
 
         if reason is None:
-            # Signal reversal (N consecutive bars of opposite direction)
-            current_dir = self._sizing_signal_direction(sig)
-            if current_dir != 0 and current_dir != entry_dir:
+            # Signal reversal — N consecutive bars of CONFIRMED opposite signal
+            # (tradeable quality, not just sign). See SIZING_REVERSAL_BARS note.
+            if self._confirmed_opposite_signal(sig, entry_dir):
                 self._reversal_counts[ticker] = self._reversal_counts.get(ticker, 0) + 1
             else:
                 self._reversal_counts[ticker] = 0
@@ -1470,8 +1594,7 @@ class SignalLoop:
                     self._pending_exit_reasons[ticker] = exit_reason
                     # Start cooldown to prevent immediate re-entry churn
                     self._ticker_cooldown[ticker] = SIZING_TICKER_COOLDOWN_BARS
-                    atr_pct = self._ticker_atr.get(ticker, DEFAULT_ATR_PCT)
-                    _sl, _ts, _tp = _atr_exits(atr_pct)
+                    _sl, _ts, _tp = _atr_exits(self._daily_vol_for(ticker))
                     logger.info(
                         "sizing_exit",
                         ticker=ticker,

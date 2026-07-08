@@ -121,6 +121,36 @@ def load_bars() -> dict[str, pd.DataFrame]:
     return bars
 
 
+def _daily_vol_map() -> dict[str, "pd.Series"]:
+    """Per-ticker Series (ET date → prior-day daily ATR(14)%/close).
+
+    Mirrors the live _compute_daily_vols daily-bar ATR. Shifted by one day so a
+    bar is only ever exited using volatility known BEFORE that day — no lookahead.
+    """
+    out: dict[str, pd.Series] = {}
+    for ticker, df in load_bars().items():
+        et = df.index.tz_convert(ET)
+        d = pd.DataFrame(
+            {"high": df["high"].values, "low": df["low"].values,
+             "close": df["close"].values},
+            index=pd.DatetimeIndex(et),
+        )
+        daily = d.resample("1D").agg({"high": "max", "low": "min", "close": "last"}).dropna()
+        if len(daily) < 15:
+            continue
+        prev_close = daily["close"].shift()
+        tr = np.maximum(
+            daily["high"] - daily["low"],
+            np.maximum((daily["high"] - prev_close).abs(),
+                       (daily["low"] - prev_close).abs()),
+        )
+        atr14 = tr.rolling(14, min_periods=5).mean()
+        vol = (atr14 / daily["close"]).shift(1)   # prior day → no lookahead
+        vol.index = [ts.date() for ts in daily.index]
+        out[ticker] = vol
+    return out
+
+
 # ─── Phase: features ──────────────────────────────────────────────────────────
 
 def phase_features() -> None:
@@ -191,6 +221,7 @@ def phase_train() -> None:
           f"val_dir_acc={metrics['val_dir_acc']:.4f}")
 
     # OOS predictions: strictly AFTER the validation window
+    dvol_map = _daily_vol_map()
     rows = []
     for ticker, df in feats.items():
         oos = df[df.index >= val_end]
@@ -199,6 +230,17 @@ def phase_train() -> None:
         X = oos[cols].fillna(0).astype(np.float32).values
         pred = model.regressor.predict(X)
         prob = model.classifier.predict_proba(X)[:, 1]
+        # True daily vol per row (map by prior-day ET date); fall back to the
+        # 1m ATR × sqrt(390) proxy where a daily value isn't available.
+        atr1m = oos["atr_pct"].values.astype(float)
+        proxy = np.clip(atr1m, 0.0002, 0.01) * DVOL
+        dvser = dvol_map.get(ticker)
+        if dvser is not None:
+            oos_dates = oos.index.tz_convert(ET).date
+            daily_vol = np.array([dvser.get(d, np.nan) for d in oos_dates], dtype=float)
+            daily_vol = np.where(np.isfinite(daily_vol) & (daily_vol > 0), daily_vol, proxy)
+        else:
+            daily_vol = proxy
         rows.append(pd.DataFrame({
             "ticker": ticker,
             "time": oos.index,
@@ -207,6 +249,7 @@ def phase_train() -> None:
             "close": oos["close"].values,
             "open": oos["open"].values,
             "atr_pct": oos["atr_pct"].values,
+            "daily_vol": daily_vol,
             "regime": oos["regime"].values,
             "forward_return": oos["forward_return"].values,
         }))
@@ -228,14 +271,14 @@ def phase_train() -> None:
 @dataclass
 class Params:
     stop_mult: float = 1.1
-    trail_mult: float = 0.8
-    tp_mult: float = 2.2
+    trail_mult: float = 1.2
+    tp_mult: float = 3.0
     sl_floor: float = 0.010
-    sl_cap: float = 0.025
+    sl_cap: float = 0.100
     ts_floor: float = 0.008
-    ts_cap: float = 0.020
+    ts_cap: float = 0.100
     tp_floor: float = 0.020
-    tp_cap: float = 0.050
+    tp_cap: float = 0.200
     max_hold_bars: int = 1170
     stag_bars: int = 780
     stag_pnl: float = 0.004
@@ -263,12 +306,21 @@ DVOL = 19.75
 REGIME_SCALE = {0: 1.00, 1: 0.70, 2: 0.50}
 
 
-def _exits(atr_pct: float, p: Params) -> tuple[float, float, float]:
-    dv = min(max(atr_pct, 0.0002), 0.01) * DVOL
+def _exits(daily_vol: float, p: Params) -> tuple[float, float, float]:
+    # Mirrors live signal_loop._atr_exits: consumes a TRUE daily-vol fraction.
+    dv = min(max(daily_vol, DAILY_VOL_FLOOR), DAILY_VOL_CEIL)
     sl = min(max(dv * p.stop_mult, p.sl_floor), p.sl_cap)
     ts = min(max(dv * p.trail_mult, p.ts_floor), p.ts_cap)
     tp = min(max(dv * p.tp_mult, p.tp_floor), p.tp_cap)
     return sl, ts, tp
+
+
+# Live exit path uses true daily ATR (daily bars). The backtest derives the same
+# from the cached 1m bars resampled to daily (see _daily_vol_map). The 1m ATR ×
+# sqrt(390) proxy underestimates gappy names, so the exits are computed on the
+# real daily figure — with the 1m proxy as a per-row fallback.
+DAILY_VOL_FLOOR = 0.005
+DAILY_VOL_CEIL = 0.15
 
 
 def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
@@ -354,7 +406,7 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             pos["bars"] += 1
             pos["peak"] = max(pos["peak"], px)
             r = row_by_ticker[t]
-            sl, tsl, tp = _exits(r.atr_pct if np.isfinite(r.atr_pct) else 0.001, p)
+            sl, tsl, tp = _exits(r.daily_vol if np.isfinite(r.daily_vol) else 0.03, p)
             unreal = (px - pos["entry_px"]) / pos["entry_px"]
             reason = None
             if unreal < -sl:

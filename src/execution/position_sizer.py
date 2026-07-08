@@ -107,7 +107,10 @@ _SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single sector
 # Stage 5: Minimum viable trade
 _MIN_NOTIONAL = 1000.0     # $1k minimum trade (probation probes stay viable)
 _MAX_NOTIONAL = 2500.0     # hard $ cap per position on small accounts
-_MAX_NOTIONAL_PCT = 0.10   # on larger accounts: cap at 10% of portfolio
+# Per-position cap on larger accounts (2026-07-01: 0.10→0.15 — "fewer, bigger
+# bets"). With MAX_OPEN_POSITIONS=4 and the 60% heat ceiling, 4 × 15% = 60%
+# fully deploys at max conviction. Backtest-validated before deploy.
+_MAX_NOTIONAL_PCT = 0.15   # on larger accounts: cap at 15% of portfolio
 _MIN_SHARES_FRACTIONAL = 0.01   # Paper mode minimum
 _MIN_SHARES_WHOLE = 1.0         # Live mode minimum
 

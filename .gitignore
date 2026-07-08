@@ -61,3 +61,6 @@ config/staging/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Claude Code session data
+.claude/projects/
