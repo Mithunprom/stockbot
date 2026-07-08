@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "StockBot",
+    "slug": "stockbot-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "stockbot",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0f1c"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.stockbot.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0f1c",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.stockbot.mobile"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "11b92bab-6cd5-49a9-a514-6165207645ae"
+      }
+    },
+    "owner": "mithun404"
+  }
+}

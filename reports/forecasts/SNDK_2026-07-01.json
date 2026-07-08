@@ -1,0 +1,65 @@
+{
+  "ticker": "SNDK",
+  "generated_at": "2026-07-01T06:14:02.477581+00:00",
+  "target_session": "2026-07-01",
+  "reference_close": 2273.73,
+  "reference_bar_date": "2026-06-30",
+  "direction": "long",
+  "prob_up": 0.524,
+  "conviction": "low",
+  "expected_close": 2274.82,
+  "expected_return_pct": 0.05,
+  "range_1sigma": [
+    2069.09,
+    2478.37
+  ],
+  "range_1sigma_pct": 9.0,
+  "rationale": [
+    "live per-ticker IC=+0.088 (n=280)",
+    "uptrend (above SMA10 & SMA20)",
+    "prior +10.89% pop \u2192 give-back risk"
+  ],
+  "trade_plan": {
+    "side": "long",
+    "reference_entry": 2273.73,
+    "stop_loss_pct": 0.025,
+    "trailing_stop_pct": 0.03,
+    "take_profit_pct": 0.07,
+    "stop_loss_price": 2216.89,
+    "take_profit_price": 2432.89,
+    "max_hold": "1 trading day"
+  },
+  "inputs": {
+    "technicals": {
+      "as_of_bar": "2026-06-30",
+      "last_close": 2273.73,
+      "chg_1d_pct": 10.89,
+      "chg_5d_pct": 15.79,
+      "chg_20d_pct": 29.08,
+      "sma10": 2103.67,
+      "sma20": 1940.24,
+      "above_sma10": true,
+      "above_sma20": true,
+      "rsi14": 64.1,
+      "atr14_pct": 9.63,
+      "daily_vol_pct": 9.0
+    },
+    "model_ic": {
+      "ticker_ic": 0.0876,
+      "ticker_n": 280,
+      "ticker_dir_acc": 0.5179,
+      "rolling_7d_ic": 0.0544,
+      "rolling_30d_ic": 0.0544,
+      "source": "bot"
+    },
+    "live_signal": null
+  },
+  "caveats": [
+    "SNDK realised daily vol ~9.0% >> the bot's 2.5% stop cap \u2192 high stop-out / gap risk.",
+    "Model dir-accuracy on this name is ~52%; treat direction as a weak tilt."
+  ],
+  "scoring_rule": {
+    "direction_hit": "realised next-session close vs reference_close matches `direction`",
+    "in_range": "realised close within range_1sigma"
+  }
+}

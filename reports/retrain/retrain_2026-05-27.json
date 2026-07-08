@@ -1,0 +1,15 @@
+{
+  "started_at": "2026-05-27T12:00:00.040804+00:00",
+  "features_updated": 7246,
+  "lgbm_metrics": {
+    "train_ic": "0.9275382940867426",
+    "val_ic": "-0.017871807977673824",
+    "val_dir_acc": "0.525035765379113"
+  },
+  "s3_upload": {
+    "error": "AWS_S3_BUCKET not set"
+  },
+  "model_reloaded": true,
+  "status": "success",
+  "elapsed_seconds": 23.9
+}

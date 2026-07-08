@@ -1,0 +1,117 @@
+{
+  "date": "2026-05-22",
+  "agent": "Live IC Tracker",
+  "generated_at": "2026-05-22T20:45:00.037321+00:00",
+  "rolling_7d_ic": 0.0492,
+  "rolling_7d_dir_acc": 0.4902,
+  "rolling_7d_ic_p_value": 0.000166,
+  "rolling_30d_ic": 0.0492,
+  "rolling_30d_dir_acc": 0.4902,
+  "rolling_30d_ic_p_value": 0.000166,
+  "n_predictions_7d": 5861,
+  "n_predictions_30d": 5861,
+  "by_ticker": {
+    "AAPL": {
+      "ic": 0.3546,
+      "dir_acc": 0.5481,
+      "n": 239
+    },
+    "AMD": {
+      "ic": -0.1826,
+      "dir_acc": 0.4013,
+      "n": 314
+    },
+    "AMZN": {
+      "ic": 0.2123,
+      "dir_acc": 0.4303,
+      "n": 251
+    },
+    "ARM": {
+      "ic": 0.3055,
+      "dir_acc": 0.6065,
+      "n": 310
+    },
+    "AVGO": {
+      "ic": 0.1196,
+      "dir_acc": 0.4713,
+      "n": 314
+    },
+    "CVX": {
+      "ic": 0.2388,
+      "dir_acc": 0.5439,
+      "n": 285
+    },
+    "GOOGL": {
+      "ic": 0.4002,
+      "dir_acc": 0.4259,
+      "n": 216
+    },
+    "JPM": {
+      "ic": -0.3386,
+      "dir_acc": 0.5372,
+      "n": 309
+    },
+    "MA": {
+      "ic": -0.1427,
+      "dir_acc": 0.4739,
+      "n": 306
+    },
+    "MSFT": {
+      "ic": -0.1283,
+      "dir_acc": 0.4682,
+      "n": 314
+    },
+    "MSTR": {
+      "ic": 0.0674,
+      "dir_acc": 0.5584,
+      "n": 308
+    },
+    "MU": {
+      "ic": 0.026,
+      "dir_acc": 0.4381,
+      "n": 315
+    },
+    "NVDA": {
+      "ic": 0.1439,
+      "dir_acc": 0.465,
+      "n": 314
+    },
+    "PLTR": {
+      "ic": 0.1644,
+      "dir_acc": 0.586,
+      "n": 314
+    },
+    "SMCI": {
+      "ic": -0.1953,
+      "dir_acc": 0.5414,
+      "n": 314
+    },
+    "SNDK": {
+      "ic": -0.1466,
+      "dir_acc": 0.4153,
+      "n": 313
+    },
+    "TSLA": {
+      "ic": 0.0686,
+      "dir_acc": 0.5625,
+      "n": 192
+    },
+    "V": {
+      "ic": -0.0397,
+      "dir_acc": 0.4423,
+      "n": 312
+    },
+    "WDC": {
+      "ic": -0.0228,
+      "dir_acc": 0.487,
+      "n": 308
+    },
+    "XOM": {
+      "ic": -0.0521,
+      "dir_acc": 0.4185,
+      "n": 313
+    }
+  },
+  "escalation": null,
+  "consecutive_low_ic_days": 1
+}
