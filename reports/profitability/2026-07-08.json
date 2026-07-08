@@ -1,0 +1,290 @@
+{
+  "agent": "Profitability Diagnosis Agent",
+  "timestamp": "2026-07-08T06:27:42.795396+00:00",
+  "window_days": 60,
+  "portfolio_value": 97403.16,
+  "metrics": {
+    "n_trades": 63,
+    "total_pnl": -143.32,
+    "win_rate": 0.4762,
+    "profit_factor": 0.888,
+    "avg_win": 37.89,
+    "avg_loss": -41.29,
+    "expectancy_per_trade": -2.27,
+    "median_hold_minutes": 25.0,
+    "mean_hold_minutes": 533.0,
+    "sharpe": -0.72,
+    "max_drawdown_pct": 0.64,
+    "n_days": 19
+  },
+  "exit_reason_attribution": {
+    "stop_loss": {
+      "n": 5,
+      "total_pnl": -567.31,
+      "avg_pnl": -113.46,
+      "win_rate": 0.0
+    },
+    "trailing_stop": {
+      "n": 6,
+      "total_pnl": -242.59,
+      "avg_pnl": -40.43,
+      "win_rate": 0.167
+    },
+    "max_hold": {
+      "n": 14,
+      "total_pnl": 42.88,
+      "avg_pnl": 3.06,
+      "win_rate": 0.714
+    },
+    "signal_reversal": {
+      "n": 37,
+      "total_pnl": 128.11,
+      "avg_pnl": 3.46,
+      "win_rate": 0.486
+    },
+    "take_profit": {
+      "n": 1,
+      "total_pnl": 495.59,
+      "avg_pnl": 495.59,
+      "win_rate": 1.0
+    }
+  },
+  "ticker_attribution": {
+    "AMD": {
+      "n": 4,
+      "total_pnl": -208.48,
+      "avg_pnl": -52.12,
+      "win_rate": 0.25
+    },
+    "WDC": {
+      "n": 6,
+      "total_pnl": -121.24,
+      "avg_pnl": -20.21,
+      "win_rate": 0.333
+    },
+    "AVGO": {
+      "n": 3,
+      "total_pnl": -98.74,
+      "avg_pnl": -32.91,
+      "win_rate": 0.333
+    },
+    "SMCI": {
+      "n": 9,
+      "total_pnl": -82.34,
+      "avg_pnl": -9.15,
+      "win_rate": 0.444
+    },
+    "MSFT": {
+      "n": 2,
+      "total_pnl": -66.81,
+      "avg_pnl": -33.41,
+      "win_rate": 0.5
+    },
+    "ARM": {
+      "n": 3,
+      "total_pnl": -57.31,
+      "avg_pnl": -19.1,
+      "win_rate": 0.333
+    },
+    "SNDK": {
+      "n": 5,
+      "total_pnl": -37.02,
+      "avg_pnl": -7.4,
+      "win_rate": 0.6
+    },
+    "PLTR": {
+      "n": 2,
+      "total_pnl": -25.86,
+      "avg_pnl": -12.93,
+      "win_rate": 0.5
+    },
+    "AAPL": {
+      "n": 1,
+      "total_pnl": -10.97,
+      "avg_pnl": -10.97,
+      "win_rate": 0.0
+    },
+    "GOOGL": {
+      "n": 1,
+      "total_pnl": -6.47,
+      "avg_pnl": -6.47,
+      "win_rate": 0.0
+    },
+    "CVX": {
+      "n": 2,
+      "total_pnl": -4.53,
+      "avg_pnl": -2.26,
+      "win_rate": 0.5
+    },
+    "NVDA": {
+      "n": 2,
+      "total_pnl": 1.24,
+      "avg_pnl": 0.62,
+      "win_rate": 0.5
+    },
+    "JPM": {
+      "n": 2,
+      "total_pnl": 2.46,
+      "avg_pnl": 1.23,
+      "win_rate": 0.5
+    },
+    "TSLA": {
+      "n": 2,
+      "total_pnl": 5.16,
+      "avg_pnl": 2.58,
+      "win_rate": 0.5
+    },
+    "AMZN": {
+      "n": 2,
+      "total_pnl": 16.33,
+      "avg_pnl": 8.16,
+      "win_rate": 1.0
+    },
+    "XOM": {
+      "n": 2,
+      "total_pnl": 19.86,
+      "avg_pnl": 9.93,
+      "win_rate": 0.5
+    },
+    "MA": {
+      "n": 1,
+      "total_pnl": 39.67,
+      "avg_pnl": 39.67,
+      "win_rate": 1.0
+    },
+    "MU": {
+      "n": 4,
+      "total_pnl": 40.91,
+      "avg_pnl": 10.23,
+      "win_rate": 0.75
+    },
+    "V": {
+      "n": 3,
+      "total_pnl": 108.09,
+      "avg_pnl": 36.03,
+      "win_rate": 1.0
+    },
+    "MSTR": {
+      "n": 7,
+      "total_pnl": 342.73,
+      "avg_pnl": 48.96,
+      "win_rate": 0.286
+    }
+  },
+  "findings": [
+    {
+      "code": "HORIZON_MISMATCH",
+      "severity": "CRITICAL",
+      "title": "Trades exit long before the signal's validated horizon",
+      "evidence": "Median hold = 25 min vs designed 390 min (6% of design). The model predicts 390-minute-ahead returns; exiting earlier means the validated edge never has time to materialize \u2014 the live system trades a DIFFERENT strategy than the one backtested.",
+      "recommendation": "Disable or drastically slow any exit that can fire inside the signal horizon (e.g., require reversal confirmation over 30-60 bars, or gate reversal exits on a fresh opposite-direction pred_return that clears the cost threshold \u2014 not ensemble flicker).",
+      "metrics": {
+        "median_hold_minutes": 25.0,
+        "hold_ratio": 0.064
+      }
+    },
+    {
+      "code": "UNDESIGNED_EXIT_DOMINANT",
+      "severity": "CRITICAL",
+      "title": "'signal_reversal' exits dominate (59% of trades) but were never backtested",
+      "evidence": "37/63 trades exit via 'signal_reversal' (total PnL +128.11, win rate 49%). This exit path is not part of the validated design \u2014 the backtest edge does not apply to these trades.",
+      "recommendation": "Either backtest 'signal_reversal' exits explicitly or remove them. An unvalidated exit path invalidates the whole strategy's expectancy estimate.",
+      "metrics": {
+        "reason": "signal_reversal",
+        "share": 0.587,
+        "n": 37,
+        "total_pnl": 128.11,
+        "avg_pnl": 3.46,
+        "win_rate": 0.486
+      }
+    },
+    {
+      "code": "STOP_HEMORRHAGE",
+      "severity": "HIGH",
+      "title": "Risk exits destroy more than profit exits earn",
+      "evidence": "stop_loss: 5 trades / -567.31; trailing_stop: 6 trades / -242.59; take_profit: 1 trades / +495.59. The win side cannot pay for the loss side \u2014 classic sign that targets are unreachable at the actual holding horizon while stops remain fully reachable.",
+      "recommendation": "Re-derive stop/target multiples from the realized holding-period volatility (not daily ATR applied to minute-scale holds), or fix the holding horizon first and re-measure.",
+      "metrics": {
+        "stop_damage": -809.9,
+        "take_profit_total": 495.59
+      }
+    },
+    {
+      "code": "NEGATIVE_EXPECTANCY",
+      "severity": "HIGH",
+      "title": "Profit factor 0.89 \u2014 the book loses money as configured",
+      "evidence": "n=63, win rate 47.6%, avg win +37.89 vs avg loss -41.29, total PnL -143.32. Losses run larger than wins with a sub-50% hit rate: there is no positive expectancy at the current (execution-truncated) horizon.",
+      "recommendation": "Do not tune around this \u2014 fix the design-conformance findings first, then re-measure on a frozen configuration.",
+      "metrics": {
+        "n_trades": 63,
+        "total_pnl": -143.32,
+        "win_rate": 0.4762,
+        "profit_factor": 0.888,
+        "avg_win": 37.89,
+        "avg_loss": -41.29,
+        "expectancy_per_trade": -2.27,
+        "median_hold_minutes": 25.0,
+        "mean_hold_minutes": 533.0
+      }
+    },
+    {
+      "code": "TICKER_BLEEDERS",
+      "severity": "MEDIUM",
+      "title": "6 tickers repeatedly lose money (-605.13 combined)",
+      "evidence": "Tickers with \u22653 trades and negative total PnL: AMD (-208), WDC (-121), AVGO (-99), SMCI (-82), ARM (-57), SNDK (-37).",
+      "recommendation": "Audit why the per-ticker live-IC gate has not excluded these names (tickers_ic_blocked is empty). Tighten the gate: require positive rolling live IC before a ticker is tradeable, not just 'not strongly negative'.",
+      "metrics": {
+        "bleeders": {
+          "AMD": {
+            "n": 4,
+            "total_pnl": -208.48,
+            "avg_pnl": -52.12,
+            "win_rate": 0.25
+          },
+          "WDC": {
+            "n": 6,
+            "total_pnl": -121.24,
+            "avg_pnl": -20.21,
+            "win_rate": 0.333
+          },
+          "AVGO": {
+            "n": 3,
+            "total_pnl": -98.74,
+            "avg_pnl": -32.91,
+            "win_rate": 0.333
+          },
+          "SMCI": {
+            "n": 9,
+            "total_pnl": -82.34,
+            "avg_pnl": -9.15,
+            "win_rate": 0.444
+          },
+          "ARM": {
+            "n": 3,
+            "total_pnl": -57.31,
+            "avg_pnl": -19.1,
+            "win_rate": 0.333
+          },
+          "SNDK": {
+            "n": 5,
+            "total_pnl": -37.02,
+            "avg_pnl": -7.4,
+            "win_rate": 0.6
+          }
+        }
+      }
+    },
+    {
+      "code": "SMALL_SAMPLE",
+      "severity": "INFO",
+      "title": "Only 63 closed trades in 60 days \u2014 expectancy estimates are noisy",
+      "evidence": "With n=63, a true 55% win-rate strategy can easily show <50% observed. Any strategy verdict needs \u2265100 trades at a FIXED configuration \u2014 constant parameter churn resets the sample.",
+      "recommendation": "Freeze one configuration for a full evaluation window. Stop changing entry/exit parameters mid-sample.",
+      "metrics": {
+        "n_trades": 63,
+        "window_days": 60
+      }
+    }
+  ],
+  "needs_review": true
+}
