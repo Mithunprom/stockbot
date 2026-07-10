@@ -107,6 +107,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </tr></thead><tbody id="watchlist"><tr><td colspan="5">loading…</td></tr></tbody></table>
 </div>
 
+<h2>Track record — recent closed trades</h2>
+<div class="grid" style="margin-bottom:12px">
+  <div class="card"><h3>Win rate</h3><div class="big" id="tr_wr">–</div><div class="muted" id="tr_wrd"></div></div>
+  <div class="card"><h3>Profit factor</h3><div class="big" id="tr_pf">–</div><div class="muted">gross win / gross loss</div></div>
+  <div class="card"><h3>Expectancy</h3><div class="big" id="tr_exp">–</div><div class="muted">avg PnL per trade</div></div>
+  <div class="card"><h3>Total PnL</h3><div class="big" id="tr_pnl">–</div><div class="muted" id="tr_pnld"></div></div>
+</div>
+<div class="panel" style="overflow-x:auto">
+  <table><thead><tr>
+    <th>Date</th><th>Ticker</th><th>Entry → Exit</th><th>Hold</th>
+    <th>PnL</th><th>Exit reason</th><th>Signal at entry</th>
+  </tr></thead><tbody id="trades"><tr><td colspan="7">loading…</td></tr></tbody></table>
+</div>
+
+<h2>The strategy (what you're watching)</h2>
+<div class="panel muted" style="font-size:13px; line-height:1.6">
+  <b style="color:#e6edf3">Signal:</b> a LightGBM model predicts next-day returns
+  from 40 engineered features (momentum, VWAP, options flow, volume-informed
+  trading) refreshed every minute. Entries require top-8% conviction
+  (self-calibrating threshold), P(up) ≥ 60%, and a positive live information
+  coefficient on that specific ticker.<br>
+  <b style="color:#e6edf3">Sizing:</b> conviction-proportional, volatility-normalized,
+  Kelly-governed; max 15% per position, 6 positions, 75% portfolio heat ceiling,
+  max 2 per sector.<br>
+  <b style="color:#e6edf3">Exits:</b> daily-volatility-scaled stop (~1.1σ),
+  trailing (~1.2σ), target (~3σ), 1-trading-day max hold; reversal exit only on
+  a confirmed tradeable opposite signal sustained 45 minutes.<br>
+  <b style="color:#e6edf3">Risk rails:</b> daily-loss halt, drawdown halt,
+  25% position breaker, sector caps — never overridden by the model.<br>
+  <span style="color:#d29922">⚠ Paper trading. Not investment advice. Past
+  performance does not guarantee future results.</span>
+</div>
+
 <h2>Watchdog checks</h2>
 <div class="panel"><div id="checks">loading…</div></div>
 
@@ -287,6 +320,41 @@ async function refresh() {
     $("positions").innerHTML = rows || `<tr><td colspan="8" class="muted">no open positions</td></tr>`;
   } catch (e) {
     $("positions").innerHTML = `<tr><td colspan="8" class="muted">unavailable: ${e.message}</td></tr>`;
+  }
+
+  try {
+    const td = await fetchJson("/trades?limit=50", 15000);
+    const closed = (td.trades || []).filter(t => t.exit_time);
+    if (closed.length) {
+      const wins = closed.filter(t => t.pnl > 0);
+      const gp = wins.reduce((s, t) => s + t.pnl, 0);
+      const gl = -closed.filter(t => t.pnl < 0).reduce((s, t) => s + t.pnl, 0);
+      const tot = closed.reduce((s, t) => s + t.pnl, 0);
+      $("tr_wr").textContent = (wins.length / closed.length * 100).toFixed(0) + "%";
+      $("tr_wrd").textContent = wins.length + " of " + closed.length + " trades";
+      const pf = gl > 0 ? (gp / gl) : Infinity;
+      $("tr_pf").textContent = isFinite(pf) ? pf.toFixed(2) : "∞";
+      $("tr_pf").className = "big " + (pf >= 1 ? "ok" : "crit");
+      $("tr_exp").textContent = (tot / closed.length >= 0 ? "+$" : "-$") +
+        Math.abs(tot / closed.length).toFixed(0);
+      $("tr_pnl").textContent = (tot >= 0 ? "+$" : "-$") + Math.abs(tot).toFixed(0);
+      $("tr_pnl").className = "big " + (tot >= 0 ? "ok" : "crit");
+      $("tr_pnld").textContent = "last " + closed.length + " closed trades";
+      $("trades").innerHTML = closed.slice(0, 15).map(t => {
+        const hold = Math.round((new Date(t.exit_time) - new Date(t.entry_time)) / 60000);
+        const holdStr = hold < 120 ? hold + "m" : (hold / 60).toFixed(1) + "h";
+        const c = t.pnl >= 0 ? "ok" : "crit";
+        return `<tr><td>${t.entry_time.slice(5, 10)}</td><td><b>${t.ticker}</b></td>
+          <td>$${fmt(t.entry_price)} → $${fmt(t.exit_price)}</td><td>${holdStr}</td>
+          <td class="${c}">${t.pnl >= 0 ? "+" : ""}$${fmt(t.pnl, 0)}</td>
+          <td>${t.exit_reason || ""}</td>
+          <td class="muted">ens ${(t.ensemble_signal ?? 0).toFixed(2)}${t.sentiment_index ? " · sent " + t.sentiment_index.toFixed(2) : ""}</td></tr>`;
+      }).join("");
+    } else {
+      $("trades").innerHTML = `<tr><td colspan="7" class="muted">no closed trades yet</td></tr>`;
+    }
+  } catch (e) {
+    $("trades").innerHTML = `<tr><td colspan="7" class="muted">unavailable: ${e.message}</td></tr>`;
   }
 
   try {

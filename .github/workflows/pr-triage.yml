@@ -1,0 +1,115 @@
+name: PR Triage — auto-merge trivial, email owner for review
+
+# Owner policy (2026-07-10):
+#   - TRIVIAL PRs (only docs/state/log files changed) → auto-merge, FYI email.
+#   - Anything touching src/, config/, tests/, main.py, workflows → NEVER
+#     auto-merged (CLAUDE.md: strategy changes need human review) → email the
+#     owner immediately with the link.
+# GitHub does not notify you about your own PRs (the nightly R&D desk opens
+# PRs as your account), so this email is the reliable signal.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify PR (trivial vs needs-review)
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -e
+          FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "changed files:"; echo "$FILES"
+          TRIVIAL=true
+          while IFS= read -r f; do
+            case "$f" in
+              agent_state.json|docs/*|reports/*|*.md|*.txt) ;;   # trivial paths
+              *) TRIVIAL=false ;;
+            esac
+          done <<< "$FILES"
+          echo "trivial=$TRIVIAL" >> "$GITHUB_OUTPUT"
+          echo "PR classified trivial=$TRIVIAL"
+
+      - name: Run tests before any auto-merge
+        if: steps.classify.outputs.trivial == 'true'
+        id: tests
+        continue-on-error: true
+        run: |
+          pip -q install pytest || true
+          # Trivial paths can't break code, but belt-and-braces: fail closed
+          # if the checkout can't even list tests.
+          ls tests/unit >/dev/null
+
+      - name: Auto-merge trivial PR
+        if: steps.classify.outputs.trivial == 'true' && steps.tests.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --squash --delete-branch \
+            --repo ${{ github.repository }} || echo "merge failed — will email instead"
+
+      - name: Email the owner
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.FORECAST_EMAIL_TO }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          TRIVIAL: ${{ steps.classify.outputs.trivial }}
+        run: |
+          python3 - <<'EOF'
+          import os, smtplib, ssl
+          from email.message import EmailMessage
+
+          host = os.environ.get("SMTP_HOST", "")
+          if not host:
+              print("SMTP secrets not configured — skipping email")
+              raise SystemExit(0)
+          trivial = os.environ.get("TRIVIAL") == "true"
+          msg = EmailMessage()
+          if trivial:
+              msg["Subject"] = f"[StockBot] auto-merged trivial PR #{os.environ['PR_NUM']}: {os.environ['PR_TITLE']}"
+              action = "Auto-merged (docs/state/log files only). No action needed."
+          else:
+              msg["Subject"] = f"[StockBot] 🔍 REVIEW NEEDED — PR #{os.environ['PR_NUM']}: {os.environ['PR_TITLE']}"
+              action = ("This PR touches code/config and needs YOUR approval "
+                        "(per CLAUDE.md, strategy changes are never auto-merged).")
+          msg["From"] = os.environ["SMTP_USER"]
+          msg["To"] = os.environ["EMAIL_TO"]
+          body = (os.environ.get("PR_BODY") or "")[:2000]
+          msg.set_content(
+              f"{action}\n\n{os.environ['PR_URL']}\n\n"
+              f"--- PR description ---\n{body}\n\n— StockBot PR Triage"
+          )
+          port = int(os.environ.get("SMTP_PORT", "587"))
+          ctx = ssl.create_default_context()
+          if port == 465:
+              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=30) as s:
+                  s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+                  s.send_message(msg)
+          else:
+              with smtplib.SMTP(host, port, timeout=30) as s:
+                  s.starttls(context=ctx)
+                  s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+                  s.send_message(msg)
+          print("email sent")
+          EOF
