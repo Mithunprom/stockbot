@@ -1612,8 +1612,13 @@ class SignalLoop:
                 # Check exit conditions
                 exit_reason = self._check_sizing_exit(ticker, price, sig)
                 if exit_reason:
-                    side = "sell"
                     pos = self._pm._positions[ticker]
+                    # Exit side depends on position side: longs SELL, shorts
+                    # BUY to cover. This was hardcoded "sell" — when a broker
+                    # sync imported an accidental short, every "exit" sold
+                    # MORE, compounding the short ~2x/minute (2026-07-10:
+                    # 47sh MSTR long became a 1,457sh short in 30 minutes).
+                    side = "sell" if pos.side == "long" else "buy"
                     qty = pos.qty
                     notional = qty * price
                     self._pending_exit_reasons[ticker] = exit_reason
@@ -1786,10 +1791,16 @@ class SignalLoop:
                 )
                 return False
 
-        # Sell exits use market orders (Alpaca rejects limit orders with
-        # fractional qty, and we want guaranteed fills on exits).
-        # Buy entries use limit orders for price protection.
-        if side == "sell":
+        # Legacy RL/threshold paths never short, so there a buy is always an
+        # entry; sizing mode sets is_entry explicitly (a buy can be a cover).
+        if not self._sizing_mode:
+            is_entry = side == "buy"
+
+        # ALL exits use market orders (guaranteed fills; Alpaca also rejects
+        # fractional-qty limit orders). This includes BUY-to-cover exits of
+        # short positions — routing those through the entry limit path would
+        # stall the cover. Buy ENTRIES use limit orders for price protection.
+        if side == "sell" or not is_entry:
             limit_price = None  # market order
         else:
             quote = await self._alpaca.get_latest_quote(ticker)
@@ -1814,7 +1825,10 @@ class SignalLoop:
         if result.status in ("filled", "partially_filled"):
             fill_price = result.filled_avg_price or price
             filled_at = result.filled_at or datetime.now(timezone.utc)
-            if side == "buy":
+            # Key on is_entry, NOT side: a BUY that covers a short is an EXIT.
+            # Keying on side made cover-buys open phantom LONG positions
+            # (2026-07-10 MSTR spiral, part 2).
+            if is_entry:
                 self._pm.open_position(
                     ticker=ticker,
                     side="long",

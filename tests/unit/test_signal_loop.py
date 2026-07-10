@@ -579,3 +579,48 @@ def test_daily_reset_fires_after_930_any_minute():
 
     assert loop._sizing_n_trades_today == 0
     assert loop._last_reset_date == fake_now.date()
+
+
+def test_exit_of_short_position_buys_to_cover():
+    """REGRESSION (2026-07-10 MSTR spiral): exiting a SHORT must BUY.
+    Hardcoded side="sell" compounded an accidental short ~2x/minute."""
+    import asyncio
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+
+    loop = _make_loop()
+    pm = loop._pm
+    pm.portfolio_value = 97_000.0
+    pm.open_position("AAPL", "short", 100, 100.0)
+    loop._entry_prices["AAPL"] = 100.0
+    loop._entry_directions["AAPL"] = -1
+    loop._peak_prices["AAPL"] = 100.0
+    loop._ticker_atr["AAPL"] = 0.0005
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    loop._entry_dates["AAPL"] = (
+        datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)
+    )
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS  # force max_hold exit
+
+    submitted = {}
+
+    async def fake_submit(req):
+        submitted["side"] = req.side
+        submitted["qty"] = req.qty
+        from datetime import timezone as tz
+        class R:
+            status = "filled"
+            filled_avg_price = 100.0
+            filled_qty = 100.0
+            filled_at = datetime.now(tz.utc)
+            id = "t"
+        return R()
+
+    loop._alpaca.submit_order = fake_submit
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.001
+    sig.lgbm_dir_prob = 0.55
+    asyncio.run(loop._act_on_signal(sig, 100.0, None, regime=1))
+    assert submitted.get("side") == "buy", (
+        f"short exit must BUY to cover, got {submitted}"
+    )
