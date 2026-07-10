@@ -35,11 +35,11 @@ jobs:
       - name: Watchdog reports no critical issues
         run: |
           set -e
-          WD=$(curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/watchdog")
-          echo "$WD" | python3 -m json.tool
-          echo "$WD" | python3 - <<'EOF'
+          curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/watchdog" > /tmp/wd.json
+          python3 -m json.tool /tmp/wd.json
+          python3 - <<'EOF'
           import json, sys
-          report = json.load(sys.stdin)
+          report = json.load(open("/tmp/wd.json"))
           if report.get("status") == "critical":
               bad = [c for c in report.get("checks", []) if c.get("status") == "critical"]
               print(f"::error::watchdog CRITICAL: {[c['name'] + ': ' + c['detail'] for c in bad]}")
