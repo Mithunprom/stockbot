@@ -93,7 +93,7 @@ async function ghMainVersion() {
       { signal: ctl.signal, cache: "no-store" });
     if (!r.ok) return null;
     const text = await r.text();
-    const m = text.match(/"version":\\s*"([^"]+)"/);
+    const m = text.match(/^APP_VERSION = "([0-9.]+)"/m);
     return m ? m[1] : null;
   } catch (e) { return null; }
   finally { clearTimeout(timer); }

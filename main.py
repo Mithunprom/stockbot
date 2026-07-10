@@ -718,10 +718,17 @@ def _load_ffsa_features() -> list[str]:
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 
+# Single source of truth for the deployed version. The dashboard's deploy-drift
+# card and .github/workflows/watchdog.yml both parse the APP_VERSION line from
+# GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
+# v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
+# frozen; measurement clock continues from v0.3.5.
+APP_VERSION = "0.3.6"
+
 app = FastAPI(
     title="StockBot API",
     description="Autonomous trading bot — ML signal ensemble + RL execution",
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -742,7 +749,7 @@ async def root() -> JSONResponse:
     """Root route — lists available API endpoints."""
     return JSONResponse(content={
         "name": "StockBot API",
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "mode": get_settings().alpaca_mode,
         "endpoints": {
             "health":  "GET /health",
@@ -768,10 +775,7 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        # v0.3.6 — watchdog agent (self-heal + email), /watchdog endpoint,
-        # /dashboard status page, GitHub Actions external monitor. Entry/exit
-        # LOGIC unchanged; measurement clock continues from v0.3.5.
-        "version": "0.3.6",
+        "version": APP_VERSION,
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),
