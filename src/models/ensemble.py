@@ -147,17 +147,67 @@ class EnsembleWeights:
 
     @classmethod
     def from_staging(cls, staging_path: Path) -> "EnsembleWeights":
-        """Load weights proposed by Profit Agent from staging file."""
+        """Load weights proposed by Profit Agent from staging file.
+
+        Checks "ensemble_weights" first, then "proposed_weights" for backward
+        compatibility with files written before the key was standardised.
+        """
         import json
 
         with open(staging_path) as f:
             data = json.load(f)
-        weights = data.get("ensemble_weights", {})
+        weights = data.get("ensemble_weights") or data.get("proposed_weights", {})
         obj = cls(
             lgbm=weights.get("lgbm", 0.60),
             transformer=weights.get("transformer", 0.10),
             tcn=weights.get("tcn", 0.10),
             sentiment=weights.get("sentiment", 0.20),
+        )
+        obj.validate()
+        return obj
+
+    @classmethod
+    def renormalize_dropping_dead_models(
+        cls, active: set[str]
+    ) -> "EnsembleWeights":
+        """Return new weights with zero-IC models zeroed out and the rest renormalized.
+
+        Use when live inference confirms certain models always output 0.0 confidence
+        (e.g. Transformer/TCN with no checkpoint loaded). Their allocated weight
+        dilutes the signal from working models without contributing anything.
+
+        Args:
+            active: Set of model names that have positive measured IC and non-zero
+                    live contributions. Valid names: {"lgbm", "transformer", "tcn",
+                    "sentiment"}.
+
+        Returns:
+            EnsembleWeights with dead-model weights set to 0.0 and remaining
+            weights rescaled to sum to 1.0.
+
+        Example:
+            >>> EnsembleWeights.renormalize_dropping_dead_models({"lgbm", "sentiment"})
+            EnsembleWeights(lgbm=0.75, transformer=0.0, tcn=0.0, sentiment=0.25)
+        """
+        defaults = cls()
+        raw = {
+            "lgbm": defaults.lgbm if "lgbm" in active else 0.0,
+            "transformer": defaults.transformer if "transformer" in active else 0.0,
+            "tcn": defaults.tcn if "tcn" in active else 0.0,
+            "sentiment": defaults.sentiment if "sentiment" in active else 0.0,
+        }
+        total = sum(raw.values())
+        if total < 1e-9:
+            raise ValueError(
+                f"No active models remain after dropping dead ones. "
+                f"active={active!r}, raw={raw!r}"
+            )
+        scale = 1.0 / total
+        obj = cls(
+            lgbm=round(raw["lgbm"] * scale, 4),
+            transformer=round(raw["transformer"] * scale, 4),
+            tcn=round(raw["tcn"] * scale, 4),
+            sentiment=round(raw["sentiment"] * scale, 4),
         )
         obj.validate()
         return obj

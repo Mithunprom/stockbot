@@ -85,9 +85,15 @@ def test_render_and_subject():
 
 def test_agent_smtp_gating_skips_without_creds(monkeypatch):
     # Ensure no SMTP creds → agent reports not ready (never crashes)
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("POLYGON_API_KEY", "test-polygon")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test_forecast.db")
+
     import src.config as cfg
     from src.agents.forecast_agent import ForecastEmailAgent
 
+    cfg.get_settings.cache_clear()
     s = cfg.get_settings()
     monkeypatch.setattr(s, "smtp_host", "", raising=False)
     monkeypatch.setattr(s, "forecast_email_to", "", raising=False)

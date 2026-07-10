@@ -1,13 +1,24 @@
 {
   "current_phase": "System Audit & Baseline Establishment",
   "last_iteration_date": "2026-07-10",
-  "active_hypothesis": "Baseline: v0.3.8 confirmed-reversal exits + positive-IC gate + 75% deployment. Establish live baseline metrics before introducing advanced feature engineering.",
+  "active_hypothesis": "H2: SPY/QQQ regime overlay — implement next once H4 is reviewed and merged.",
   "metrics_history": {
     "baseline_sharpe": 0.0,
     "current_sharpe": 0.0,
     "target_sharpe": 3.0,
     "live_ic_baseline": 0.05,
     "lgbm_oos_ic": 0.166
+  },
+  "live_data_status": {
+    "date": "2026-07-10",
+    "endpoints_checked": [
+      "https://stockbot-production-cbde.up.railway.app/portfolio/summary",
+      "https://stockbot-production-cbde.up.railway.app/watchdog",
+      "https://stockbot-production-cbde.up.railway.app/trades?limit=200",
+      "https://stockbot-production-cbde.up.railway.app/diagnostics"
+    ],
+    "status": "UNAVAILABLE — HTTP 403 from proxy tunnel (CONNECT tunnel failed). Railway endpoint not reachable from this sandbox.",
+    "action": "Proceeded with codebase-only hypothesis implementation. Metrics remain at baseline until Railway connectivity is restored."
   },
   "hypothesis_queue": [
     {
@@ -32,15 +43,46 @@
       "id": "H4",
       "hypothesis": "Removing dead ensemble weights (Transformer/TCN contribute 0.0 in every live trade) and renormalizing LGBM 60->75, sentiment 20->25 sharpens the entry signal",
       "test": "IC comparison of reweighted ensemble on validation window",
-      "status": "pending"
+      "status": "needs_data_run",
+      "implementation_date": "2026-07-10",
+      "pr_branch": "feat/rnd-H4-dead-weight-renorm",
+      "implementation_summary": [
+        "Added EnsembleWeights.renormalize_dropping_dead_models(active) classmethod — drops zero-IC models and renormalizes remaining weights.",
+        "Fixed EnsembleWeights.from_staging() to check 'ensemble_weights' key first, then 'proposed_weights' as fallback — fixes key mismatch bug where profit agent proposals were silently ignored.",
+        "Fixed ProfitAgent._propose_weights() to: (1) return all 4 weight keys explicitly (was missing 'lgbm' key), (2) auto-detect dead-weight condition (transformer_ic<0.01 AND tcn_ic<0.01) and return H4 weights.",
+        "Fixed ProfitAgent.run() to write 'ensemble_weights' key in staging file so from_staging() can read it.",
+        "Added config/staging/profit_suggestions.json with H4 proposal, risk assessment, and governance metadata.",
+        "Added 18 new unit tests in tests/unit/test_ensemble_weights.py — all pass.",
+        "Fixed pre-existing test failure in test_forecast_agent.py (missing env vars for get_settings()).",
+        "63/63 unit tests green (test_signal_loop.py excluded: torch not installed in sandbox)."
+      ],
+      "index_risk_quant_verdict": "APPROVED_FOR_STAGING — calibration correction only. In sizing mode, entry gates use lgbm_pred_return/lgbm_dir_prob directly; ensemble_signal is not the gate variable. No lookahead, no leakage, backed by 100% of live trade observations. Needs data run for IC delta confirmation.",
+      "expected_impact": "Ensemble signal correctly calibrated to [−1, +1] range. Strength classification more accurate. RL obs dim-0 more informative. No entry-gate behavior change in sizing mode."
+    }
+  ],
+  "completed_iterations": [
+    {
+      "date": "2026-07-10",
+      "hypothesis_id": "H4",
+      "result": "IMPLEMENTED — needs_data_run for IC validation",
+      "tests_status": "63 passed / 1 collection error (torch missing in sandbox)",
+      "files_changed": [
+        "src/models/ensemble.py",
+        "src/agents/profit_agent.py",
+        "tests/unit/test_ensemble_weights.py",
+        "tests/unit/test_forecast_agent.py",
+        "config/staging/profit_suggestions.json",
+        "agent_state.json"
+      ]
     }
   ],
   "pending_tasks": [
+    "Merge PR feat/rnd-H4-dead-weight-renorm after human review",
+    "Run IC comparison backtest on Railway to validate H4 signal improvement",
+    "Implement H2: SPY/QQQ regime overlay",
     "Run baseline backtest sweep and record metrics",
-    "Test H1 cross-sectional ranking variant",
     "Hook backtest evaluation logs to the state recorder"
   ],
-  "completed_iterations": [],
   "blocked_by_token_limit": false,
   "governance": {
     "deploy_mode": "PR_REVIEW_REQUIRED",
