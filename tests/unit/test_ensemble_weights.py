@@ -156,12 +156,22 @@ def test_from_staging_uses_defaults_when_keys_missing():
     assert math.isclose(w.lgbm, 0.60, abs_tol=1e-4)
 
 
-def test_from_staging_reads_actual_h4_staging_file():
-    """The H4 staging file written by this R&D run loads and validates correctly."""
-    staging_path = Path("config/staging/profit_suggestions.json")
-    if not staging_path.exists():
-        pytest.skip("H4 staging file not yet written")
+def test_from_staging_reads_h4_staging_file(tmp_path):
+    """An H4-format staging file loads and validates correctly.
 
+    Uses a deterministic fixture: the real config/staging/ file is a RUNTIME
+    artifact (gitignored, rewritten daily by the profit agent), so asserting
+    against whatever happens to exist on the machine made the suite
+    environment-dependent (failed on any box with a stale staging file).
+    """
+    import json
+
+    staging_path = tmp_path / "profit_suggestions.json"
+    staging_path.write_text(json.dumps({
+        "ensemble_weights": {
+            "lgbm": 0.75, "transformer": 0.0, "tcn": 0.0, "sentiment": 0.25,
+        },
+    }))
     w = EnsembleWeights.from_staging(staging_path)
     w.validate()
     assert math.isclose(w.lgbm, 0.75, abs_tol=1e-4)
