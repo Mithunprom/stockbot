@@ -1777,8 +1777,17 @@ class SignalLoop:
                 qty = pos.qty
                 notional = qty * price
 
-        # ── Validation ────────────────────────────────────────────────────────
-        if side == "buy":
+        # Legacy RL/threshold paths never short, so there a buy is always an
+        # entry; sizing mode sets is_entry explicitly (a buy can be a cover).
+        if not self._sizing_mode:
+            is_entry = side == "buy"
+
+        # ── Validation — ENTRIES ONLY ─────────────────────────────────────────
+        # Exits must NEVER be size-blocked: they reduce risk. The old
+        # `side == "buy"` condition rejected the BUY-to-cover of the runaway
+        # MSTR short ("order_rejected_oversized 130.4%"), trapping the book
+        # at 130% inverse exposure with a working exit signal (2026-07-10).
+        if is_entry:
             if notional < 10.0 or qty < 0.01:
                 return False
             proposed_pct = notional / max(self._pm.portfolio_value, 1.0)
@@ -1790,11 +1799,6 @@ class SignalLoop:
                     proposed_pct=f"{proposed_pct:.1%}",
                 )
                 return False
-
-        # Legacy RL/threshold paths never short, so there a buy is always an
-        # entry; sizing mode sets is_entry explicitly (a buy can be a cover).
-        if not self._sizing_mode:
-            is_entry = side == "buy"
 
         # ALL exits use market orders (guaranteed fills; Alpaca also rejects
         # fractional-qty limit orders). This includes BUY-to-cover exits of

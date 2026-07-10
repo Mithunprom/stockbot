@@ -723,7 +723,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.3.7"
+APP_VERSION = "0.3.8"
 
 app = FastAPI(
     title="StockBot API",
@@ -1347,6 +1347,45 @@ async def get_account_info() -> JSONResponse:
     try:
         account = await _signal_loop._alpaca.get_account()
         return JSONResponse(content=account)
+    except Exception as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=500)
+
+
+@app.get("/portfolio/history")
+async def portfolio_history(period: str = "1M", timeframe: str = "1D") -> JSONResponse:
+    """Equity time series from Alpaca portfolio history (free).
+
+    period: 1D | 1W | 1M | 3M | 1A ; timeframe: 1Min | 15Min | 1H | 1D
+    Feeds the dashboard's equity-curve chart.
+    """
+    import httpx
+
+    settings = get_settings()
+    base = settings.alpaca_paper_base_url if settings.alpaca_mode == "paper" \
+        else settings.alpaca_live_base_url
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{base}/v2/account/portfolio/history",
+                params={"period": period, "timeframe": timeframe},
+                headers={
+                    "APCA-API-KEY-ID": settings.alpaca_api_key,
+                    "APCA-API-SECRET-KEY": settings.alpaca_secret_key,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        # Compact: drop nulls, pair timestamps with equity
+        points = [
+            {"t": t, "equity": e}
+            for t, e in zip(data.get("timestamp", []), data.get("equity", []))
+            if e is not None
+        ]
+        return JSONResponse(content={
+            "period": period, "timeframe": timeframe,
+            "points": points,
+            "base_value": data.get("base_value"),
+        })
     except Exception as exc:
         return JSONResponse(content={"error": str(exc)}, status_code=500)
 
