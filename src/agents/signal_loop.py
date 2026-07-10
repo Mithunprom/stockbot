@@ -73,11 +73,14 @@ SIZING_DIR_PROB_DEAD_ZONE = (0.40, 0.60)  # long entries need P(up) ≥ 0.60
 SIZING_REVERSAL_BARS = 45
 
 # Anti-churn / entry discipline
-SIZING_MAX_TRADES_PER_DAY = 4       # swing cadence: few, high-conviction entries
+# 2026-07-10: capacity raised toward a 75% deployment target (owner directive).
+# 6 slots × 15% cap = 90% gross capacity, gated by the 75% heat ceiling, so the
+# book can actually deploy ~75% at full conviction instead of stalling at ~20%.
+SIZING_MAX_TRADES_PER_DAY = 6       # swing cadence: supports 6 position slots
 SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
-MAX_OPEN_POSITIONS = 4              # hard cap on concurrent positions
-PORTFOLIO_HEAT_CEILING = 0.60       # no new entries above 60% deployed
+MAX_OPEN_POSITIONS = 6              # hard cap on concurrent positions
+PORTFOLIO_HEAT_CEILING = 0.75       # no new entries above 75% deployed
 MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sector
 # All-day entries: the 14:00+ restriction was a PDT artifact (it protected
 # overnight holds forced by the day-trade limit). With account equity ≥$25k
@@ -668,6 +671,11 @@ class SignalLoop:
         if not market_open and not has_crypto:
             return
 
+        # 0. Daily reset FIRST — before anything in the pipeline can fail.
+        # (Was step 7; on Jul 9 an exit-path exception aborted every tick
+        # before reaching it, freezing the daily trade counter at the cap.)
+        self._maybe_reset_daily_value()
+
         await self._tick_maintenance()
 
         # 1. Fetch latest features + prices from DB
@@ -792,7 +800,14 @@ class SignalLoop:
                     features_arr.numpy() if features_arr is not None
                     else None
                 )
-                await self._act_on_signal(sig, price, feat_np, regime=regime_map.get(ticker, 1))
+                # Per-ticker isolation: one bad exit must never abort the whole
+                # tick (2026-07-08/09 outage: a NameError in the exit branch
+                # killed exits, entries, CB checks and the daily reset for two
+                # full sessions before anyone noticed).
+                try:
+                    await self._act_on_signal(sig, price, feat_np, regime=regime_map.get(ticker, 1))
+                except Exception:
+                    logger.exception("sizing_exit_tick_error", ticker=ticker)
 
         if self._sizing_mode:
             # Ranked entry pass: best signals first, capped per tick, so a
@@ -1594,14 +1609,15 @@ class SignalLoop:
                     self._pending_exit_reasons[ticker] = exit_reason
                     # Start cooldown to prevent immediate re-entry churn
                     self._ticker_cooldown[ticker] = SIZING_TICKER_COOLDOWN_BARS
-                    _sl, _ts, _tp = _atr_exits(self._daily_vol_for(ticker))
+                    daily_vol = self._daily_vol_for(ticker)
+                    _sl, _ts, _tp = _atr_exits(daily_vol)
                     logger.info(
                         "sizing_exit",
                         ticker=ticker,
                         reason=exit_reason,
                         bars_held=self._bars_held.get(ticker, 0),
                         cooldown_bars=SIZING_TICKER_COOLDOWN_BARS,
-                        atr_pct=round(atr_pct, 4),
+                        daily_vol=round(daily_vol, 4),
                         stop=round(_sl, 4),
                         trail=round(_ts, 4),
                         target=round(_tp, 4),
@@ -1640,7 +1656,11 @@ class SignalLoop:
                     ticker=ticker,
                     dir_prob=float(sig.lgbm_dir_prob),
                     pred_return=float(sig.lgbm_pred_return),
-                    atr_pct=self._ticker_atr.get(ticker, DEFAULT_ATR_PCT),
+                    # Stable daily-vol basis (÷sqrt(390) back to the sizer's 1m
+                    # scale). The raw 1m ATR runs 4-15× its midday value in the
+                    # opening minutes; feeding it here crushed stage 2 to
+                    # 0.15-0.27× on Jul 8 ($2.4k-$7.3k entries on a $97k book).
+                    atr_pct=self._daily_vol_for(ticker) / DAILY_VOL_SQRT_BARS,
                     price=price,
                     portfolio_value=self._pm.portfolio_value,
                     portfolio_heat=self._pm.managed_heat,
@@ -1653,9 +1673,14 @@ class SignalLoop:
                 side = sizing.side
                 notional = sizing.notional
 
-                # Conservative on uncertainty: shrink size in choppy/high-vol
-                # regimes (REGIME_GATE size scale was previously log-only)
-                if size_scale < 1.0:
+                # Conservative on uncertainty: shrink size in CHOPPY regimes
+                # only. high_vol is deliberately NOT scaled here — stage 2 of
+                # the sizer already normalizes for volatility, and the same
+                # open-minutes ATR spike used to be charged twice
+                # (vol_scalar ×0.15-0.27, then regime ×0.50 → ~20% deployment
+                # on a book designed for 60-75%).
+                from src.features.regime import REGIME_CHOPPY
+                if size_scale < 1.0 and regime == REGIME_CHOPPY:
                     notional *= size_scale
                     logger.info(
                         "regime_size_scaled",
@@ -2166,7 +2191,11 @@ class SignalLoop:
 
         now = datetime.now(ZoneInfo("America/New_York"))
         today = now.date()
-        if now.hour == 9 and now.minute <= 31 and getattr(self, '_last_reset_date', None) != today:
+        # Any tick after 09:30 on a not-yet-reset date triggers the reset. The
+        # old `hour == 9 and minute <= 31` window silently skipped the reset
+        # whenever those two specific ticks died (Jul 9: a crashed exit path
+        # ate them → n_trades_today stuck at the cap → zero entries all day).
+        if (now.hour, now.minute) >= (9, 30) and getattr(self, '_last_reset_date', None) != today:
             self._last_reset_date = today
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0

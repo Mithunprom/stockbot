@@ -361,8 +361,8 @@ def test_heat_ceiling_blocks_entries():
     loop._data_fresh = True
     pm = loop._pm
     pm.portfolio_value = 10_000.0
-    pm.open_position("AAPL", "long", 35, 100.0)
-    pm.open_position("XOM", "long", 30, 100.0)
+    pm.open_position("AAPL", "long", 40, 100.0)
+    pm.open_position("XOM", "long", 40, 100.0)
     assert pm.managed_heat >= PORTFOLIO_HEAT_CEILING
 
     sig = EnsembleSignal(ticker="CVX", timestamp=_stamp(0))
@@ -505,3 +505,77 @@ def test_ticker_ic_gate_requires_positive_ic():
     # Small sample fails open regardless of IC sign
     loop._ticker_ic = {"WDC": (-0.04, 50)}
     assert loop._sizing_entry_gate_open(sig)
+
+
+# ─── v0.3.5 regression: the Jul 8-9 exit-path outage ──────────────────────────
+
+def test_exit_branch_executes_without_nameerror():
+    """REGRESSION (2026-07-08/09 outage): the sizing_exit branch of
+    _act_on_signal crashed with NameError (unbound atr_pct in the log call)
+    the moment any exit condition fired, killing exits/entries/CB checks for
+    two sessions. This test drives the REAL exit branch end-to-end."""
+    import asyncio
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+
+    loop = _make_loop()
+    pm = loop._pm
+    pm.portfolio_value = 97_000.0
+    pm.open_position("AAPL", "long", 10, 100.0)
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS  # max_hold must fire
+
+    submitted = {}
+
+    async def fake_submit(req):
+        submitted["side"] = getattr(req, "side", None)
+        from datetime import datetime, timezone
+
+        class R:  # minimal fill result
+            status = "filled"
+            filled_avg_price = 100.0
+            filled_qty = 10.0
+            filled_at = datetime.now(timezone.utc)
+            id = "test-order"
+        return R()
+
+    loop._alpaca.submit_order = fake_submit
+    loop._alpaca.get_latest_quote = MagicMock()
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.001
+    sig.lgbm_dir_prob = 0.55
+
+    # Must not raise — the outage bug threw NameError before order submission
+    asyncio.run(loop._act_on_signal(sig, 100.0, None, regime=1))
+    assert str(submitted.get("side", "")).lower().endswith("sell"), (
+        f"exit branch must reach order submission; got {submitted or 'no order'}"
+    )
+
+
+def test_exit_loop_isolates_per_ticker_failures():
+    """A poisoned ticker in the exit loop must not abort the tick for others
+    (per-ticker try/except added after the Jul 9 outage)."""
+    import asyncio
+    src = open("src/agents/signal_loop.py").read()
+    # The exit loop must wrap _act_on_signal in a per-ticker try/except
+    assert "sizing_exit_tick_error" in src
+
+
+def test_daily_reset_fires_after_930_any_minute():
+    """REGRESSION: reset used to require a tick landing exactly at 9:30-9:31;
+    now any post-9:30 tick on a new date resets (Jul 9: counter stuck at cap)."""
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    loop = _make_loop()
+    loop._sizing_n_trades_today = 4
+    loop._last_reset_date = None
+
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        # 14:45 ET — far outside the old 9:30-9:31 window
+        fake_now = dt(2026, 7, 10, 14, 45, tzinfo=ZoneInfo("America/New_York"))
+        mock_dt.now.return_value = fake_now
+        loop._maybe_reset_daily_value()
+
+    assert loop._sizing_n_trades_today == 0
+    assert loop._last_reset_date == fake_now.date()

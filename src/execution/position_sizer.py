@@ -92,15 +92,15 @@ _KELLY_BUCKETS: list[tuple[float, float, float]] = [
     (0.65, 0.80, 0.33),    # mid conviction
     (0.80, 1.01, 0.36),    # high conviction
 ]
-_KELLY_POSITIVE_FLOOR = 0.10  # small positive Kelly shouldn't zero out sizing
+_KELLY_POSITIVE_FLOOR = 0.15  # small positive Kelly shouldn't zero out sizing
 
 # Stage 4: Portfolio constraints
 _HEAT_TIERS: list[tuple[float, float]] = [
     # (heat_threshold, size_multiplier) — aligned with the signal loop's
-    # 60% portfolio heat ceiling
-    (0.45, 1.00),   # heat < 45%: full size
-    (0.60, 0.50),   # 45% ≤ heat < 60%: half size
-    (1.00, 0.00),   # heat ≥ 60%: no new entries
+    # 75% portfolio heat ceiling (2026-07-10 deployment-target raise)
+    (0.60, 1.00),   # heat < 60%: full size
+    (0.75, 0.50),   # 60% ≤ heat < 75%: half size
+    (1.00, 0.00),   # heat ≥ 75%: no new entries
 ]
 _SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single sector
 

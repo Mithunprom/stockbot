@@ -759,12 +759,11 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        # v0.3.4 — FROZEN CONFIG: confirmed-reversal exits (45 bars, tradeable
-        # opposite signal) + positive-IC entry gate. Per the 2026-07-07
-        # profitability diagnosis, no entry/exit parameter changes until ≥100
-        # closed trades accrue at this version — mid-sample churn resets the
-        # expectancy sample and makes every verdict unmeasurable.
-        "version": "0.3.4",
+        # v0.3.5 — outage fix (exit-path NameError killed all trading Jul 8-9)
+        # + capital deployment raise (75% heat target, 6 slots, single vol
+        # penalty). Entry/exit LOGIC stays frozen per the 2026-07-07 plan; the
+        # ≥100-closed-trades measurement clock starts here.
+        "version": "0.3.5",
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),

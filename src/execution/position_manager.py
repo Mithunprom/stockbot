@@ -263,12 +263,19 @@ class PositionManager:
                 if self._universe and ticker not in self._universe:
                     skipped += 1
                     continue
+                qty = abs(pos["qty"])
+                # Use the broker's live mark, not the entry price: syncing
+                # last_price=entry zeroed unrealized PnL on every 15-min risk
+                # sync (and permanently off-hours, when no price tick follows).
+                market_price = (
+                    abs(pos.get("market_value", 0.0)) / qty if qty > 0 else 0.0
+                )
                 self._positions[ticker] = Position(
                     ticker=ticker,
                     side="long" if pos.get("side") == "long" else "short",
-                    qty=abs(pos["qty"]),
+                    qty=qty,
                     avg_entry_price=pos["avg_entry_price"],
-                    last_price=pos["avg_entry_price"],   # will be updated on next price tick
+                    last_price=market_price or pos["avg_entry_price"],
                 )
             if skipped:
                 logger.info("sync_skipped_non_universe", skipped=skipped)

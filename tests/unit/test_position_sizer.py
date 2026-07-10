@@ -51,6 +51,9 @@ def test_position_never_exceeds_breaker_cap():
 
 
 def test_heat_ceiling_blocks_new_size():
-    """At/above the heat ceiling the sizer returns None (no new entry)."""
-    r = _size("AAPL", dir_prob=0.72, pred_return=0.009, atr_pct=0.0006, heat=0.65)
+    """At/above the 75% heat ceiling the sizer returns None (no new entry)."""
+    r = _size("AAPL", dir_prob=0.72, pred_return=0.009, atr_pct=0.0006, heat=0.80)
     assert r is None
+    # 60-75% band: half size, not blocked
+    r_half = _size("AAPL", dir_prob=0.72, pred_return=0.009, atr_pct=0.0006, heat=0.65)
+    assert r_half is not None
