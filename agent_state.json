@@ -1,0 +1,49 @@
+{
+  "current_phase": "System Audit & Baseline Establishment",
+  "last_iteration_date": "2026-07-10",
+  "active_hypothesis": "Baseline: v0.3.8 confirmed-reversal exits + positive-IC gate + 75% deployment. Establish live baseline metrics before introducing advanced feature engineering.",
+  "metrics_history": {
+    "baseline_sharpe": 0.0,
+    "current_sharpe": 0.0,
+    "target_sharpe": 3.0,
+    "live_ic_baseline": 0.05,
+    "lgbm_oos_ic": 0.166
+  },
+  "hypothesis_queue": [
+    {
+      "id": "H1",
+      "hypothesis": "Cross-sectional daily top-k ranking (long top 3-4 by LGBM pred at 14:00 ET, exit next day) beats per-ticker threshold entries",
+      "test": "python scripts/research_backtest.py with ranking variant",
+      "status": "pending"
+    },
+    {
+      "id": "H2",
+      "hypothesis": "SPY/QQQ regime overlay (only deploy full heat when SPY > 20d MA) improves Sharpe by cutting down-tape exposure",
+      "test": "backtest with regime filter on entry gate",
+      "status": "pending"
+    },
+    {
+      "id": "H3",
+      "hypothesis": "Earnings-calendar blackout (no entries within 2 days of earnings) removes uncompensated gap risk on 1-day holds",
+      "test": "backtest excluding earnings windows",
+      "status": "pending"
+    },
+    {
+      "id": "H4",
+      "hypothesis": "Removing dead ensemble weights (Transformer/TCN contribute 0.0 in every live trade) and renormalizing LGBM 60->75, sentiment 20->25 sharpens the entry signal",
+      "test": "IC comparison of reweighted ensemble on validation window",
+      "status": "pending"
+    }
+  ],
+  "pending_tasks": [
+    "Run baseline backtest sweep and record metrics",
+    "Test H1 cross-sectional ranking variant",
+    "Hook backtest evaluation logs to the state recorder"
+  ],
+  "completed_iterations": [],
+  "blocked_by_token_limit": false,
+  "governance": {
+    "deploy_mode": "PR_REVIEW_REQUIRED",
+    "note": "Per CLAUDE.md: no autonomous changes to live strategy/config. Agents research, implement, backtest, and open PRs; a human merges. Config staging: config/staging/."
+  }
+}

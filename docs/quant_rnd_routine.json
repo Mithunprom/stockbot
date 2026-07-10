@@ -1,0 +1,16 @@
+{
+  "_note": "Nightly cloud R&D agent spec — blocked on GitHub connection (run /web-setup or install the Claude GitHub App). Once connected, ask Claude to 'create the quant R&D routine from config/staging/quant_rnd_routine.json'.",
+  "name": "StockBot Quant R&D Desk (nightly)",
+  "cron_expression": "0 2 * * 2-6",
+  "cron_human": "6:00 PM Pacific / 9:00 PM Eastern, Mon-Fri (after market close)",
+  "model": "claude-sonnet-4-6",
+  "repo": "https://github.com/Mithunprom/stockbot",
+  "workflow_summary": [
+    "read super_agents_manifesto.txt (governance) + agent_state.json (queue)",
+    "pull live metrics from the deployed API (public endpoints)",
+    "implement + unit-test the next hypothesis; pytest must be green",
+    "hypotheses needing market data are marked needs_data_run for agent_worker.py",
+    "update agent_state.json with results (positive AND negative)",
+    "ship as PR (feat/rnd-<id>) with Sharpe/PF/win-rate/DD/n reported together; never direct push"
+  ]
+}
