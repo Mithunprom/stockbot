@@ -1,0 +1,21 @@
+{
+  "agent": "Watchdog Agent",
+  "timestamp": "2026-07-10T15:43:58.980334+00:00",
+  "status": "critical",
+  "light_run": true,
+  "checks": [
+    {
+      "name": "loop_tick_fresh",
+      "status": "critical",
+      "healed": false,
+      "detail": "last tick 30.0 min ago \u2014 loop stalled or dead (main.py task-watchdog should restart it within 5 min)"
+    },
+    {
+      "name": "tick_errors",
+      "status": "warn",
+      "healed": false,
+      "detail": "3 new tick error(s) since last check; last: ''"
+    }
+  ],
+  "healed_any": false
+}

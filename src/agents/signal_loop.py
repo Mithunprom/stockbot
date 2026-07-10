@@ -312,6 +312,11 @@ class SignalLoop:
         self._broadcast = broadcast_fn
         self._stopped = False
         self._latest_signals: list[EnsembleSignal] = []
+        # Watchdog health instrumentation (read by WatchdogAgent + /watchdog)
+        self.last_tick_at: datetime | None = None
+        self.last_exit_at: datetime | None = None
+        self.tick_error_count: int = 0
+        self.last_tick_error: str = ""
         self._daily_start_value: float = pos_manager.portfolio_value
         self._consecutive_losses: int = 0
         # A/B testing: reference to the OTHER pipeline's PositionManager.
@@ -428,7 +433,9 @@ class SignalLoop:
             except asyncio.CancelledError:
                 logger.warning("signal_loop_cancelled", pipeline=self._pipeline_id)
                 raise
-            except Exception:
+            except Exception as exc:
+                self.tick_error_count += 1
+                self.last_tick_error = f"{type(exc).__name__}: {exc}"
                 logger.exception("signal_loop_tick_error", pipeline=self._pipeline_id)
                 # Avoid tight crash loop — sleep before retrying
                 await asyncio.sleep(5)
@@ -665,6 +672,9 @@ class SignalLoop:
     # ── Main tick ────────────────────────────────────────────────────────────
 
     async def _tick(self) -> None:
+        # Liveness beacon for the WatchdogAgent — set before ANY early return
+        # so off-hours ticks still prove the loop is alive.
+        self.last_tick_at = datetime.now(timezone.utc)
         market_open = self._is_market_hours()
         # If market is closed and we have no crypto, skip entirely
         has_crypto = any(t in self.CRYPTO_TICKERS for t in self._universe)
@@ -1848,6 +1858,7 @@ class SignalLoop:
                 )
                 entry_notional = qty * entry_price if entry_price else notional
                 pnl = self._pm.close_position(ticker, fill_price)
+                self.last_exit_at = datetime.now(timezone.utc)  # watchdog beacon
                 self._consecutive_losses = (
                     self._consecutive_losses + 1 if pnl < 0 else 0
                 )

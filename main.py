@@ -21,8 +21,9 @@ from typing import Any
 
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.config import get_settings
 from src.data.alpaca_ws import AlpacaDataStreamClient, RestBarPoller
@@ -404,12 +405,19 @@ async def lifespan(app: FastAPI):
     live_ic_tracker = LiveICTracker(session_factory=session_factory)
     drift_agent = DriftAgent(lookback_days=7, live_ic_tracker=live_ic_tracker)
     forecast_agent = ForecastEmailAgent()
+    from src.agents.watchdog_agent import WatchdogAgent
+    watchdog_agent = WatchdogAgent(
+        signal_loop=_signal_loop,
+        pos_manager=pos_manager,
+        circuit_breakers=circuit_breakers,
+    )
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
     app.state.live_ic_tracker = live_ic_tracker
     app.state.drift_agent = drift_agent
     app.state.forecast_agent = forecast_agent
+    app.state.watchdog_agent = watchdog_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -422,6 +430,7 @@ async def lifespan(app: FastAPI):
         drift_agent=drift_agent,
         live_ic_tracker=live_ic_tracker,
         forecast_agent=forecast_agent,
+        watchdog_agent=watchdog_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -759,17 +768,50 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        # v0.3.5 — outage fix (exit-path NameError killed all trading Jul 8-9)
-        # + capital deployment raise (75% heat target, 6 slots, single vol
-        # penalty). Entry/exit LOGIC stays frozen per the 2026-07-07 plan; the
-        # ≥100-closed-trades measurement clock starts here.
-        "version": "0.3.5",
+        # v0.3.6 — watchdog agent (self-heal + email), /watchdog endpoint,
+        # /dashboard status page, GitHub Actions external monitor. Entry/exit
+        # LOGIC unchanged; measurement clock continues from v0.3.5.
+        "version": "0.3.6",
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),
         "ab_test_enabled": settings.ab_test_enabled,
         "signal_loop_active": _signal_loop is not None,
     }
+
+
+@app.get("/watchdog")
+async def watchdog_status() -> JSONResponse:
+    """Watchdog health snapshot — checked by the dashboard + GitHub Actions."""
+    agent = getattr(app.state, "watchdog_agent", None)
+    if agent is None:
+        return JSONResponse(
+            status_code=503, content={"status": "critical", "detail": "watchdog not initialized"}
+        )
+    report = agent.last_report
+    if report is None:
+        report = await agent.run(light=True)
+    payload = {
+        **report,
+        "last_tick_at": (
+            _signal_loop.last_tick_at.isoformat()
+            if getattr(_signal_loop, "last_tick_at", None) else None
+        ),
+        "last_exit_at": (
+            _signal_loop.last_exit_at.isoformat()
+            if getattr(_signal_loop, "last_exit_at", None) else None
+        ),
+        "tick_error_count": getattr(_signal_loop, "tick_error_count", 0),
+        "last_tick_error": getattr(_signal_loop, "last_tick_error", ""),
+    }
+    return JSONResponse(content=jsonable_encoder(payload))
+
+
+@app.get("/dashboard")
+async def dashboard() -> HTMLResponse:
+    """Free, zero-build status dashboard (auto-refreshing)."""
+    from src.dashboard_page import DASHBOARD_HTML
+    return HTMLResponse(content=DASHBOARD_HTML)
 
 
 @app.post("/admin/upload-models-s3")

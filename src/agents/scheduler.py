@@ -32,6 +32,7 @@ def create_scheduler(
     drift_agent: Any | None = None,
     live_ic_tracker: Any | None = None,
     forecast_agent: Any | None = None,
+    watchdog_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -64,6 +65,32 @@ def create_scheduler(
         max_instances=1,
         misfire_grace_time=60,
     )
+
+    # ── Watchdog Agent: every 15 min market hours + hourly liveness off-hours ─
+    if watchdog_agent is not None:
+        scheduler.add_job(
+            watchdog_agent.run,
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour="9-16",
+                minute="5,20,35,50",   # offset from Risk Agent (0,15,30,45)
+                timezone="America/New_York",
+            ),
+            id="watchdog_agent",
+            name="Watchdog Agent (15 min, market hours)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=120,
+        )
+        scheduler.add_job(
+            functools.partial(watchdog_agent.run, light=True),
+            trigger=CronTrigger(minute="10", timezone="America/New_York"),
+            id="watchdog_agent_light",
+            name="Watchdog Agent (hourly liveness, 24/7)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
 
     # ── Latency Agent: hourly during market hours ─────────────────────────────
     scheduler.add_job(

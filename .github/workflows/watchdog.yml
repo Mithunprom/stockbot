@@ -1,0 +1,59 @@
+name: StockBot External Watchdog
+
+# External monitoring layer — catches failures the in-app watchdog cannot see:
+# the whole app down/unreachable, and "code merged but deployment not moved to
+# prod" (version drift). Runs on GitHub's infra: works while the owner's
+# desktop is off, and costs nothing on a public/private repo's free minutes.
+#
+# On failure, GitHub automatically emails the workflow's committer
+# (scheduled-workflow failure notifications) — no extra service needed.
+
+on:
+  schedule:
+    # Hourly during US market hours, Mon-Fri.
+    # 13:15-20:15 UTC covers 9:15-16:15 ET during EDT.
+    - cron: "15 13-20 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App reachable and healthy
+        run: |
+          set -e
+          HEALTH=$(curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/health")
+          echo "$HEALTH"
+          STATUS=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")
+          LOOP=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin)['signal_loop_active'])")
+          [ "$STATUS" = "ok" ] || { echo "::error::health status=$STATUS"; exit 1; }
+          [ "$LOOP" = "True" ] || { echo "::error::signal loop INACTIVE"; exit 1; }
+
+      - name: Watchdog reports no critical issues
+        run: |
+          set -e
+          WD=$(curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/watchdog")
+          echo "$WD" | python3 -m json.tool
+          echo "$WD" | python3 - <<'EOF'
+          import json, sys
+          report = json.load(sys.stdin)
+          if report.get("status") == "critical":
+              bad = [c for c in report.get("checks", []) if c.get("status") == "critical"]
+              print(f"::error::watchdog CRITICAL: {[c['name'] + ': ' + c['detail'] for c in bad]}")
+              sys.exit(1)
+          EOF
+
+      - name: Deployment matches main (no drift)
+        run: |
+          set -e
+          DEPLOYED=$(curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/health" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['version'])")
+          EXPECTED=$(grep -oE '"version": "[0-9.]+"' main.py | grep -oE '[0-9.]+')
+          echo "deployed=$DEPLOYED expected=$EXPECTED"
+          if [ "$DEPLOYED" != "$EXPECTED" ]; then
+            echo "::error::DEPLOYMENT DRIFT: prod v$DEPLOYED != main v$EXPECTED — run 'railway up'"
+            exit 1
+          fi
