@@ -52,6 +52,9 @@ class ProfitAgent:
             "n_trades": len(trades),
             "metrics": metrics,
             "pnl_attribution": attribution,
+            # "ensemble_weights" is the key read by EnsembleWeights.from_staging().
+            # "proposed_weights" kept for human-readable context.
+            "ensemble_weights": proposed_weights,
             "proposed_weights": proposed_weights,
             "needs_review": metrics.get("sharpe_2w", 999) < SHARPE_ALERT_THRESHOLD,
         }
@@ -158,26 +161,56 @@ class ProfitAgent:
     ) -> dict[str, float]:
         """Propose new ensemble weights based on IC attribution.
 
-        Simple rule: weight proportional to max(IC, 0). Falls back to
-        current weights if all ICs are non-positive.
+        LGBM is the primary model (IC≈0.21 vs IC≈0 for the neural nets) and
+        always retains at least a 60% base. The secondary budget (40%) is
+        reallocated proportionally among transformer/TCN/sentiment by their
+        measured ICs.
+
+        Dead-weight elimination (H4): when transformer_ic and tcn_ic are both
+        near zero — as observed when no checkpoints are loaded and every live
+        trade records 0.0 confidence for these models — their combined 20%
+        weight is redistributed to LGBM (+15%) and sentiment (+5%), reflecting
+        the actual signal sources.
+
+        All four weights are returned explicitly so EnsembleWeights.from_staging
+        can load them without relying on per-field defaults.
         """
+        LGBM_BASE = 0.60
+        SECONDARY_BUDGET = 1.0 - LGBM_BASE
+
         ic_t = max(attribution.get("transformer_ic", 0.0), 0.0)
         ic_tcn = max(attribution.get("tcn_ic", 0.0), 0.0)
         ic_s = max(attribution.get("sentiment_ic", 0.0), 0.0)
 
-        total_ic = ic_t + ic_tcn + ic_s
+        secondary_ic_total = ic_t + ic_tcn + ic_s
 
-        if total_ic < 0.01:
-            # All ICs are near zero — keep current weights
-            return {"transformer": 0.45, "tcn": 0.35, "sentiment": 0.20}
+        if ic_t < 0.01 and ic_tcn < 0.01:
+            # Dead-weight elimination: Transformer and TCN are not contributing.
+            # Redistribute their 20% share: LGBM +15%, sentiment +5%.
+            return {
+                "lgbm": 0.75,
+                "transformer": 0.0,
+                "tcn": 0.0,
+                "sentiment": 0.25,
+            }
 
-        # Proportional reweighting (clamped to reasonable bounds)
-        w_t = min(max(ic_t / total_ic, 0.25), 0.60)
-        w_tcn = min(max(ic_tcn / total_ic, 0.20), 0.55)
-        w_s = 1.0 - w_t - w_tcn
+        if secondary_ic_total < 0.01:
+            # Sentiment also flat — return balanced defaults
+            return {
+                "lgbm": round(LGBM_BASE, 3),
+                "transformer": round(SECONDARY_BUDGET * 0.25, 3),
+                "tcn": round(SECONDARY_BUDGET * 0.25, 3),
+                "sentiment": round(SECONDARY_BUDGET * 0.50, 3),
+            }
+
+        # Proportional reweighting of the secondary budget
+        w_t = round(min(ic_t / secondary_ic_total * SECONDARY_BUDGET, 0.20), 3)
+        w_tcn = round(min(ic_tcn / secondary_ic_total * SECONDARY_BUDGET, 0.20), 3)
+        w_s = round(max(SECONDARY_BUDGET - w_t - w_tcn, 0.0), 3)
 
         return {
-            "transformer": round(w_t, 3),
-            "tcn": round(w_tcn, 3),
-            "sentiment": round(max(w_s, 0.05), 3),
+            "lgbm": round(LGBM_BASE, 3),
+            "transformer": w_t,
+            "tcn": w_tcn,
+            "sentiment": w_s,
         }

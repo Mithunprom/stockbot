@@ -67,3 +67,6 @@ htmlcov/
 
 # Pirated/third-party books — do not commit
 docs/stock_docs/course2/
+
+# Runtime artifacts — rewritten continuously, never track
+reports/watchdog/
