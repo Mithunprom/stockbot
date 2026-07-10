@@ -49,11 +49,22 @@ jobs:
       - name: Deployment matches main (no drift)
         run: |
           set -e
-          DEPLOYED=$(curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/health" \
-            | python3 -c "import json,sys; print(json.load(sys.stdin)['version'])")
-          EXPECTED=$(grep -oE '^APP_VERSION = "[0-9.]+"' main.py | grep -oE '[0-9.]+')
-          echo "deployed=$DEPLOYED expected=$EXPECTED"
-          if [ "$DEPLOYED" != "$EXPECTED" ]; then
-            echo "::error::DEPLOYMENT DRIFT: prod v$DEPLOYED != main v$EXPECTED — run 'railway up'"
-            exit 1
+          HEALTH=$(curl -sf --max-time 30 "https://stockbot-production-cbde.up.railway.app/health")
+          COMMIT=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit','unknown'))")
+          if [ "$COMMIT" != "unknown" ]; then
+            # Preferred: exact commit comparison (set by deploy.yml)
+            echo "deployed commit=$COMMIT main=${GITHUB_SHA}"
+            if [ "$COMMIT" != "${GITHUB_SHA}" ]; then
+              echo "::error::DEPLOYMENT DRIFT: prod $COMMIT != main ${GITHUB_SHA}"
+              exit 1
+            fi
+          else
+            # Fallback: APP_VERSION comparison (bare 'railway up' deploys)
+            DEPLOYED=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin)['version'])")
+            EXPECTED=$(grep -oE '^APP_VERSION = "[0-9.]+"' main.py | grep -oE '[0-9.]+')
+            echo "deployed=$DEPLOYED expected=$EXPECTED"
+            if [ "$DEPLOYED" != "$EXPECTED" ]; then
+              echo "::error::DEPLOYMENT DRIFT: prod v$DEPLOYED != main v$EXPECTED — run 'railway up'"
+              exit 1
+            fi
           fi

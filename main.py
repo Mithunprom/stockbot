@@ -723,7 +723,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.3.9"
+APP_VERSION = "0.4.0"
 
 app = FastAPI(
     title="StockBot API",
@@ -776,6 +776,10 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": APP_VERSION,
+        # Set by the deploy workflow (GIT_COMMIT_SHA) — lets the external
+        # watchdog compare deployed commit vs origin/main without manual
+        # APP_VERSION bumps. "unknown" when deployed via bare `railway up`.
+        "commit": os.environ.get("GIT_COMMIT_SHA", "unknown"),
         "mode": settings.alpaca_mode,
         "active_pipeline": active,
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),

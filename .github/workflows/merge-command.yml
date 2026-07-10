@@ -1,0 +1,119 @@
+name: Merge on owner command
+
+# Owner UX: read the review email → open the PR → comment "/merge".
+# This workflow (owner-only) then: updates the branch from main, runs the
+# unit test suite, and squash-merges. Any failure emails the owner instead.
+# Combined with deploy.yml (auto-deploy on push to main), approving a
+# strategy PR becomes a single comment from any device.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: |
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/merge' &&
+      github.event.comment.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Get PR branch
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH=$(gh pr view ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} --json headRefName -q .headRefName)
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update branch from main (fail → owner resolves)
+        id: update
+        run: |
+          git config user.name "stockbot-merge-bot"
+          git config user.email "noreply@github.com"
+          git fetch origin main
+          if git merge origin/main --no-edit; then
+            git push origin HEAD
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "::error::merge conflict with main — manual resolution needed"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.update.outputs.updated == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Run unit tests
+        id: tests
+        if: steps.update.outputs.updated == 'true'
+        run: |
+          pip -q install -r requirements.txt 2>/dev/null || \
+            pip -q install pytest pandas numpy structlog pydantic pydantic-settings \
+                httpx sqlalchemy scikit-learn lightgbm apscheduler
+          python -m pytest tests/unit -q --ignore=tests/unit/test_signal_loop.py \
+            || { echo "::error::tests failed — not merging"; exit 1; }
+
+      - name: Squash-merge
+        if: steps.update.outputs.updated == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} --squash --delete-branch
+
+      - name: Notify outcome
+        if: always()
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.FORECAST_EMAIL_TO }}
+          OUTCOME: ${{ job.status }}
+          PR_NUM: ${{ github.event.issue.number }}
+          PR_TITLE: ${{ github.event.issue.title }}
+          PR_URL: ${{ github.event.issue.html_url }}
+        run: |
+          python3 - <<'EOF'
+          import os, smtplib, ssl
+          from email.message import EmailMessage
+          host = os.environ.get("SMTP_HOST", "")
+          if not host:
+              raise SystemExit(0)
+          ok = os.environ["OUTCOME"] == "success"
+          msg = EmailMessage()
+          msg["Subject"] = (f"[StockBot] {'✅ merged' if ok else '❌ /merge FAILED'} "
+                            f"PR #{os.environ['PR_NUM']}: {os.environ['PR_TITLE']}")
+          msg["From"] = os.environ["SMTP_USER"]
+          msg["To"] = os.environ["EMAIL_TO"]
+          msg.set_content(
+              ("Merged and auto-deploy will pick it up." if ok else
+               "The /merge command failed (conflict or failing tests) — "
+               "open the PR to see details.")
+              + "\n" + os.environ.get("PR_URL", ""))
+          port = int(os.environ.get("SMTP_PORT", "587"))
+          ctx = ssl.create_default_context()
+          if port == 465:
+              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=30) as s:
+                  s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+                  s.send_message(msg)
+          else:
+              with smtplib.SMTP(host, port, timeout=30) as s:
+                  s.starttls(context=ctx)
+                  s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+                  s.send_message(msg)
+          EOF

@@ -1,0 +1,60 @@
+name: Deploy to Railway on main
+
+# Auto-deploy: every push to main ships to Railway — merging a PR (via the
+# /merge comment or the GitHub button) is the ONLY human action needed.
+#
+# ONE-TIME SETUP (owner): Railway dashboard → project "angelic-exploration"
+# → Settings → Tokens → create a project token, then:
+#   gh secret set RAILWAY_TOKEN --repo Mithunprom/stockbot
+# Until the secret exists, this workflow no-ops harmlessly.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: railway-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check token
+        id: token
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "have_token=false" >> "$GITHUB_OUTPUT"
+            echo "RAILWAY_TOKEN secret not set — skipping deploy (manual 'railway up' still required)"
+          else
+            echo "have_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy
+        if: steps.token.outputs.have_token == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          npm i -g @railway/cli
+          # Expose the deployed commit for drift checks (/health "commit")
+          railway variables --set "GIT_COMMIT_SHA=${GITHUB_SHA}" --service stockbot || true
+          railway up --service stockbot --detach
+
+      - name: Verify deploy (poll /health for new commit)
+        if: steps.token.outputs.have_token == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            sleep 20
+            C=$(curl -s --max-time 10 "https://stockbot-production-cbde.up.railway.app/health" \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit','unknown'))" 2>/dev/null || echo unknown)
+            echo "poll $i: deployed commit=$C want=${GITHUB_SHA}"
+            [ "$C" = "${GITHUB_SHA}" ] && echo "DEPLOY VERIFIED" && exit 0
+          done
+          echo "::error::deploy did not verify within 10 min — check Railway build logs"
+          exit 1
