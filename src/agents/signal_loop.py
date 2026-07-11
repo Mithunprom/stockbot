@@ -1704,6 +1704,25 @@ class SignalLoop:
                         size_scale=size_scale,
                     )
 
+                # H2: Macro overlay — halve new-entry notionals when SPY is
+                # below its 20-day MA (down-tape market environment). This
+                # cuts exposure on market-wide weakness without blocking
+                # entirely: high-conviction signals still fire, just smaller.
+                # Defaults to scalar=1.0 (full size) until the first poll
+                # completes and whenever the yfinance fetch fails (fail-open).
+                from src.data.market_regime import get_market_regime
+                _macro = get_market_regime()
+                if _macro.market_regime_scalar < 1.0:
+                    notional *= _macro.market_regime_scalar
+                    logger.info(
+                        "macro_regime_size_scaled",
+                        ticker=ticker,
+                        spy_above_20d_ma=_macro.spy_above_20d_ma,
+                        spy_price=round(_macro.spy_price, 2),
+                        spy_ma20=round(_macro.spy_ma20, 2),
+                        scalar=_macro.market_regime_scalar,
+                    )
+
                 # Kelly probation: probe-sized entry to refresh the window
                 if self._kelly_mode() == "probation":
                     notional = min(notional, KELLY_PROBATION_NOTIONAL)

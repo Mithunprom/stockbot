@@ -37,6 +37,12 @@ class MarketRegimeSnapshot:
     regime: str = "neutral"             # "risk_on" / "neutral" / "risk_off"
     regime_score: float = 0.0           # [-1, +1] — bearish to bullish
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # H2: SPY 20-day MA overlay — medium-term trend gate.
+    # Defaults to True (full size) so startup / fetch failures never block entries.
+    spy_price: float = 0.0              # Latest SPY daily close
+    spy_ma20: float = 0.0              # SPY 20-day simple MA
+    spy_above_20d_ma: bool = True      # True → market in up-trend; deploy full heat
+    market_regime_scalar: float = 1.0  # 1.0 when above MA, 0.5 when below
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,7 +55,61 @@ class MarketRegimeSnapshot:
             "regime": self.regime,
             "regime_score": round(self.regime_score, 4),
             "timestamp": self.timestamp.isoformat(),
+            "spy_price": round(self.spy_price, 2),
+            "spy_ma20": round(self.spy_ma20, 2),
+            "spy_above_20d_ma": self.spy_above_20d_ma,
+            "market_regime_scalar": self.market_regime_scalar,
         }
+
+
+# ─── SPY 20-day MA fetcher (synchronous — run in thread executor) ────────────
+
+# H2: Position-size scalar when SPY is below its 20-day MA.
+# 0.5 → halve new-entry notionals during down-tape regimes.
+MA20_BELOW_SCALAR: float = 0.5
+MA20_LOOKBACK_DAYS: int = 20
+MA20_MIN_BARS: int = 21  # need ≥21 daily bars to compute a valid 20d MA
+
+
+def _fetch_spy_ma20() -> dict[str, float | bool]:
+    """Fetch SPY close price and its 20-day simple MA via yfinance.
+
+    Returns:
+        dict with keys: spy_price (float), spy_ma20 (float),
+                        spy_above_20d_ma (bool), market_regime_scalar (float).
+        Defaults to spy_above_20d_ma=True (full size) on any error so fetch
+        failures never block entries.
+    """
+    defaults: dict[str, float | bool] = {
+        "spy_price": 0.0,
+        "spy_ma20": 0.0,
+        "spy_above_20d_ma": True,
+        "market_regime_scalar": 1.0,
+    }
+    try:
+        import yfinance as yf
+
+        df = yf.download("SPY", period="2mo", interval="1d", progress=False,
+                         auto_adjust=True)
+        if df is None or df.empty:
+            return defaults
+
+        closes = df["Close"].dropna()
+        if len(closes) < MA20_MIN_BARS:
+            return defaults
+
+        spy_price = float(closes.iloc[-1])
+        spy_ma20 = float(closes.tail(MA20_LOOKBACK_DAYS).mean())
+        above = spy_price > spy_ma20
+        return {
+            "spy_price": spy_price,
+            "spy_ma20": spy_ma20,
+            "spy_above_20d_ma": above,
+            "market_regime_scalar": 1.0 if above else MA20_BELOW_SCALAR,
+        }
+    except Exception as exc:
+        logger.warning("spy_ma20_fetch_error", error=str(exc))
+        return defaults
 
 
 # ─── VIX fetcher (synchronous — run in thread executor) ─────────────────────
@@ -258,13 +318,16 @@ class MarketRegimeMonitor:
 
         loop = asyncio.get_event_loop()
 
-        # Fetch VIX in thread executor (yfinance is sync)
-        vix_data = await loop.run_in_executor(None, _fetch_vix)
+        # Fetch VIX and SPY MA in parallel (both sync — run in thread executor)
+        vix_data, ma_data = await asyncio.gather(
+            loop.run_in_executor(None, _fetch_vix),
+            loop.run_in_executor(None, _fetch_spy_ma20),
+        )
 
-        # Fetch SPY/QQQ from DB
+        # Fetch SPY/QQQ short-term returns from DB
         spy_qqq = await _fetch_spy_qqq_returns(self._sf)
 
-        # Classify
+        # Classify intraday regime
         regime, score = _classify_regime(
             vix=vix_data["vix"],
             vix_pct=vix_data["vix_percentile_30d"],
@@ -283,6 +346,10 @@ class MarketRegimeMonitor:
             regime=regime,
             regime_score=score,
             timestamp=datetime.now(timezone.utc),
+            spy_price=float(ma_data["spy_price"]),
+            spy_ma20=float(ma_data["spy_ma20"]),
+            spy_above_20d_ma=bool(ma_data["spy_above_20d_ma"]),
+            market_regime_scalar=float(ma_data["market_regime_scalar"]),
         )
 
         _latest = snapshot
@@ -291,5 +358,9 @@ class MarketRegimeMonitor:
             vix=snapshot.vix,
             regime=snapshot.regime,
             score=round(snapshot.regime_score, 3),
+            spy_above_20d_ma=snapshot.spy_above_20d_ma,
+            spy_price=round(snapshot.spy_price, 2),
+            spy_ma20=round(snapshot.spy_ma20, 2),
+            market_regime_scalar=snapshot.market_regime_scalar,
         )
         return snapshot
