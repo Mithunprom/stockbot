@@ -723,7 +723,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 
 app = FastAPI(
     title="StockBot API",
@@ -817,9 +817,16 @@ async def watchdog_status() -> JSONResponse:
 
 @app.get("/dashboard")
 async def dashboard() -> HTMLResponse:
-    """Free, zero-build status dashboard (auto-refreshing)."""
+    """Operator dashboard — full internals (watchdog, Kelly, heat, gates)."""
     from src.dashboard_page import DASHBOARD_HTML
     return HTMLResponse(content=DASHBOARD_HTML)
+
+
+@app.get("/track")
+async def track_record() -> HTMLResponse:
+    """Client-facing track record — performance, trades, methodology only."""
+    from src.track_page import TRACK_HTML
+    return HTMLResponse(content=TRACK_HTML)
 
 
 @app.post("/admin/upload-models-s3")
