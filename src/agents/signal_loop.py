@@ -122,6 +122,14 @@ SIZING_TAKE_PROFIT_CAP = 0.200     # 20% take profit cap (was 7.0%)
 # holds were −493bps in the June leg), so 1 day is the validated ceiling.
 # Most exits still fire earlier via trailing/signal_reversal.
 SIZING_MAX_HOLD_BARS = 390         # ~1 trading day of market-hours 1m bars
+# H5: Signal-reconfirmed hold extension — let winners run a 2nd or 3rd day.
+# The June backtest showed unconditional 3-day holds = −493bps beta bleed, so
+# the extension is ONLY granted when: (a) the model still reads the ticker as
+# a fresh long (pred_return > cost threshold, dir_prob ≥ 0.60), AND (b) the
+# position is not already in a drawdown deeper than 1× daily vol. Hard cap:
+# 2 extensions → 3 trading days absolute. Stops/trail/TP always remain active
+# and take priority (the extension block only fires when reason is still None).
+SIZING_MAX_HOLD_EXTENSIONS = 2    # max extra days beyond the 1-day baseline
 SIZING_STAGNATION_BARS = 390       # unreachable while == max hold (kept for tuning)
 SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
 CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
@@ -341,6 +349,7 @@ class SignalLoop:
         self._entry_dates: dict[str, Any] = {}           # ticker → ET date of entry (PDT)
         self._peak_prices: dict[str, float] = {}
         self._bars_held: dict[str, int] = {}
+        self._hold_extensions: dict[str, int] = {}  # H5: extension count per ticker
         self._reversal_counts: dict[str, int] = {}
         self._sizing_returns_history: list[float] = [0.0] * 20
         # Rolling Kelly window: (exit_time_utc, pnl_pct) — only recent trades count
@@ -1419,6 +1428,22 @@ class SignalLoop:
         dir_prob = float(sig.lgbm_dir_prob)
         return not (lo < dir_prob < hi)
 
+    def _signal_reconfirms_hold(self, sig: EnsembleSignal) -> bool:
+        """True when the signal still justifies extending a long hold.
+
+        Lighter check than _sizing_entry_gate_open: only verifies signal
+        quality (pred_return magnitude + directional probability). Portfolio
+        shape, IC, and Kelly gates are deliberately skipped — we are already
+        in the trade and only asking whether the model still sees an edge.
+        Must be a LONG signal (pred_return > 0) because Phase 5 is long-only.
+        """
+        pred_ret = float(sig.lgbm_pred_return)
+        dir_prob = float(sig.lgbm_dir_prob)
+        return (
+            pred_ret > self._dynamic_cost_threshold()
+            and dir_prob >= SIZING_DIR_PROB_DEAD_ZONE[1]  # 0.60 dead-zone upper
+        )
+
     def _check_sizing_exit(
         self, ticker: str, price: float, sig: EnsembleSignal
     ) -> str | None:
@@ -1474,9 +1499,31 @@ class SignalLoop:
 
         bars = self._bars_held.get(ticker, 0)
         if reason is None:
-            # Max hold (~3 trading days)
-            if bars >= SIZING_MAX_HOLD_BARS:
-                reason = "max_hold"
+            extensions = self._hold_extensions.get(ticker, 0)
+            # Each granted extension shifts the exit threshold by one full day.
+            # Extension 0→1: exit at ≥390 unless signal reconfirms.
+            # Extension 1→2: exit at ≥780 unless signal reconfirms.
+            # Extension 2  : exit at ≥1170 unconditionally (3 days absolute).
+            next_exit_bars = SIZING_MAX_HOLD_BARS * (extensions + 1)
+            if bars >= next_exit_bars:
+                daily_vol = self._daily_vol_for(ticker)
+                if (
+                    extensions < SIZING_MAX_HOLD_EXTENSIONS
+                    and unrealized > -daily_vol       # not losing more than 1× daily σ
+                    and self._signal_reconfirms_hold(sig)
+                ):
+                    self._hold_extensions[ticker] = extensions + 1
+                    logger.info(
+                        "hold_extension_granted",
+                        ticker=ticker,
+                        extension_n=extensions + 1,
+                        bars_held=bars,
+                        unrealized=round(unrealized, 4),
+                        pred=round(float(sig.lgbm_pred_return), 5),
+                        dir_prob=round(float(sig.lgbm_dir_prob), 3),
+                    )
+                else:
+                    reason = "max_hold"
             # Stagnation: dead trade going nowhere — free up the capital
             elif bars >= SIZING_STAGNATION_BARS and abs(unrealized) < SIZING_STAGNATION_PNL:
                 reason = "stagnation"
@@ -1522,6 +1569,7 @@ class SignalLoop:
         self._entry_dates.pop(ticker, None)
         self._peak_prices.pop(ticker, None)
         self._bars_held.pop(ticker, None)
+        self._hold_extensions.pop(ticker, None)
         self._reversal_counts.pop(ticker, None)
         self._pdt_deferred_logged.discard(ticker)
 

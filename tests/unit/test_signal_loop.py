@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import torch
 from unittest.mock import AsyncMock, MagicMock, patch
+
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _TORCH_AVAILABLE = False
 
 from src.agents.signal_loop import SignalLoop
 from src.execution.position_manager import PositionManager
@@ -40,6 +46,7 @@ def test_signal_loop_instantiation():
     assert not loop._stopped
 
 
+@pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch not installed")
 def test_to_tensors_shapes():
     loop = _make_loop()
     arr = np.random.randn(60, 30).astype(np.float32)
@@ -49,6 +56,7 @@ def test_to_tensors_shapes():
     assert feat_5m.shape == (12, 30)
 
 
+@pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch not installed")
 def test_to_tensors_chronological_order():
     """Verify 5m tensor is every 5th bar from the 1m tensor (not reversed)."""
     loop = _make_loop()
@@ -624,3 +632,196 @@ def test_exit_of_short_position_buys_to_cover():
     assert submitted.get("side") == "buy", (
         f"short exit must BUY to cover, got {submitted}"
     )
+
+
+# ─── H5: Signal-reconfirmed hold extension (2026-07-12) ──────────────────────
+# Owner intuition: "let winners run past the time limit."
+# Design: at max_hold boundary, check if the model still sees a fresh long
+# signal; if so, extend one more day. Max 2 extensions → 3 days absolute.
+# Guard: extension blocked if position is losing > 1× daily vol, preventing
+# the "unconditional 3-day holds = −493bps" scenario from the June backtest.
+
+def test_signal_reconfirms_hold_true_when_quality_met():
+    """Strong bullish signal → extension helper returns True."""
+    from src.agents.signal_loop import DYN_THRESH_FALLBACK, SIZING_DIR_PROB_DEAD_ZONE
+    loop = _make_loop()
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2    # comfortably above threshold
+    sig.lgbm_dir_prob = SIZING_DIR_PROB_DEAD_ZONE[1]  # exactly at the dead-zone upper bound
+    assert loop._signal_reconfirms_hold(sig)
+
+
+def test_signal_reconfirms_hold_false_when_pred_below_threshold():
+    """Sub-threshold pred_return fails even with strong dir_prob."""
+    from src.agents.signal_loop import DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 0.5  # below threshold
+    sig.lgbm_dir_prob = 0.80
+    assert not loop._signal_reconfirms_hold(sig)
+
+
+def test_signal_reconfirms_hold_false_when_dir_prob_in_dead_zone():
+    """pred_return above threshold but dir_prob inside the dead zone → False."""
+    from src.agents.signal_loop import DYN_THRESH_FALLBACK, SIZING_DIR_PROB_DEAD_ZONE
+    loop = _make_loop()
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2
+    # dir_prob inside dead zone [0.40, 0.60)
+    sig.lgbm_dir_prob = (SIZING_DIR_PROB_DEAD_ZONE[0] + SIZING_DIR_PROB_DEAD_ZONE[1]) / 2
+    assert not loop._signal_reconfirms_hold(sig)
+
+
+def test_hold_extension_granted_on_reconfirmed_signal():
+    """At max_hold bars, a reconfirming signal grants extension 1 — no exit."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2   # above cost threshold
+    sig.lgbm_dir_prob = 0.70                          # above dead zone
+
+    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert result is None, "extension should suppress the max_hold exit"
+    assert loop._hold_extensions.get("AAPL") == 1
+
+
+def test_hold_extension_counter_increments_once_per_threshold():
+    """Extension counter goes 0→1 at bar 390, then stays 1 until bar 780."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2
+    sig.lgbm_dir_prob = 0.70
+
+    # First call at bar 390 grants extension
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+    loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert loop._hold_extensions.get("AAPL") == 1
+
+    # Subsequent calls at bars 391-779 do NOT increment again (threshold is 780)
+    for extra in (1, 50, 200, 388):
+        loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS + extra
+        loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert loop._hold_extensions.get("AAPL") == 1, (
+        "counter must not double-count; next threshold is 780"
+    )
+
+
+def test_hold_extension_no_spurious_exit_between_thresholds():
+    """Between extension-1 (bar 390) and extension-2 check (bar 780): no max_hold exit."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._hold_extensions["AAPL"] = 1       # extension already granted
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS + 50  # mid-extension period
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2
+    sig.lgbm_dir_prob = 0.70
+
+    # Price above entry keeps stagnation silent (abs(unrealized)=0.005 > 0.4% floor).
+    # next_exit_bars = 780, bars(440) < 780 → no max_hold action either.
+    assert loop._check_sizing_exit("AAPL", 100.5, sig) is None
+
+
+def test_hold_extension_second_extension_at_day2_boundary():
+    """At bar 780 with extension=1 and strong signal, grants extension 2."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._hold_extensions["AAPL"] = 1
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS * 2   # day 2 boundary
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2
+    sig.lgbm_dir_prob = 0.70
+
+    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert result is None
+    assert loop._hold_extensions.get("AAPL") == 2
+
+
+def test_hold_extension_exits_after_max_extensions():
+    """After 2 extensions, bar 1170 exits unconditionally — absolute 3-day cap."""
+    from src.agents.signal_loop import (
+        SIZING_MAX_HOLD_BARS, SIZING_MAX_HOLD_EXTENSIONS, DYN_THRESH_FALLBACK
+    )
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._hold_extensions["AAPL"] = SIZING_MAX_HOLD_EXTENSIONS   # cap reached
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS * (SIZING_MAX_HOLD_EXTENSIONS + 1)
+
+    # Even a perfect signal cannot prevent exit at the absolute cap
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2
+    sig.lgbm_dir_prob = 0.70
+
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "max_hold"
+
+
+def test_hold_extension_denied_when_signal_weak():
+    """Weak signal at max_hold → exits immediately, no extension granted."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.0001   # well below cost threshold (0.003 fallback)
+    sig.lgbm_dir_prob = 0.55        # inside dead zone
+
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "max_hold"
+    assert loop._hold_extensions.get("AAPL", 0) == 0
+
+
+def test_hold_extension_denied_when_loss_exceeds_daily_vol():
+    """Position down > 1× daily vol at max_hold → extension denied, exits as max_hold.
+
+    The daily_vol cache is set directly to 2% so the arithmetic is exact:
+    - stop_loss = clamp(2% * 1.1, 1%, 10%) = 2.2%  (doesn't fire at −2.1%)
+    - extension guard = −1× daily_vol = −2.0%       (fires at −2.1%)
+    Result: extension denied, reason = "max_hold".
+    """
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    loop._ticker_daily_vol["AAPL"] = 0.02   # 2% daily vol (overrides 1m-ATR proxy)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+    # −2.1%: below the 1× daily-vol extension guard (−2%) but above the stop (−2.2%)
+    price = 100.0 * (1 - 0.021)
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = DYN_THRESH_FALLBACK * 2   # strong signal — would extend if not losing
+    sig.lgbm_dir_prob = 0.70
+
+    assert loop._check_sizing_exit("AAPL", price, sig) == "max_hold"
+    assert loop._hold_extensions.get("AAPL", 0) == 0
+
+
+def test_hold_extension_state_cleared_on_position_close():
+    """_clear_sizing_state must remove the extension counter to avoid cap leak on re-entry."""
+    loop = _make_loop()
+    loop._hold_extensions["AAPL"] = 2
+    loop._bars_held["AAPL"] = 800
+    loop._entry_prices["AAPL"] = 100.0
+    loop._entry_directions["AAPL"] = 1
+
+    loop._clear_sizing_state("AAPL")
+
+    assert "AAPL" not in loop._hold_extensions
+    assert "AAPL" not in loop._bars_held
+
+
+def test_hold_extension_absolute_cap_constant():
+    """SIZING_MAX_HOLD_EXTENSIONS == 2: baseline + 2 ext = 3 trading days hard cap.
+
+    June backtest showed unconditional 3-day holds at −493bps beta bleed.
+    Do NOT raise this constant without a Railway backtest showing positive Sharpe.
+    """
+    from src.agents.signal_loop import SIZING_MAX_HOLD_EXTENSIONS
+    assert SIZING_MAX_HOLD_EXTENSIONS == 2

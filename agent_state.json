@@ -1,7 +1,7 @@
 {
   "current_phase": "System Audit & Baseline Establishment",
-  "last_iteration_date": "2026-07-11",
-  "active_hypothesis": "H3: Earnings-calendar blackout \u2014 implement next.",
+  "last_iteration_date": "2026-07-12",
+  "active_hypothesis": "H3: Earnings-calendar blackout — implement next.",
   "metrics_history": {
     "baseline_sharpe": 0.0,
     "current_sharpe": 0.0,
@@ -10,14 +10,14 @@
     "lgbm_oos_ic": 0.166
   },
   "live_data_status": {
-    "date": "2026-07-11",
+    "date": "2026-07-12",
     "endpoints_checked": [
       "https://stockbot-production-cbde.up.railway.app/portfolio/summary",
       "https://stockbot-production-cbde.up.railway.app/watchdog",
       "https://stockbot-production-cbde.up.railway.app/trades?limit=200",
       "https://stockbot-production-cbde.up.railway.app/diagnostics"
     ],
-    "status": "UNAVAILABLE \u2014 HTTP 403 from proxy tunnel (CONNECT tunnel failed). Railway endpoint not reachable from this sandbox. Second consecutive day.",
+    "status": "UNAVAILABLE — HTTP 403 from proxy tunnel (CONNECT tunnel failed). Railway endpoint not reachable from this sandbox. Third consecutive day.",
     "action": "Proceeded with codebase-only hypothesis implementation. Metrics remain at baseline until Railway connectivity is restored."
   },
   "hypothesis_queue": [
@@ -36,14 +36,14 @@
       "pr_branch": "feat/rnd-H2-spy-ma-overlay",
       "pr_number": 4,
       "implementation_summary": [
-        "Added _fetch_spy_ma20() to src/data/market_regime.py \u2014 fetches SPY daily bars via yfinance, computes 20-day SMA, returns spy_above_20d_ma bool and market_regime_scalar (1.0 above MA, 0.5 below).",
+        "Added _fetch_spy_ma20() to src/data/market_regime.py — fetches SPY daily bars via yfinance, computes 20-day SMA, returns spy_above_20d_ma bool and market_regime_scalar (1.0 above MA, 0.5 below).",
         "Extended MarketRegimeSnapshot with spy_price, spy_ma20, spy_above_20d_ma, market_regime_scalar. Defaults to spy_above_20d_ma=True (fail-open) on any error.",
         "_poll_once() now runs VIX and SPY MA fetches in parallel via asyncio.gather.",
         "signal_loop._act_on_signal(): applies market_regime_scalar to new-entry notional after choppy-regime scale and before Kelly probation floor.",
-        "Added 19 new unit tests in tests/unit/test_market_regime.py \u2014 all green.",
+        "Added 19 new unit tests in tests/unit/test_market_regime.py — all green.",
         "71/71 passing tests (11 pre-existing sqlalchemy/pydantic sandbox failures unchanged; test_signal_loop.py excluded: torch not installed)."
       ],
-      "index_risk_quant_verdict": "APPROVED_FOR_STAGING \u2014 no lookahead (daily closes from prior sessions only), fail-open, no risk control modification. N unknown until Railway backtest.",
+      "index_risk_quant_verdict": "APPROVED_FOR_STAGING — no lookahead (daily closes from prior sessions only), fail-open, no risk control modification. N unknown until Railway backtest.",
       "expected_impact": "Reduced long-side exposure during down-tape markets. Sharpe improvement mechanism: fewer losing entries against market headwinds. Quantification requires Railway backtest over May-Jul 2026 window."
     },
     {
@@ -60,7 +60,7 @@
       "implementation_date": "2026-07-10",
       "pr_branch": "feat/rnd-H4-dead-weight-renorm",
       "pr_number": 3,
-      "pr_status": "MERGED \u2014 commit 16051d4",
+      "pr_status": "MERGED — commit 16051d4",
       "implementation_summary": [
         "Added EnsembleWeights.renormalize_dropping_dead_models(active) classmethod.",
         "Fixed EnsembleWeights.from_staging() key mismatch bug.",
@@ -69,22 +69,49 @@
         "Added 18 new unit tests in tests/unit/test_ensemble_weights.py.",
         "63/63 unit tests green (test_signal_loop.py excluded: torch not installed in sandbox)."
       ],
-      "index_risk_quant_verdict": "APPROVED_FOR_STAGING \u2014 calibration correction only. Needs data run for IC delta confirmation.",
+      "index_risk_quant_verdict": "APPROVED_FOR_STAGING — calibration correction only. Needs data run for IC delta confirmation.",
       "expected_impact": "Ensemble signal correctly calibrated to [-1, +1] range. RL obs dim-0 more informative."
     },
     {
       "id": "H5",
-      "hypothesis": "Signal-reconfirmed hold extension: at max_hold (390 bars), if the ticker would qualify as a FRESH entry right now (lgbm_pred_return > dynamic cost threshold AND dir_prob >= 0.60), extend the hold one more day instead of exiting \u2014 equivalent to a re-entry without paying the round-trip spread. Hard caps: max 2 extensions (3 days absolute), stops/trail/target always active, extension NEVER allowed if position is at a loss > 1x daily vol. Owner intuition (2026-07-11): 'let winners run past the time limit'. Evidence FOR: max_hold exits are 100% of post-fix exits, 5W/4L. Evidence AGAINST: June backtest showed unconditional 3-day holds = -493bps beta bleed \u2014 which is exactly why the extension must be signal-conditional, not unconditional.",
+      "hypothesis": "Signal-reconfirmed hold extension: at max_hold (390 bars), if the ticker would qualify as a FRESH entry right now (lgbm_pred_return > dynamic cost threshold AND dir_prob >= 0.60), extend the hold one more day instead of exiting — equivalent to a re-entry without paying the round-trip spread. Hard caps: max 2 extensions (3 days absolute), stops/trail/target always active, extension NEVER allowed if position is at a loss > 1x daily vol. Owner intuition (2026-07-11): 'let winners run past the time limit'. Evidence FOR: max_hold exits are 100% of post-fix exits, 5W/4L. Evidence AGAINST: June backtest showed unconditional 3-day holds = -493bps beta bleed — which is exactly why the extension must be signal-conditional, not unconditional.",
       "test": "python scripts/research_backtest.py with hold-extension variant (compare: baseline 1-day vs signal-reconfirmed extension, report Sharpe/PF/WR/DD/n per leg)",
-      "status": "pending",
-      "priority": "high \u2014 owner-requested"
+      "status": "needs_data_run",
+      "priority": "high — owner-requested",
+      "implementation_date": "2026-07-12",
+      "pr_branch": "feat/rnd-H5-signal-reconfirmed-hold-extension",
+      "implementation_summary": [
+        "Added SIZING_MAX_HOLD_EXTENSIONS = 2 constant (1 baseline + 2 extensions = 3 days absolute cap).",
+        "Added _hold_extensions: dict[str, int] per-ticker counter to SignalLoop.__init__.",
+        "Added _signal_reconfirms_hold(sig): checks pred_return > dynamic_cost_threshold AND dir_prob >= 0.60 (same quality bar as a new entry, but without portfolio/IC/Kelly gates since we’re already in).",
+        "Modified _check_sizing_exit: at bars >= next_exit_bars (390/780/1170), grants extension if (extensions < 2 AND unrealized > -1×daily_vol AND signal reconfirms). Falls through to 'max_hold' otherwise.",
+        "Added _hold_extensions.pop(ticker) to _clear_sizing_state to prevent phantom cap on re-entry.",
+        "Fixed test_signal_loop.py: made `import torch` conditional so all signal_loop tests can run without torch installed.",
+        "Added 12 new unit tests covering: _signal_reconfirms_hold helper (3 cases), extension granted/counter/spurious-exit/2nd-extension/max-cap/weak-signal/loss-guard/state-cleared/constant-guard.",
+        "123 passed / 2 skipped (torch) / 0 failures."
+      ],
+      "index_risk_quant_verdict": "APPROVED_FOR_STAGING — no lookahead (extension uses only real-time signal at the check bar), stops/trail/target always remain active (price-based exits run first), 3-day absolute cap preserves the June-validated ceiling, fail-safe guard (unrealized > -1×daily_vol) prevents extending underwater positions. N unknown until Railway backtest — hypothesis requires data run for Sharpe/PF/WR/DD/n comparison vs. baseline.",
+      "expected_impact": "Among the 9 max_hold exits (5W/4L), reconfirmed signals would extend winners past day 1. Quantified impact unknown until Railway backtest. Mechanism: captures multi-day momentum when model maintains conviction, without paying re-entry spread cost."
     }
   ],
   "completed_iterations": [
     {
+      "date": "2026-07-12",
+      "hypothesis_id": "H5",
+      "result": "IMPLEMENTED — needs_data_run for Sharpe/PF/drawdown/WR comparison vs. baseline 1-day hold",
+      "tests_status": "123 passed / 2 skipped (torch not installed; test_signal_loop.py now runnable with conditional import) / 0 failures",
+      "new_tests": 12,
+      "files_changed": [
+        "src/agents/signal_loop.py",
+        "tests/unit/test_signal_loop.py",
+        "agent_state.json"
+      ],
+      "notes": "Also fixed test_signal_loop.py torch import to make existing ~40 tests runnable in sandbox (previously all excluded). Total passing test count increased from 71 to 123."
+    },
+    {
       "date": "2026-07-11",
       "hypothesis_id": "H2",
-      "result": "IMPLEMENTED \u2014 needs_data_run for Sharpe/PF/drawdown delta backtest",
+      "result": "IMPLEMENTED — needs_data_run for Sharpe/PF/drawdown delta backtest",
       "tests_status": "71 passed / 11 pre-existing sandbox failures (sqlalchemy/pydantic) / test_signal_loop.py excluded (torch)",
       "new_tests": 19,
       "files_changed": [
@@ -97,7 +124,7 @@
     {
       "date": "2026-07-10",
       "hypothesis_id": "H4",
-      "result": "IMPLEMENTED \u2014 needs_data_run for IC validation",
+      "result": "IMPLEMENTED — needs_data_run for IC validation",
       "tests_status": "63 passed / 1 collection error (torch missing in sandbox)",
       "files_changed": [
         "src/models/ensemble.py",
@@ -110,12 +137,12 @@
     }
   ],
   "pending_tasks": [
-    "H5 (owner-requested): backtest signal-reconfirmed hold extension BEFORE any live change",
+    "Run H5 backtest on Railway: compare signal-reconfirmed extension vs. baseline 1-day hold. Report Sharpe/PF/WR/DD/n per leg.",
     "Merge PR #4 (feat/rnd-H2-spy-ma-overlay) after human review",
     "Run H2 backtest on Railway: report Sharpe/PF/win-rate/drawdown/n separately for SPY-above and SPY-below-MA sessions",
     "Run H4 IC comparison backtest on Railway to validate signal improvement",
     "Implement H3: earnings-calendar blackout",
-    "Restore Railway endpoint connectivity (HTTP 403 from proxy tunnel \u2014 2 consecutive days)"
+    "Restore Railway endpoint connectivity (HTTP 403 from proxy tunnel — 3 consecutive days)"
   ],
   "blocked_by_token_limit": false,
   "governance": {
