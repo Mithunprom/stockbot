@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import torch
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _TORCH_AVAILABLE = False
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.signal_loop import SignalLoop
@@ -40,6 +45,7 @@ def test_signal_loop_instantiation():
     assert not loop._stopped
 
 
+@pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch not installed")
 def test_to_tensors_shapes():
     loop = _make_loop()
     arr = np.random.randn(60, 30).astype(np.float32)
@@ -49,6 +55,7 @@ def test_to_tensors_shapes():
     assert feat_5m.shape == (12, 30)
 
 
+@pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch not installed")
 def test_to_tensors_chronological_order():
     """Verify 5m tensor is every 5th bar from the 1m tensor (not reversed)."""
     loop = _make_loop()
@@ -391,6 +398,278 @@ def test_dynamic_threshold_self_calibrates():
     loop._pred_magnitudes.clear()
     loop._pred_magnitudes.extend([0.004] * DYN_THRESH_MIN_SAMPLES + [0.02] * 200)
     assert loop._dynamic_cost_threshold() > 0.004
+
+
+# ─── H5: Signal-reconfirmed hold extension ────────────────────────────────────
+
+def _h5_fixture(loop, ticker="AAPL", entry_price=100.0, days_ago_entered=1,
+                pred_ret=0.009, dir_prob=0.70, bars=None):
+    """Set up a position that has reached max_hold with a good signal."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+    et_today = datetime.now(ZoneInfo("America/New_York")).date()
+    loop._entry_prices[ticker] = entry_price
+    loop._entry_directions[ticker] = 1
+    loop._entry_dates[ticker] = et_today - timedelta(days=days_ago_entered)
+    loop._peak_prices[ticker] = entry_price
+    loop._ticker_atr[ticker] = 0.0005
+    loop._bars_held[ticker] = bars if bars is not None else SIZING_MAX_HOLD_BARS
+    # seed a realistic daily vol so daily_vol_for works
+    loop._ticker_daily_vol[ticker] = 0.02  # 2% daily vol
+
+    sig = EnsembleSignal(ticker=ticker, timestamp=_stamp(0))
+    sig.lgbm_pred_return = pred_ret
+    sig.lgbm_dir_prob = dir_prob
+    return sig
+
+
+def test_h5_extension_granted_on_fresh_signal():
+    """Extension fires when signal re-qualifies and position is not a loser."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, MAX_HOLD_EXTENSIONS
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    sig = _h5_fixture(loop)
+
+    # _check_sizing_exit should return None (extension granted, not max_hold)
+    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert result is None, f"Expected None (extension), got {result!r}"
+    # Extension counter incremented
+    assert loop._hold_extension_count.get("AAPL", 0) == 1
+    # bars_held reset to 0 so the new window starts fresh
+    assert loop._bars_held.get("AAPL", -1) == 0
+
+
+def test_h5_max_hold_fires_after_two_extensions():
+    """After MAX_HOLD_EXTENSIONS, max_hold exits regardless of signal."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, MAX_HOLD_EXTENSIONS
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    sig = _h5_fixture(loop)
+
+    # Exhaust both extensions
+    loop._hold_extension_count["AAPL"] = MAX_HOLD_EXTENSIONS
+
+    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    # No more extensions available → must exit
+    assert result == "max_hold"
+
+
+def test_h5_extension_denied_when_losing_more_than_daily_vol():
+    """Extension denied if unrealized < -1× daily vol (don't compound losers).
+
+    Setup: daily_vol=0.5% so stop_loss floor (1.0%) doesn't fire before the
+    extension check. A -0.7% loss exceeds -1× daily_vol but sits inside the stop,
+    so the only exit reason that can fire is 'max_hold' (no extension granted).
+    """
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    sig = _h5_fixture(loop, pred_ret=0.009, dir_prob=0.75)
+    # Override fixture's 2% daily_vol with 0.5%; stop = max(0.5*1.1, floor=1%) = 1%
+    loop._ticker_daily_vol["AAPL"] = 0.005
+    # -0.7% < -0.5% (1× daily_vol) → extension denied; -0.7% > -1% (stop) → no stop
+    result = loop._check_sizing_exit("AAPL", 99.3, sig)
+    assert result == "max_hold"
+    assert loop._hold_extension_count.get("AAPL", 0) == 0
+
+
+def test_h5_extension_denied_when_signal_weak():
+    """Extension denied when |pred_return| is below the dynamic cost threshold."""
+    from src.agents.signal_loop import DYN_THRESH_FALLBACK
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    # pred_ret below fallback threshold (0.003) → signal not fresh enough
+    sig = _h5_fixture(loop, pred_ret=0.001, dir_prob=0.75)
+
+    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert result == "max_hold"
+    assert loop._hold_extension_count.get("AAPL", 0) == 0
+
+
+def test_h5_extension_denied_when_dir_prob_in_dead_zone():
+    """Extension denied when dir_prob < 0.60 (dead zone — no conviction)."""
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    sig = _h5_fixture(loop, pred_ret=0.009, dir_prob=0.55)
+
+    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert result == "max_hold"
+    assert loop._hold_extension_count.get("AAPL", 0) == 0
+
+
+def test_h5_second_extension_resets_bars_again():
+    """Second extension resets bars_held a second time."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    sig = _h5_fixture(loop)
+
+    # First extension
+    r1 = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert r1 is None
+    assert loop._hold_extension_count["AAPL"] == 1
+    assert loop._bars_held["AAPL"] == 0
+
+    # Simulate another day of holding — bring bars back to max_hold
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+
+    # Second extension
+    r2 = loop._check_sizing_exit("AAPL", 100.0, sig)
+    assert r2 is None
+    assert loop._hold_extension_count["AAPL"] == 2
+    assert loop._bars_held["AAPL"] == 0
+
+
+def test_h5_clear_sizing_state_removes_extension_count():
+    """_clear_sizing_state must remove the extension counter to prevent stale state."""
+    loop = _make_loop()
+    loop._hold_extension_count["AAPL"] = 2
+    loop._bars_held["AAPL"] = 0
+    loop._entry_prices["AAPL"] = 100.0
+    loop._entry_directions["AAPL"] = 1
+
+    loop._clear_sizing_state("AAPL")
+    assert "AAPL" not in loop._hold_extension_count
+
+
+def test_h5_existing_pdt_test_unchanged():
+    """Regression: PDT guard still defers same-day max_hold when signal is flat."""
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    loop = _make_loop()
+    loop._pm.portfolio_value = 10_000.0   # under $25k PDT threshold
+    _exit_fixture(loop, days_ago_entered=0)
+    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+    loop._daytrade_count = 0
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    # Default signal: lgbm_pred_return=0.0, dir_prob=0.5 → extension denied →
+    # max_hold reason → PDT defer → None
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) is None
+
+
+# ─── H3: Earnings-calendar blackout ───────────────────────────────────────────
+
+def _et_today():
+    """Return today's date in US/Eastern (matches _in_earnings_blackout's today)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
+def test_h3_in_blackout_same_day():
+    """Earnings day itself is in the blackout window."""
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = _et_today()
+    assert loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_in_blackout_one_day_before():
+    """One calendar day before earnings → in blackout."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = _et_today() + timedelta(days=1)
+    assert loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_in_blackout_two_days_before():
+    """Two calendar days before earnings → still in blackout."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = _et_today() + timedelta(days=2)
+    assert loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_outside_blackout_three_days_before():
+    """Three days out is clear."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = _et_today() + timedelta(days=3)
+    assert not loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_in_blackout_one_day_after():
+    """One day after earnings is still inside the symmetric window."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = _et_today() - timedelta(days=1)
+    assert loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_outside_blackout_three_days_after():
+    """Three days after earnings → clear."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = _et_today() - timedelta(days=3)
+    assert not loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_unknown_earnings_fails_open():
+    """None earnings date must never block entry."""
+    loop = _make_loop()
+    loop._ticker_earnings["AAPL"] = None
+    assert not loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_ticker_not_in_cache_fails_open():
+    """Missing earnings cache entry must never block entry."""
+    loop = _make_loop()
+    assert not loop._in_earnings_blackout("AAPL")
+
+
+def test_h3_entry_gate_blocked_in_blackout():
+    """Gate 0c: earnings blackout blocks entry even on a great signal."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._ticker_earnings["AAPL"] = _et_today() + timedelta(days=1)
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.015
+    sig.lgbm_dir_prob = 0.85
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_h3_entry_gate_open_when_not_in_blackout():
+    """Gate 0c: no blackout → gate stays open (signal quality may still block)."""
+    from datetime import timedelta
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    # Far-future earnings → not in blackout
+    loop._ticker_earnings["AAPL"] = _et_today() + timedelta(days=30)
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.015
+    sig.lgbm_dir_prob = 0.85
+    # Gate 0c passes; gate 6 (signal quality) also passes (pred > fallback)
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h3_compute_earnings_blackout_fails_open():
+    """_compute_earnings_blackout returns None per ticker on yfinance error."""
+    from src.agents.signal_loop import _compute_earnings_blackout
+    with patch("yfinance.Ticker") as mock_ticker:
+        mock_ticker.return_value.calendar = None
+        result = _compute_earnings_blackout(["AAPL", "MSFT"])
+    assert result == {"AAPL": None, "MSFT": None}
+
+
+def test_h3_compute_earnings_blackout_parses_timestamp():
+    """_compute_earnings_blackout extracts the date from a yfinance Timestamp."""
+    from src.agents.signal_loop import _compute_earnings_blackout
+    from datetime import date, timezone
+    from unittest.mock import patch
+    import pandas as pd
+
+    target_date = date(2026, 7, 25)
+    ts = pd.Timestamp("2026-07-25", tz="UTC")
+
+    with patch("yfinance.Ticker") as mock_ticker:
+        mock_ticker.return_value.calendar = {"Earnings Date": [ts]}
+        result = _compute_earnings_blackout(["AAPL"])
+    assert result == {"AAPL": target_date}
 
 
 def test_gate_uses_dynamic_threshold():
