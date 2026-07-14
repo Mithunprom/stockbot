@@ -723,7 +723,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.4.4"
 
 app = FastAPI(
     title="StockBot API",
@@ -1392,6 +1392,18 @@ async def portfolio_history(period: str = "1M", timeframe: str = "1D") -> JSONRe
             for t, e in zip(data.get("timestamp", []), data.get("equity", []))
             if e is not None
         ]
+        # Append a LIVE "now" point from broker equity. Alpaca's portfolio
+        # history only returns COMPLETED sessions — on evenings/weekends the
+        # curve otherwise ends days in the past ("stalled" chart, 2026-07-13).
+        try:
+            if _signal_loop is not None:
+                account = await _signal_loop._alpaca.get_account()
+                live_equity = float(account.get("equity", 0.0))
+                now_ts = int(datetime.now(timezone.utc).timestamp())
+                if live_equity > 0 and (not points or now_ts > points[-1]["t"]):
+                    points.append({"t": now_ts, "equity": live_equity, "live": True})
+        except Exception:
+            pass  # history without the live point is still useful
         return JSONResponse(content={
             "period": period, "timeframe": timeframe,
             "points": points,

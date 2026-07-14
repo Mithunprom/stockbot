@@ -185,11 +185,15 @@ const REASONS = {
 async function refresh() {
   try {
     const pf = await fetchJson("/portfolio/summary");
-    $("pv").textContent = "$" + fmt(pf.portfolio_value, 0);
     const dp = pf.daily_pnl_pct;
     $("today").textContent = (dp >= 0 ? "+" : "") + dp.toFixed(2) + "%";
     $("today").className = "big " + (dp >= 0 ? "ok" : "bad");
     $("npos").textContent = pf.n_open_positions;
+    // Portfolio number: prefer LIVE broker equity (the bot's internal mark
+    // only refreshes during market hours and drifts after the close)
+    let pv = pf.portfolio_value;
+    try { pv = (await fetchJson("/account")).equity || pv; } catch (e) {}
+    $("pv").textContent = "$" + fmt(pv, 0);
   } catch (e) {}
   try {
     const td = await fetchJson("/trades?limit=50");

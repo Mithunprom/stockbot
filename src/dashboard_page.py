@@ -255,7 +255,11 @@ async function refresh() {
     $("errors").className = "big " + ((wd.tick_error_count || 0) === 0 ? "ok" : "crit");
     $("errorsd").textContent = wd.last_tick_error || "";
 
-    $("pv").textContent = "$" + fmt(pf.portfolio_value, 0);
+    // Prefer LIVE broker equity — the internal mark only refreshes during
+    // market hours and drifts after the close (owner saw a $440 gap vs Alpaca)
+    let pv = pf.portfolio_value;
+    try { pv = (await fetchJson("/account")).equity || pv; } catch (e) {}
+    $("pv").textContent = "$" + fmt(pv, 0);
     $("pvd").textContent = "cash $" + fmt(pf.available_cash, 0);
 
     const pnl = pf.daily_pnl_pct;
