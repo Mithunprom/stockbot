@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Coroutine
 
 import numpy as np
@@ -89,6 +89,12 @@ MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sec
 # 5-6, PF >16 vs 1.7, max DD 0.08%).
 ENTRY_WINDOW_ET = ((9, 40), (15, 30))
 
+# H3: Earnings-calendar blackout — no new entries within N calendar days before
+# OR after a ticker's earnings date. Gap risk on 1-day holds from surprise
+# earnings moves is uncompensated: entry is blocked, existing positions may exit
+# normally (stop/trail/reversal still fire; only the new-entry gate is affected).
+EARNINGS_BLACKOUT_DAYS = 2         # days before + after earnings to block entries
+
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
 
@@ -122,6 +128,13 @@ SIZING_TAKE_PROFIT_CAP = 0.200     # 20% take profit cap (was 7.0%)
 # holds were −493bps in the June leg), so 1 day is the validated ceiling.
 # Most exits still fire earlier via trailing/signal_reversal.
 SIZING_MAX_HOLD_BARS = 390         # ~1 trading day of market-hours 1m bars
+# H5: signal-reconfirmed hold extension. At max_hold, if the signal re-qualifies
+# as a fresh entry AND the position is not underwater > 1× daily vol, grant one
+# extra trading day instead of exiting. Caps at MAX_HOLD_EXTENSIONS (3 days
+# absolute). Evidence for: max_hold exits 5W/4L post-fix — best exit cohort.
+# Evidence against: UNCONDITIONAL 3-day holds = −493 bps beta bleed in June.
+# That's the exact reason the extension must be SIGNAL-CONDITIONAL.
+MAX_HOLD_EXTENSIONS = 2            # max extra 1-day windows (3-day absolute cap)
 SIZING_STAGNATION_BARS = 390       # unreachable while == max hold (kept for tuning)
 SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
 CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
@@ -235,6 +248,40 @@ def _compute_daily_vols(tickers: list[str]) -> dict[str, float]:
     return out
 
 
+def _compute_earnings_blackout(tickers: list[str]) -> dict[str, date | None]:
+    """Fetch the next upcoming earnings date per ticker via yfinance (synchronous).
+
+    Called from a thread so it never blocks the event loop. Returns {ticker:
+    earnings_date_or_None}. Fails open (None) on any error: a missing earnings
+    date never blocks trading.
+    """
+    if not tickers:
+        return {}
+    import yfinance as yf
+
+    out: dict[str, date | None] = {}
+    for ticker in tickers:
+        try:
+            cal = yf.Ticker(ticker).calendar
+            if not cal:
+                out[ticker] = None
+                continue
+            raw = cal.get("Earnings Date") or []
+            if hasattr(raw, "tolist"):
+                raw = raw.tolist()
+            if not raw:
+                out[ticker] = None
+                continue
+            first = raw[0]
+            if hasattr(first, "date"):
+                out[ticker] = first.date()
+            else:
+                out[ticker] = date.fromisoformat(str(first)[:10])
+        except Exception:
+            out[ticker] = None
+    return out
+
+
 # ─── RL agent loader ──────────────────────────────────────────────────────────
 
 def _load_rl_agent() -> Any | None:
@@ -342,6 +389,7 @@ class SignalLoop:
         self._peak_prices: dict[str, float] = {}
         self._bars_held: dict[str, int] = {}
         self._reversal_counts: dict[str, int] = {}
+        self._hold_extension_count: dict[str, int] = {}  # ticker → H5 extensions granted
         self._sizing_returns_history: list[float] = [0.0] * 20
         # Rolling Kelly window: (exit_time_utc, pnl_pct) — only recent trades count
         self._sizing_recent_outcomes: list[tuple[datetime, float]] = []
@@ -355,6 +403,10 @@ class SignalLoop:
         # once/day. Feeds the exit engine; falls back to the 1m proxy when empty.
         self._ticker_daily_vol: dict[str, float] = {}
         self._daily_vol_refresh_countdown: int = 0
+        # H3: per-ticker next earnings date (or None if unknown). Refreshed daily.
+        # An unknown date fails open (never blocks trading by itself).
+        self._ticker_earnings: dict[str, date | None] = {}
+        self._earnings_refresh_countdown: int = 0
 
         # Data freshness flag — set False when features are stale to block new entries
         self._data_fresh: bool = True
@@ -983,6 +1035,7 @@ class SignalLoop:
         await self._maybe_refresh_ticker_ic()
         await self._maybe_refresh_daytrade_count()
         await self._maybe_refresh_daily_vol()
+        await self._maybe_refresh_earnings_dates()
 
     def _daily_vol_for(self, ticker: str) -> float:
         """True daily volatility fraction for exit sizing.
@@ -1019,6 +1072,46 @@ class SignalLoop:
                             sample={k: round(v, 4) for k, v in list(vols.items())[:5]})
         except Exception as exc:
             logger.warning("daily_vol_refresh_failed", error=str(exc))
+
+    async def _maybe_refresh_earnings_dates(self) -> None:
+        """Refresh the per-ticker next earnings date cache once per trading day.
+
+        Fetches yfinance calendar data in a thread. Fails open: a ticker with
+        an unknown earnings date is never blocked from entry by this gate alone.
+        """
+        self._earnings_refresh_countdown -= 1
+        if self._earnings_refresh_countdown > 0:
+            return
+        self._earnings_refresh_countdown = 390  # once per trading day
+        try:
+            equities = [t for t in self._universe if t not in self.CRYPTO_TICKERS]
+            earnings = await asyncio.to_thread(_compute_earnings_blackout, equities)
+            if earnings:
+                self._ticker_earnings.update(earnings)
+                in_blackout = [t for t in earnings if self._in_earnings_blackout(t)]
+                logger.info(
+                    "earnings_dates_refreshed",
+                    n=len(earnings),
+                    in_blackout=in_blackout or None,
+                )
+        except Exception as exc:
+            logger.warning("earnings_dates_refresh_failed", error=str(exc))
+
+    def _in_earnings_blackout(self, ticker: str) -> bool:
+        """True if today is within EARNINGS_BLACKOUT_DAYS of the ticker's earnings.
+
+        Fails open: unknown earnings date (None) never blocks entry.
+        """
+        earnings_date = self._ticker_earnings.get(ticker)
+        if earnings_date is None:
+            return False
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        delta = (earnings_date - today).days
+        return -EARNINGS_BLACKOUT_DAYS <= delta <= EARNINGS_BLACKOUT_DAYS
 
     async def _maybe_refresh_ticker_ic(self) -> None:
         """Refresh the per-ticker live IC cache from the IC tracker (hourly)."""
@@ -1292,6 +1385,19 @@ class SignalLoop:
         if not self._in_entry_window():
             return False
 
+        # Gate 0c: Earnings blackout (H3) — no new entries within
+        # EARNINGS_BLACKOUT_DAYS of a ticker's earnings announcement.
+        # Existing positions are unaffected; exits fire normally.
+        if self._in_earnings_blackout(ticker):
+            earnings_date = self._ticker_earnings.get(ticker)
+            logger.debug(
+                "sizing_earnings_blackout",
+                ticker=ticker,
+                earnings_date=str(earnings_date),
+                blackout_days=EARNINGS_BLACKOUT_DAYS,
+            )
+            return False
+
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
             logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)
@@ -1419,6 +1525,65 @@ class SignalLoop:
         dir_prob = float(sig.lgbm_dir_prob)
         return not (lo < dir_prob < hi)
 
+    def _maybe_extend_hold(
+        self, ticker: str, sig: EnsembleSignal, unrealized: float
+    ) -> bool:
+        """Grant one extra trading day at max_hold if the signal re-qualifies.
+
+        Extension conditions (ALL must hold):
+          1. Extensions used so far < MAX_HOLD_EXTENSIONS (3-day absolute cap)
+          2. Position is NOT at a loss exceeding 1× the ticker's daily vol —
+             avoids compounding losing trades past their natural exit
+          3. Signal re-qualifies as a fresh entry: |pred_return| beats the
+             dynamic cost threshold AND dir_prob >= 0.60 (outside dead zone)
+
+        When granted: resets bars_held to 0 so stop/trail/stagnation still
+        govern the new window; the extension counter prevents re-triggering
+        indefinitely. Existing stop/trailing/take-profit always override.
+        """
+        extensions_used = self._hold_extension_count.get(ticker, 0)
+        if extensions_used >= MAX_HOLD_EXTENSIONS:
+            return False
+
+        daily_vol = self._daily_vol_for(ticker)
+        if unrealized < -daily_vol:
+            logger.info(
+                "hold_extension_denied_loss",
+                ticker=ticker,
+                unrealized=round(unrealized, 4),
+                daily_vol=round(daily_vol, 4),
+                extensions_used=extensions_used,
+            )
+            return False
+
+        pred_ret = float(sig.lgbm_pred_return)
+        dir_prob = float(sig.lgbm_dir_prob)
+        threshold = self._dynamic_cost_threshold()
+        if abs(pred_ret) <= threshold or dir_prob < 0.60:
+            logger.info(
+                "hold_extension_denied_signal",
+                ticker=ticker,
+                pred_ret=round(pred_ret, 5),
+                dir_prob=round(dir_prob, 3),
+                threshold=round(threshold, 5),
+                extensions_used=extensions_used,
+            )
+            return False
+
+        self._hold_extension_count[ticker] = extensions_used + 1
+        self._bars_held[ticker] = 0
+        logger.info(
+            "hold_extension_granted",
+            ticker=ticker,
+            extension_num=extensions_used + 1,
+            max_extensions=MAX_HOLD_EXTENSIONS,
+            pred_ret=round(pred_ret, 5),
+            dir_prob=round(dir_prob, 3),
+            unrealized=round(unrealized, 4),
+            daily_vol=round(daily_vol, 4),
+        )
+        return True
+
     def _check_sizing_exit(
         self, ticker: str, price: float, sig: EnsembleSignal
     ) -> str | None:
@@ -1474,9 +1639,12 @@ class SignalLoop:
 
         bars = self._bars_held.get(ticker, 0)
         if reason is None:
-            # Max hold (~3 trading days)
+            # Max hold (~1 trading day). H5: before forcing exit, check if the
+            # signal re-qualifies for an extension (up to MAX_HOLD_EXTENSIONS).
             if bars >= SIZING_MAX_HOLD_BARS:
-                reason = "max_hold"
+                if not self._maybe_extend_hold(ticker, sig, unrealized):
+                    reason = "max_hold"
+                # else: extension granted — bars_held reset to 0; don't exit
             # Stagnation: dead trade going nowhere — free up the capital
             elif bars >= SIZING_STAGNATION_BARS and abs(unrealized) < SIZING_STAGNATION_PNL:
                 reason = "stagnation"
@@ -1523,6 +1691,7 @@ class SignalLoop:
         self._peak_prices.pop(ticker, None)
         self._bars_held.pop(ticker, None)
         self._reversal_counts.pop(ticker, None)
+        self._hold_extension_count.pop(ticker, None)
         self._pdt_deferred_logged.discard(ticker)
 
     def _rl_action_to_side_and_size(
