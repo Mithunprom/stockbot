@@ -554,6 +554,296 @@ def phase_simulate() -> None:
         print(json.dumps(res, indent=1))
 
 
+# ─── H1: Cross-sectional top-k simulate ──────────────────────────────────────
+
+@dataclass
+class TopKParams:
+    """Parameters for the cross-sectional top-K simulation variant."""
+
+    k: int = 4                       # number of tickers to enter per day
+    snapshot_hour: int = 14          # ET hour for daily cross-sectional snapshot
+    snapshot_minute: int = 0         # ET minute for snapshot
+    dir_prob_min: float = 0.55       # minimum dir_prob for any qualifier
+    pred_return_floor: float = 0.001 # minimum positive pred_return
+    max_sector_slots: int = 2        # diversity cap per sector in the top-K
+    stop_mult: float = 1.1
+    trail_mult: float = 1.2
+    tp_mult: float = 3.0
+    sl_floor: float = 0.010
+    sl_cap: float = 0.100
+    ts_floor: float = 0.008
+    ts_cap: float = 0.100
+    tp_floor: float = 0.020
+    tp_cap: float = 0.200
+    max_hold_bars: int = 390         # 1 trading day; exits via stops/trail/TP
+    stag_bars: int = 390             # unreachable while == max_hold (kept for symmetry)
+    stag_pnl: float = 0.004
+    reversal_bars: int = 45          # bars of confirmed opposite signal before exit
+    catastrophic_mult: float = 2.0
+    position_frac: float = 0.15      # target notional as fraction of portfolio value
+    cost_bps: float = 2.0
+    pdt_enabled: bool = False        # assume >$25k (no PDT limit); simplifies analysis
+    label: str = "topk_k4_1400"
+
+
+def simulate_topk(
+    preds: "pd.DataFrame",
+    p: "TopKParams",
+    start: str,
+    end: str,
+    capital: float = 10_000.0,
+) -> dict:
+    """Cross-sectional top-K simulation variant (H1).
+
+    At `snapshot_hour:snapshot_minute` ET each day, rank all universe tickers
+    by pred_return cross-sectionally (descending) and enter the top-K that:
+      * have pred_return > pred_return_floor (positive expected move)
+      * have dir_prob >= dir_prob_min (directional conviction)
+      * are not already in a position
+
+    Sector diversity: at most max_sector_slots names from the same sector.
+
+    Exits are identical to simulate(): stop_loss / take_profit / trailing_stop /
+    max_hold / stagnation / signal_reversal — no look-ahead anywhere.
+
+    The comparison is:
+        simulate()         → per-ticker gate, entries spread across 09:40–15:30
+        simulate_topk()    → daily cross-sectional snapshot at 14:00, top-K only
+
+    Args:
+        preds:    OOS predictions DataFrame with columns:
+                  ticker, time (UTC tz-aware), pred_return, dir_prob, close,
+                  open, atr_pct, daily_vol, regime, forward_return.
+        p:        TopKParams instance.
+        start:    Simulation start date (inclusive), YYYY-MM-DD.
+        end:      Simulation end date (inclusive), YYYY-MM-DD.
+        capital:  Starting cash.
+
+    Returns:
+        Dict with same keys as simulate() for direct comparison:
+        label, start, end, total_return_pct, sharpe, max_dd_pct,
+        profit_factor, win_rate, n_trades, open_at_end, avg_notional_pct,
+        avg_win_pct, avg_loss_pct, avg_hold_bars, exit_reasons, _trades.
+    """
+    from src.execution.position_sizer import SECTOR_MAP as _SECTOR_MAP
+
+    from datetime import time as dtime
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+
+    snapshot_time = dtime(p.snapshot_hour, p.snapshot_minute)
+
+    lo = pd.Timestamp(start, tz="UTC")
+    hi = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
+    df = preds[(preds.time >= lo) & (preds.time < hi)].copy()
+    df = df.sort_values("time")
+
+    df["next_open"] = df.groupby("ticker")["open"].shift(-1)
+    df["next_open"] = df["next_open"].fillna(df["close"])
+
+    by_ts: dict = {}
+    for r in df.itertuples(index=False):
+        by_ts.setdefault(r.time, []).append(r)
+    timestamps = sorted(by_ts)
+
+    cash = capital
+    positions: dict[str, dict] = {}
+    trades: list[dict] = []
+    equity_by_day: dict[date, float] = {}
+    minute_equity: list[float] = []
+    cost = p.cost_bps / 10_000.0
+
+    # Cross-sectional snapshot state: tickers' latest prediction at each bar.
+    # Overwritten every bar; only consumed once per day at snapshot_time.
+    cs_latest: dict[str, object] = {}  # ticker → row namedtuple
+    last_snapshot_date: "date | None" = None
+
+    for ts in timestamps:
+        rows = by_ts[ts]
+        ts_et = ts.tz_convert(_ET)
+        today = ts_et.date()
+        bar_time = dtime(ts_et.hour, ts_et.minute)
+
+        price_now = {r.ticker: r.close for r in rows}
+        fill_next = {r.ticker: r.next_open for r in rows}
+        row_by_ticker = {r.ticker: r for r in rows}
+
+        # Update cross-sectional snapshot with this bar's predictions
+        for r in rows:
+            cs_latest[r.ticker] = r
+
+        # Mark to market
+        pv = cash + sum(pos["qty"] * price_now.get(t, pos["last"])
+                        for t, pos in positions.items())
+        for t, pos in positions.items():
+            if t in price_now:
+                pos["last"] = price_now[t]
+        minute_equity.append(pv)
+        equity_by_day[today] = pv
+
+        # ── Exits (same engine as simulate()) ─────────────────────────────
+        for t in list(positions):
+            if t not in price_now:
+                continue
+            pos = positions[t]
+            px = price_now[t]
+            pos["bars"] += 1
+            pos["peak"] = max(pos["peak"], px)
+            r = row_by_ticker[t]
+            dv = r.daily_vol if np.isfinite(r.daily_vol) else 0.03
+            dv = min(max(dv, DAILY_VOL_FLOOR), DAILY_VOL_CEIL)
+            sl = min(max(dv * p.stop_mult, p.sl_floor), p.sl_cap)
+            ts_exit = min(max(dv * p.trail_mult, p.ts_floor), p.ts_cap)
+            tp = min(max(dv * p.tp_mult, p.tp_floor), p.tp_cap)
+            unreal = (px - pos["entry_px"]) / pos["entry_px"]
+            reason = None
+            if unreal < -sl:
+                reason = "stop_loss"
+            elif unreal > tp:
+                reason = "take_profit"
+            elif (pos["peak"] - px) / pos["peak"] > ts_exit:
+                reason = "trailing_stop"
+            elif pos["bars"] >= p.max_hold_bars:
+                reason = "max_hold"
+            elif pos["bars"] >= p.stag_bars and abs(unreal) < p.stag_pnl:
+                reason = "stagnation"
+            else:
+                if r.pred_return < 0:
+                    pos["rev"] += 1
+                else:
+                    pos["rev"] = 0
+                if pos["rev"] >= p.reversal_bars:
+                    reason = "signal_reversal"
+            if reason is None:
+                continue
+            fpx = fill_next[t] * (1 - cost)
+            pnl = pos["qty"] * (fpx - pos["entry_px"])
+            cash += pos["qty"] * fpx
+            trades.append({
+                "ticker": t, "entry": pos["entry_ts"], "exit": ts,
+                "entry_px": pos["entry_px"], "exit_px": fpx,
+                "pnl": pnl, "pnl_pct": fpx / pos["entry_px"] - 1,
+                "notional": pos["qty"] * pos["entry_px"],
+                "bars": pos["bars"], "reason": reason,
+            })
+            del positions[t]
+
+        # ── Cross-sectional entries at snapshot time ───────────────────────
+        if bar_time != snapshot_time or last_snapshot_date == today:
+            continue
+        last_snapshot_date = today
+
+        # Refresh pv after exits
+        pv = cash + sum(pos["qty"] * price_now.get(t, pos["last"])
+                        for t, pos in positions.items())
+
+        # Rank available tickers by pred_return
+        qualifiers = [
+            row for row in cs_latest.values()
+            if hasattr(row, "pred_return")
+            and row.ticker not in positions
+            and np.isfinite(row.pred_return)
+            and row.pred_return > p.pred_return_floor
+            and row.dir_prob >= p.dir_prob_min
+        ]
+        qualifiers.sort(key=lambda r: (-r.pred_return, -r.dir_prob, r.ticker))
+
+        # Sector-diversity selection
+        selected: list = []
+        sector_counts: dict[str, int] = {}
+        for cand in qualifiers:
+            if len(selected) >= p.k:
+                break
+            sector = _SECTOR_MAP.get(cand.ticker, "other")
+            if sector_counts.get(sector, 0) >= p.max_sector_slots:
+                continue
+            selected.append(cand)
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+
+        # Enter selected tickers
+        for r in selected:
+            notional = pv * p.position_frac
+            if notional < 500.0 or notional > cash:
+                continue
+            if r.ticker not in fill_next:
+                continue
+            fpx = fill_next[r.ticker] * (1 + cost)
+            if fpx <= 0:
+                continue
+            qty = notional / fpx
+            cash -= qty * fpx
+            positions[r.ticker] = {
+                "qty": qty, "entry_px": fpx, "entry_ts": ts,
+                "entry_date": today, "peak": fpx, "bars": 0, "rev": 0,
+                "last": fpx,
+            }
+
+    # Close open positions at last mark (not a trade)
+    final_pv = cash + sum(pos["qty"] * pos["last"] for pos in positions.values())
+
+    daily = pd.Series(equity_by_day).sort_index()
+    rets = daily.pct_change().dropna()
+    sharpe = float(rets.mean() / rets.std() * np.sqrt(252)) \
+        if len(rets) > 2 and rets.std() > 0 else 0.0
+    eq = pd.Series(minute_equity)
+    dd = float(((eq.cummax() - eq) / eq.cummax()).max()) if len(eq) else 0.0
+    tdf = pd.DataFrame(trades)
+    wins = tdf[tdf.pnl > 0].pnl.sum() if len(tdf) else 0.0
+    losses = -tdf[tdf.pnl < 0].pnl.sum() if len(tdf) else 0.0
+    return {
+        "label": p.label, "start": start, "end": end,
+        "total_return_pct": round((final_pv / capital - 1) * 100, 2),
+        "sharpe": round(sharpe, 2),
+        "max_dd_pct": round(dd * 100, 2),
+        "profit_factor": round(wins / losses, 2) if losses > 0 else float("inf"),
+        "win_rate": round(float((tdf.pnl > 0).mean()), 3) if len(tdf) else 0.0,
+        "n_trades": len(tdf),
+        "open_at_end": len(positions),
+        "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1)
+            if len(tdf) else 0.0,
+        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2)
+            if len(tdf) and (tdf.pnl > 0).any() else 0.0,
+        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2)
+            if len(tdf) and (tdf.pnl < 0).any() else 0.0,
+        "avg_hold_bars": round(float(tdf.bars.mean()), 0) if len(tdf) else 0,
+        "exit_reasons": tdf.reason.value_counts().to_dict() if len(tdf) else {},
+        "_trades": tdf,
+    }
+
+
+def phase_topk() -> None:
+    """H1: compare cross-sectional top-k vs per-ticker baseline on both legs.
+
+    Reports Sharpe / PF / win-rate / drawdown / n for each combination so the
+    Index/Risk Quant can evaluate cross-sectional vs threshold approach.
+    k=3 and k=4 are both tested on the tune and validation legs.
+    """
+    preds = load_preds()
+    print("=== H1: Cross-sectional top-K vs baseline ===\n")
+
+    legs = [
+        ("2026-05-18", TUNE_END, "tune-leg"),
+        ("2026-06-01", "2026-06-11", "val-leg"),
+    ]
+
+    # Baseline for comparison
+    for s, e, tag in legs:
+        res = simulate(preds, Params(label=f"baseline {tag}"), s, e)
+        res.pop("_trades")
+        print(json.dumps(res, indent=1))
+
+    print("\n--- cross-sectional top-k variants ---\n")
+    for k in [3, 4]:
+        for snapshot_h, snapshot_m, snap_tag in [(14, 0, "1400"), (13, 0, "1300")]:
+            label = f"topk_k{k}_{snap_tag}"
+            tp = TopKParams(k=k, snapshot_hour=snapshot_h,
+                            snapshot_minute=snapshot_m, label=label)
+            for s, e, tag in legs:
+                res = simulate_topk(preds, tp, s, e)
+                res.pop("_trades")
+                print(json.dumps({**res, "label": f"{label}|{tag}"}, indent=1))
+
+
 def phase_tune() -> None:
     preds = load_preds()
     grid = []
@@ -601,11 +891,12 @@ def phase_tune() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", default="all",
-                    choices=["fetch", "features", "train", "simulate", "tune", "all"])
+                    choices=["fetch", "features", "train", "simulate", "tune",
+                             "topk", "all"])
     args = ap.parse_args()
     phases = {
         "fetch": phase_fetch, "features": phase_features, "train": phase_train,
-        "simulate": phase_simulate, "tune": phase_tune,
+        "simulate": phase_simulate, "tune": phase_tune, "topk": phase_topk,
     }
     if args.phase == "all":
         for fn in phases.values():

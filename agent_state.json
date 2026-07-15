@@ -1,7 +1,7 @@
 {
   "current_phase": "System Audit & Baseline Establishment",
-  "last_iteration_date": "2026-07-14",
-  "active_hypothesis": "H1: Cross-sectional top-k ranking — implement next.",
+  "last_iteration_date": "2026-07-15",
+  "active_hypothesis": "H1: Cross-sectional top-k ranking — implemented, needs_data_run",
   "metrics_history": {
     "baseline_sharpe": 0.0,
     "current_sharpe": 0.0,
@@ -10,22 +10,36 @@
     "lgbm_oos_ic": 0.166
   },
   "live_data_status": {
-    "date": "2026-07-14",
+    "date": "2026-07-15",
     "endpoints_checked": [
       "https://stockbot-production-cbde.up.railway.app/portfolio/summary",
       "https://stockbot-production-cbde.up.railway.app/watchdog",
       "https://stockbot-production-cbde.up.railway.app/trades?limit=200",
       "https://stockbot-production-cbde.up.railway.app/diagnostics"
     ],
-    "status": "UNAVAILABLE — HTTP 403 from proxy tunnel (CONNECT tunnel failed). Third consecutive day. Railway endpoint not reachable from this sandbox.",
-    "action": "Proceeded with codebase-only hypothesis implementation (H5 + H3). Metrics remain at baseline until Railway connectivity is restored."
+    "status": "UNAVAILABLE — HTTP 403 from proxy tunnel (CONNECT tunnel failed). Fourth consecutive day. Railway endpoint not reachable from this sandbox.",
+    "action": "Proceeded with codebase-only hypothesis implementation (H1). Metrics remain at baseline until Railway connectivity is restored."
   },
   "hypothesis_queue": [
     {
       "id": "H1",
       "hypothesis": "Cross-sectional daily top-k ranking (long top 3-4 by LGBM pred at 14:00 ET, exit next day) beats per-ticker threshold entries",
-      "test": "python scripts/research_backtest.py with ranking variant",
-      "status": "pending"
+      "test": "python scripts/research_backtest.py --phase topk",
+      "status": "needs_data_run",
+      "implementation_date": "2026-07-15",
+      "pr_branch": "feat/rnd-H1-cross-sectional-topk",
+      "implementation_summary": [
+        "Added CrossSectionalRanker class in src/agents/cross_sectional_ranker.py — pure-Python, no external deps.",
+        "CrossSectionalRanker.update() records each ticker's latest pred_return/dir_prob every bar.",
+        "CrossSectionalRanker.get_ranked_candidates() fires once per day at snapshot_time (default 14:00 ET): returns top-K by pred_return DESC with sector diversity enforcement (max 2 per sector).",
+        "Returns None (not []) when snapshot has not fired — distinguishes 'not yet' from 'fired with no qualifiers'.",
+        "Added simulate_topk() to scripts/research_backtest.py — cross-sectional variant with identical exit engine to simulate() (stop/trail/TP/max_hold/stagnation/signal_reversal). Tests k=3,4 × snapshot_time=13:00,14:00 on both tune and val legs.",
+        "Added phase_topk() to orchestrate the comparison and expose --phase topk CLI flag.",
+        "Added 30 new unit tests in tests/unit/test_cross_sectional_ranker.py — 30/30 green, zero external deps.",
+        "No regressions: 94/94 reachable tests pass (18 pre-existing sandbox failures: yfinance/sqlalchemy not installed — unchanged)."
+      ],
+      "index_risk_quant_verdict": "APPROVED_FOR_STAGING — no lookahead (snapshot reads predictions already available at 14:00 bar close; sector diversity caps correlation risk; exit engine is identical to baseline so the only variable is the ENTRY SELECTION MECHANISM). N unknown until Railway backtest. Must compare: n_trades, Sharpe, PF, win_rate, max_dd, avg_hold_bars per leg against simulate() baseline.",
+      "expected_impact": "Concentrates capital into highest-conviction 3-4 names per day instead of first-to-clear-threshold. Mechanism: cross-sectional rank filters out moderate signals that pass threshold but aren't the best available. Hypothesis: on days with 6-8 qualifiers the current bot wastes slots on rank-4..8 names; top-K constrains to rank-1..K. Risk: on thin-signal days (0-2 qualifiers cross-sectionally), fewer trades reduce opportunity. The baseline currently averages ~2-4 entries/day so the practical difference may be small — the data run will tell."
     },
     {
       "id": "H2",
@@ -108,6 +122,20 @@
   ],
   "completed_iterations": [
     {
+      "date": "2026-07-15",
+      "hypothesis_id": "H1",
+      "result": "IMPLEMENTED — needs_data_run for Sharpe/PF/drawdown/win-rate/n backtest on Railway",
+      "tests_status": "94 passed / 18 pre-existing sandbox failures (yfinance/sqlalchemy not installed) / test_signal_loop.py excluded (torch)",
+      "new_tests": 30,
+      "files_changed": [
+        "src/agents/cross_sectional_ranker.py",
+        "scripts/research_backtest.py",
+        "tests/unit/test_cross_sectional_ranker.py",
+        "agent_state.json"
+      ],
+      "notes": "Railway endpoints HTTP 403 for 4th consecutive day. Proceeded with codebase implementation. CrossSectionalRanker is a standalone pure-Python module requiring no external deps — can be unit tested and verified independently of the backtest data."
+    },
+    {
       "date": "2026-07-14",
       "hypothesis_id": "H5+H3",
       "result": "IMPLEMENTED — needs_data_run for Sharpe/PF/drawdown/win-rate/n backtest on Railway",
@@ -150,14 +178,14 @@
     }
   ],
   "pending_tasks": [
+    "Run H1 backtest on Railway: python scripts/research_backtest.py --phase topk — compare k=3,4 x snapshot=13:00,14:00 vs baseline on tune+val legs; report Sharpe/PF/WR/DD/n per leg",
     "Review and merge PR #6 (H5+H3): feat/rnd-H5H3-hold-extension-earnings-blackout",
     "Run H5 backtest on Railway: baseline 1-day vs signal-reconfirmed extension — report Sharpe/PF/WR/DD/n per leg",
     "Run H3 backtest on Railway: blackout vs no-blackout — report Sharpe/PF/WR/DD/n + lost-opportunity count",
     "Merge PR #4 (feat/rnd-H2-spy-ma-overlay) after human review",
     "Run H2 backtest on Railway: report Sharpe/PF/win-rate/drawdown/n separately for SPY-above and SPY-below-MA sessions",
     "Run H4 IC comparison backtest on Railway to validate signal improvement",
-    "Implement H1: cross-sectional top-k ranking (next active hypothesis)",
-    "Restore Railway endpoint connectivity (HTTP 403 from proxy tunnel — 3 consecutive days)"
+    "Restore Railway endpoint connectivity (HTTP 403 from proxy tunnel — 4 consecutive days)"
   ],
   "blocked_by_token_limit": false,
   "governance": {
