@@ -300,6 +300,9 @@ class Params:
                                   # 92nd percentile of |pred| (self-calibrating)
     cost_bps: float = 2.0
     label: str = "baseline"
+    # H5: signal-reconfirmed hold extension — 0 = disabled (baseline behaviour)
+    max_hold_extensions: int = 0         # 0 = disabled; 2 = production H5 cap
+    ext_loss_gate_dvol_mult: float = 1.0 # deny extension if unrealized < −mult × daily_vol
 
 
 DVOL = 19.75
@@ -397,6 +400,10 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         minute_equity.append(pv)
         equity_by_day[today] = pv
 
+        # Threshold computed here so it's available for both extension checks
+        # (exits) and candidate filtering (entries) in the same timestamp loop.
+        thr = day_thr.get(today, p.cost_threshold) if p.dyn_thresh_pct else p.cost_threshold
+
         # ── exits ──
         for t in list(positions):
             if t not in price_now:
@@ -416,7 +423,20 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             elif (pos["peak"] - px) / pos["peak"] > tsl:
                 reason = "trailing_stop"
             elif pos["bars"] >= p.max_hold_bars:
-                reason = "max_hold"
+                # H5: signal-reconfirmed hold extension.
+                # Mirrors production _maybe_extend_hold() in signal_loop.py.
+                ext_ct = pos.get("ext_count", 0)
+                ext_dv = r.daily_vol if np.isfinite(r.daily_vol) else 0.03
+                if (p.max_hold_extensions > 0
+                        and ext_ct < p.max_hold_extensions
+                        and unreal >= -(ext_dv * p.ext_loss_gate_dvol_mult)
+                        and np.isfinite(r.pred_return)
+                        and r.pred_return > thr
+                        and r.dir_prob > p.dead_hi):
+                    pos["bars"] = 0
+                    pos["ext_count"] = ext_ct + 1
+                else:
+                    reason = "max_hold"
             elif pos["bars"] >= p.stag_bars and abs(unreal) < p.stag_pnl:
                 reason = "stagnation"
             else:
@@ -448,6 +468,7 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
                 "pnl": pnl, "pnl_pct": fpx / pos["entry_px"] - 1,
                 "notional": pos["qty"] * pos["entry_px"],
                 "bars": pos["bars"], "reason": reason,
+                "ext_count": pos.get("ext_count", 0),  # H5: extensions used
             })
             del positions[t]
             cooldowns[t] = p.cooldown
@@ -458,7 +479,6 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             continue
         pv = cash + sum(pos["qty"] * price_now.get(t, pos["last"])
                         for t, pos in positions.items())
-        thr = day_thr.get(today, p.cost_threshold) if p.dyn_thresh_pct else p.cost_threshold
         cands = [r for r in rows
                  if r.ticker not in positions
                  and r.ticker not in cooldowns
@@ -505,7 +525,7 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             positions[r.ticker] = {
                 "qty": qty, "entry_px": fpx, "entry_ts": ts,
                 "entry_date": today, "peak": fpx, "bars": 0, "rev": 0,
-                "last": fpx,
+                "last": fpx, "ext_count": 0,
             }
             entered += 1
             trades_today += 1
@@ -598,14 +618,54 @@ def phase_tune() -> None:
     print(vout.to_string())
 
 
+def phase_holdext() -> None:
+    """H5 backtest: baseline 1-day hold vs signal-reconfirmed hold extension.
+
+    Runs 4 extension variants (max_extensions ∈ {1,2} × loss_gate_mult ∈ {1.0,2.0})
+    against the baseline on the standard tune and validation legs.
+
+    Acceptance criterion (Index/Risk Quant): an extension variant must improve
+    Sharpe on BOTH legs. Tune-only improvement = overfit → log as REJECTED.
+    """
+    preds = load_preds()
+    variants = [
+        Params(label="baseline"),
+        Params(max_hold_extensions=1, ext_loss_gate_dvol_mult=1.0,
+               label="ext1_lgX1.0"),
+        Params(max_hold_extensions=2, ext_loss_gate_dvol_mult=1.0,
+               label="ext2_lgX1.0"),
+        Params(max_hold_extensions=1, ext_loss_gate_dvol_mult=2.0,
+               label="ext1_lgX2.0"),
+        Params(max_hold_extensions=2, ext_loss_gate_dvol_mult=2.0,
+               label="ext2_lgX2.0"),
+    ]
+    legs = [
+        ("tune",       "2026-05-18", TUNE_END),
+        ("validation", "2026-06-01", "2026-06-11"),
+    ]
+    for leg_name, start, end in legs:
+        print(f"\n=== {leg_name} leg ({start} → {end}) ===")
+        rows = []
+        for p in variants:
+            r = simulate(preds, p, start, end)
+            r.pop("_trades")
+            rows.append(r)
+        print(json.dumps(rows, indent=1))
+    print(
+        "\nAcceptance (Index/Risk Quant veto): winner must beat baseline Sharpe "
+        "on BOTH legs. Tune-only gain → REJECTED (overfit)."
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", default="all",
-                    choices=["fetch", "features", "train", "simulate", "tune", "all"])
+                    choices=["fetch", "features", "train", "simulate", "tune",
+                             "holdext", "all"])
     args = ap.parse_args()
     phases = {
         "fetch": phase_fetch, "features": phase_features, "train": phase_train,
-        "simulate": phase_simulate, "tune": phase_tune,
+        "simulate": phase_simulate, "tune": phase_tune, "holdext": phase_holdext,
     }
     if args.phase == "all":
         for fn in phases.values():
