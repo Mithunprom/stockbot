@@ -300,6 +300,11 @@ class Params:
                                   # 92nd percentile of |pred| (self-calibrating)
     cost_bps: float = 2.0
     label: str = "baseline"
+    # H2: SPY 20d MA overlay (backtest only — production gate lives in MarketRegimeMonitor)
+    spy_ma_days: int = 0           # 0 = disabled; 10/20 = lookback days for MA
+    spy_below_scale: float = 0.5   # notional scalar when SPY < MA (0.0 = full block)
+    # H6: Signal persistence filter
+    min_persistence_bars: int = 0  # consecutive qualifying bars required before entry; 0 = off
 
 
 DVOL = 19.75
@@ -324,7 +329,13 @@ DAILY_VOL_CEIL = 0.15
 
 
 def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
-             capital: float = 10_000.0) -> dict:
+             capital: float = 10_000.0,
+             spy_ma_map: dict | None = None) -> dict:
+    """Event-driven replay.
+
+    spy_ma_map: {ET date: float} mapping dates to notional scalars (1.0 or
+    p.spy_below_scale). Built by _load_spy_ma_map(). None = no SPY filter.
+    """
     from src.execution.position_sizer import SmartPositionSizer, SECTOR_MAP
 
     sizer = SmartPositionSizer(mode="paper")
@@ -367,6 +378,7 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
     trades_today = 0
     cur_day: date | None = None
     cost = p.cost_bps / 10_000.0
+    signal_streak: dict[str, int] = {}   # H6: consecutive bars with qualifying signal
 
     def day_trades_used(today: date) -> int:
         cutoff = np.busday_offset(today, -5, roll="backward").astype("datetime64[D]")
@@ -452,6 +464,16 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             del positions[t]
             cooldowns[t] = p.cooldown
 
+        # ── H6: signal-streak update (runs every bar, inside and outside window) ──
+        if p.min_persistence_bars > 0:
+            _thr = day_thr.get(today, p.cost_threshold) if p.dyn_thresh_pct else p.cost_threshold
+            for r in rows:
+                if (np.isfinite(r.pred_return) and r.pred_return > _thr
+                        and r.dir_prob > p.dead_hi):
+                    signal_streak[r.ticker] = signal_streak.get(r.ticker, 0) + 1
+                else:
+                    signal_streak[r.ticker] = 0
+
         # ── entries ──
         in_window = (dtime(*p.entry_start) <= ts_et.time() <= dtime(*p.entry_end))
         if not in_window:
@@ -464,7 +486,9 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
                  and r.ticker not in cooldowns
                  and np.isfinite(r.pred_return)
                  and r.pred_return > thr
-                 and r.dir_prob > p.dead_hi]
+                 and r.dir_prob > p.dead_hi
+                 and (p.min_persistence_bars == 0
+                      or signal_streak.get(r.ticker, 0) >= p.min_persistence_bars)]
         cands.sort(key=lambda r: abs(r.pred_return), reverse=True)
         entered = 0
         for r in cands:
@@ -496,7 +520,9 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             )
             if sizing is None:
                 continue
-            notional = sizing.notional * REGIME_SCALE.get(int(r.regime), 0.7)
+            # H2: apply SPY MA regime scale before notional floor check
+            spy_scalar = spy_ma_map.get(today, 1.0) if spy_ma_map is not None else 1.0
+            notional = sizing.notional * REGIME_SCALE.get(int(r.regime), 0.7) * spy_scalar
             if notional < 500.0 or notional > cash:
                 continue
             fpx = fill_next[r.ticker] * (1 + cost)
@@ -531,8 +557,8 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         "n_trades": len(tdf),
         "open_at_end": len(positions),
         "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1) if len(tdf) else 0.0,
-        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl > 0).any() else 0.0,
-        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl < 0).any() else 0.0,
+        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if len(tdf) and (tdf.pnl > 0).any() else 0.0,
+        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if len(tdf) and (tdf.pnl < 0).any() else 0.0,
         "avg_hold_bars": round(float(tdf.bars.mean()), 0) if len(tdf) else 0,
         "exit_reasons": tdf.reason.value_counts().to_dict() if len(tdf) else {},
         "_trades": tdf,
@@ -598,14 +624,130 @@ def phase_tune() -> None:
     print(vout.to_string())
 
 
+# ─── H2 SPY MA overlay backtest ───────────────────────────────────────────────
+
+def _load_spy_ma_map(ma_days: int = 20, below_scale: float = 0.5) -> dict:
+    """Return {ET date: market_regime_scalar} from SPY daily bars via yfinance.
+
+    Scalar is 1.0 when SPY close > ma_days-day SMA, below_scale otherwise.
+    Shifted by 1 trading day (uses prior session close) — strictly no lookahead.
+    Fail-open: missing dates default to 1.0 at the call site via .get(date, 1.0).
+    """
+    try:
+        import yfinance as yf
+        spy = yf.download(
+            "SPY", start=BARS_START, end=BARS_END,
+            interval="1d", progress=False, auto_adjust=True,
+        )
+        if spy is None or spy.empty:
+            print("WARNING: SPY data empty — spy_ma_map will be empty (fail-open)")
+            return {}
+        closes = spy["Close"].dropna()
+        if len(closes) < max(ma_days + 1, 10):
+            print(f"WARNING: only {len(closes)} SPY bars — need ≥{ma_days + 1}")
+            return {}
+        ma = closes.rolling(ma_days, min_periods=max(ma_days // 2, 5)).mean()
+        above = closes > ma
+        # shift(1): today's signal uses yesterday's close — no lookahead
+        above_shifted = above.shift(1)
+        result: dict = {}
+        for ts, val in above_shifted.items():
+            if pd.isna(val):
+                continue
+            d = ts.date() if hasattr(ts, "date") else ts
+            result[d] = 1.0 if bool(val) else below_scale
+        return result
+    except Exception as exc:
+        print(f"WARNING: SPY fetch failed ({exc}) — spy_ma_map will be empty (fail-open)")
+        return {}
+
+
+def phase_spy_ma() -> None:
+    """H2 backtest: SPY 20d MA entry-size gate on both walk-forward legs.
+
+    Tests 4 variants (fast/slow MA × gate/half-heat) vs baseline.
+    Production default is spy_ma20_half (20d MA, 0.5 scale below MA).
+    Acceptance: both tune AND validation legs must improve Sharpe vs baseline.
+    """
+    preds = load_preds()
+    legs = [("2026-05-18", TUNE_END, "tune"), ("2026-06-01", "2026-06-11", "val")]
+    variants: list[tuple[int, float, str]] = [
+        (10, 0.0, "spy_ma10_gate"),   # fast MA, full block below
+        (10, 0.5, "spy_ma10_half"),   # fast MA, half heat below
+        (20, 0.0, "spy_ma20_gate"),   # production MA, full block below
+        (20, 0.5, "spy_ma20_half"),   # production default (matches live v0.4.2+)
+    ]
+    rows = []
+    for ma_days, below_scale, vlabel in variants:
+        spy_map = _load_spy_ma_map(ma_days=ma_days, below_scale=below_scale)
+        if not spy_map:
+            print(f"  SKIP {vlabel}: SPY data unavailable")
+            continue
+        for start, end, leg in legs:
+            p = Params(spy_ma_days=ma_days, spy_below_scale=below_scale,
+                       label=f"{vlabel}|{leg}")
+            res = simulate(preds, p, start, end, spy_ma_map=spy_map)
+            res.pop("_trades")
+            rows.append(res)
+            print(json.dumps(res, indent=1))
+
+    # baseline for direct comparison (same legs)
+    for start, end, leg in legs:
+        res = simulate(preds, Params(label=f"baseline|{leg}"), start, end)
+        res.pop("_trades")
+        rows.append(res)
+        print(json.dumps(res, indent=1))
+
+    out = pd.DataFrame(rows)
+    out.to_csv(CACHE / "spy_ma_results.csv", index=False)
+    print(f"\nSaved → {CACHE}/spy_ma_results.csv")
+    print("\nIndex/Risk Quant acceptance: a variant must improve Sharpe on BOTH "
+          "tune AND validation legs to pass.")
+
+
+# ─── H6 Signal persistence filter backtest ────────────────────────────────────
+
+def phase_persistence() -> None:
+    """H6 backtest: signal persistence filter — require N consecutive qualifying
+    bars before entering a position.
+
+    Hypothesis: a signal that persists for N bars (not just one transient spike)
+    represents genuine directional conviction and has higher win probability.
+    Expected trade-off: fewer entries (lower n_trades), higher win_rate / PF.
+
+    Variants: min_persistence_bars ∈ {0, 1, 2, 3}  (0 = baseline, no filter).
+    Acceptance: both tune AND validation legs must improve Sharpe vs baseline,
+    and win_rate improvement must offset the lost-opportunity cost in n_trades.
+    """
+    preds = load_preds()
+    legs = [("2026-05-18", TUNE_END, "tune"), ("2026-06-01", "2026-06-11", "val")]
+    rows = []
+    for n in [0, 1, 2, 3]:
+        label_tag = "baseline" if n == 0 else f"persist_{n}bar"
+        for start, end, leg in legs:
+            p = Params(min_persistence_bars=n, label=f"{label_tag}|{leg}")
+            res = simulate(preds, p, start, end)
+            res.pop("_trades")
+            rows.append(res)
+            print(json.dumps(res, indent=1))
+
+    out = pd.DataFrame(rows)
+    out.to_csv(CACHE / "persistence_results.csv", index=False)
+    print(f"\nSaved → {CACHE}/persistence_results.csv")
+    print("\nIndex/Risk Quant acceptance: improvement must hold on BOTH legs. "
+          "n_trades reduction > 50% with no Sharpe gain = REJECTED (lost alpha).")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", default="all",
-                    choices=["fetch", "features", "train", "simulate", "tune", "all"])
+                    choices=["fetch", "features", "train", "simulate", "tune",
+                             "spy_ma", "persistence", "all"])
     args = ap.parse_args()
     phases = {
         "fetch": phase_fetch, "features": phase_features, "train": phase_train,
         "simulate": phase_simulate, "tune": phase_tune,
+        "spy_ma": phase_spy_ma, "persistence": phase_persistence,
     }
     if args.phase == "all":
         for fn in phases.values():
