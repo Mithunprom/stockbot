@@ -305,6 +305,33 @@ class Params:
 DVOL = 19.75
 REGIME_SCALE = {0: 1.00, 1: 0.70, 2: 0.50}
 
+# ─── H7: Production-aligned Params baseline ───────────────────────────────────
+# Params defaults were set for the earlier multi-day-hold system and diverged
+# from production as signal_loop.py evolved. PROD_PARAMS mirrors Phase 5
+# signal_loop.py constants exactly so backtest comparisons represent the live
+# system. Key deltas vs Params defaults:
+#   max_hold_bars: 390 (1d) vs default 1170 (3d)
+#   stag_bars:     390 (== max_hold, disabled) vs default 780
+#   reversal_bars: 45 (confirmed reversal) vs default 3 (old noisy rule)
+#   dead_hi:       0.60 vs default 0.55
+#   max_pos:       6 vs default 4
+#   heat_ceiling:  0.75 vs default 0.60
+#   trades_per_day: 6 vs default 4
+#   pdt_enabled:   False (≥$25k equity) vs default True
+#   dyn_thresh_pct: 92.0 (self-calibrating) vs default None
+PROD_PARAMS = Params(
+    max_hold_bars=390,
+    stag_bars=390,
+    reversal_bars=45,
+    dead_hi=0.60,
+    max_pos=6,
+    heat_ceiling=0.75,
+    trades_per_day=6,
+    pdt_enabled=False,
+    dyn_thresh_pct=92.0,
+    label="prod_baseline",
+)
+
 
 def _exits(daily_vol: float, p: Params) -> tuple[float, float, float]:
     # Mirrors live signal_loop._atr_exits: consumes a TRUE daily-vol fraction.
@@ -531,8 +558,8 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         "n_trades": len(tdf),
         "open_at_end": len(positions),
         "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1) if len(tdf) else 0.0,
-        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl > 0).any() else 0.0,
-        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl < 0).any() else 0.0,
+        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if len(tdf) and (tdf.pnl > 0).any() else 0.0,
+        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if len(tdf) and (tdf.pnl < 0).any() else 0.0,
         "avg_hold_bars": round(float(tdf.bars.mean()), 0) if len(tdf) else 0,
         "exit_reasons": tdf.reason.value_counts().to_dict() if len(tdf) else {},
         "_trades": tdf,
@@ -598,18 +625,64 @@ def phase_tune() -> None:
     print(vout.to_string())
 
 
+def phase_stagnation() -> None:
+    """H7: Early stagnation exit — free capital from dead-in-the-water trades.
+
+    Production: SIZING_STAGNATION_BARS == SIZING_MAX_HOLD_BARS (390 bars = 1 day),
+    so the stagnation branch is dead code — max_hold always fires first on a flat
+    trade. The hypothesis: trades that show no meaningful movement by 50% of the
+    hold window (195 bars ≈ 3.25h) are unlikely to recover; exiting them early
+    frees capital for fresher opportunities without materially reducing win rate.
+
+    Uses PROD_PARAMS as the baseline (production-aligned: 1-day hold, 45-bar
+    confirmed reversal, 6 positions, 75% heat ceiling, dynamic threshold). This
+    is the first backtest run that mirrors the live system exactly.
+
+    4 variants × 2 legs (tune: May 18-29 / validation: Jun 1-11 2026).
+    Acceptance (Index/Risk Quant): improvement on BOTH legs required.
+    Results: cache/stagnation_results.csv
+    """
+    preds = load_preds()
+    variants = [
+        replace(PROD_PARAMS, stag_bars=390, label="h7_prod_baseline|stag_disabled"),
+        replace(PROD_PARAMS, stag_bars=195, label="h7_stag_50pct"),
+        replace(PROD_PARAMS, stag_bars=260, label="h7_stag_67pct"),
+        replace(PROD_PARAMS, stag_bars=312, label="h7_stag_80pct"),
+    ]
+    rows = []
+    for leg_start, leg_end, tag in [
+        ("2026-05-18", TUNE_END, "TUNE"),
+        ("2026-06-01", "2026-06-11", "VAL"),
+    ]:
+        for p in variants:
+            p_leg = replace(p, label=f"{p.label}|{tag}")
+            r = simulate(preds, p_leg, leg_start, leg_end)
+            r.pop("_trades")
+            rows.append(r)
+            summary = {k: v for k, v in r.items() if k not in ("exit_reasons",)}
+            print(json.dumps(summary, indent=1))
+    out = pd.DataFrame(rows)
+    out.to_csv(CACHE / "stagnation_results.csv", index=False)
+    print("\n=== stagnation summary (all variants × both legs) ===")
+    cols = ["label", "sharpe", "profit_factor", "win_rate", "max_dd_pct", "n_trades"]
+    print(out[cols].to_string(index=False))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", default="all",
-                    choices=["fetch", "features", "train", "simulate", "tune", "all"])
+                    choices=["fetch", "features", "train", "simulate", "tune",
+                             "stagnation", "all"])
     args = ap.parse_args()
     phases = {
         "fetch": phase_fetch, "features": phase_features, "train": phase_train,
         "simulate": phase_simulate, "tune": phase_tune,
+        "stagnation": phase_stagnation,
     }
     if args.phase == "all":
-        for fn in phases.values():
-            fn()
+        for name, fn in phases.items():
+            if name != "stagnation":   # stagnation needs preds; skip in full pipeline
+                fn()
     else:
         phases[args.phase]()
 
