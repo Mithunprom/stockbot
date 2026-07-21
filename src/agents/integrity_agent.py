@@ -74,6 +74,26 @@ def is_divergent(stored: float | None, expected: float | None,
     return abs(stored - expected) > tol
 
 
+def classify_row(stored: float | None, expected: float | None) -> str | None:
+    """Repair action for a closed-trade row, or None to leave it alone.
+
+    "rewrite": stored diverges from a sane recompute → exit-side corruption,
+        set stored to the recomputed value.
+    "nullify": recompute is itself impossible AND stored is too → entry-side
+        corruption (shares/entry columns wrong); no derived pct is
+        trustworthy, so NULL it out of the Kelly seed and pct stats.
+    None: consistent row — or recompute impossible while stored is sane
+        (stored came from the true PM entry notional at exit; keep it).
+    """
+    if expected is not None and abs(expected) > KELLY_SANE_ABS_PNL_PCT:
+        if stored is not None and abs(stored) > KELLY_SANE_ABS_PNL_PCT:
+            return "nullify"
+        return None
+    if is_divergent(stored, expected):
+        return "rewrite"
+    return None
+
+
 class IntegrityAgent:
     """Audit + (gated) repair of the trades table. Reports like the watchdog."""
 
@@ -103,11 +123,13 @@ class IntegrityAgent:
         divergent: list[dict[str, Any]] = []
         for tid, ticker, pnl, stored, entry_price, shares in result.all():
             exp = expected_pnl_pct(pnl, entry_price, shares)
-            if is_divergent(stored, exp):
+            action = classify_row(stored, exp)
+            if action is not None:
                 divergent.append({
                     "id": tid, "ticker": ticker,
-                    "stored_pnl_pct": round(float(stored), 5),
-                    "expected_pnl_pct": round(float(exp), 5),
+                    "stored_pnl_pct": round(float(stored), 5) if stored is not None else None,
+                    "expected_pnl_pct": round(float(exp), 5) if exp is not None else None,
+                    "action": action,
                 })
         if divergent:
             return {"name": "pnl_pct_consistency", "status": "critical",
@@ -182,7 +204,8 @@ class IntegrityAgent:
         except Exception as exc:
             return {"name": "db_vs_broker", "status": "warn", "healed": False,
                     "detail": f"broker positions unavailable: {exc}"}
-        broker_tickers = {p.get("symbol") for p in positions}
+        broker_tickers = {p.get("ticker") or p.get("symbol") for p in positions}
+        broker_tickers.discard(None)
         result = await session.execute(
             select(Trade.ticker).where(Trade.exit_time.is_(None))
         )
@@ -224,10 +247,19 @@ class IntegrityAgent:
             indent=2, default=str))
 
         for row in divergent:
-            await session.execute(
-                update(Trade).where(Trade.id == row["id"])
-                .values(pnl_pct=row["expected_pnl_pct"])
-            )
+            if row.get("action") == "nullify":
+                # Entry columns corrupt — no derived pct is trustworthy.
+                # NULL keeps the dollar pnl and excludes the row from the
+                # Kelly seed and pct-based stats instead of fabricating.
+                await session.execute(
+                    update(Trade).where(Trade.id == row["id"])
+                    .values(pnl_pct=None)
+                )
+            else:
+                await session.execute(
+                    update(Trade).where(Trade.id == row["id"])
+                    .values(pnl_pct=row["expected_pnl_pct"])
+                )
         now = datetime.now(timezone.utc)
         for row in stale:
             await session.execute(
