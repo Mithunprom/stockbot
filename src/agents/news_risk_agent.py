@@ -63,6 +63,38 @@ SEVERITY_KEYWORDS: dict[int, tuple[str, ...]] = {
 }
 LEVEL_NAMES = {0: "none", 1: "elevated", 2: "high", 3: "severe"}
 
+# Bullish catalysts — the tailwind side of the radar. Same idea, opposite
+# direction: deals, earnings beats, guidance raises, easing, strong Asia
+# overnight. Levels: 2=strong, 1=positive.
+BULLISH_KEYWORDS: dict[int, tuple[str, ...]] = {
+    2: (
+        "to acquire", "acquisition of", "merger agreement", "buyout offer",
+        "takeover bid", "beats estimates", "tops estimates", "raises guidance",
+        "raises full-year", "record quarterly revenue", "rate cut",
+        "stimulus package", "surges after earnings",
+    ),
+    1: (
+        "earnings beat", "beats expectations", "buyback", "dividend increase",
+        "upgraded to buy", "price target raised", "asian shares rise",
+        "asian markets rally", "nikkei surges", "hang seng rallies",
+        "futures rise", "futures climb", "all-time high", "record high",
+    ),
+}
+TAILWIND_NAMES = {0: "none", 1: "positive", 2: "strong"}
+
+
+def score_headline_bullish(title: str, body: str = "") -> tuple[int, list[str]]:
+    """Bullish level (0-2) for one article + matched phrases."""
+    text = ((title or "") + " " + (body or "")).lower()
+    matched: list[str] = []
+    level = 0
+    for lvl in (2, 1):
+        for phrase in BULLISH_KEYWORDS[lvl]:
+            if phrase in text:
+                matched.append(phrase.strip())
+                level = max(level, lvl)
+    return level, matched
+
 # The query sent to NewsAPI /everything for macro-shock coverage.
 MACRO_QUERY = (
     '"war" OR "invasion" OR "market crash" OR "nuclear" OR "emergency rate" OR '
@@ -94,29 +126,43 @@ def score_articles(articles: list[dict[str, Any]]) -> dict[str, Any]:
     one level. Level 1 sticks from a single article.
     """
     flagged: list[dict[str, Any]] = []
+    bullish: list[dict[str, Any]] = []
+    catalysts: dict[str, list[str]] = {}
     for a in articles:
+        base = {
+            "title": a.get("title", ""),
+            "source": (a.get("source") or {}).get("name", ""),
+            "published_at": a.get("publishedAt", ""),
+            "url": a.get("url", ""),
+            "tickers": a.get("tickers", []),
+        }
         lvl, matched = score_headline(a.get("title", ""), a.get("description", ""))
         if lvl > 0:
-            flagged.append({
-                "level": lvl,
-                "matched": matched,
-                "title": a.get("title", ""),
-                "source": (a.get("source") or {}).get("name", ""),
-                "published_at": a.get("publishedAt", ""),
-                "url": a.get("url", ""),
-            })
+            flagged.append({**base, "level": lvl, "matched": matched})
+        blvl, bmatched = score_headline_bullish(a.get("title", ""), a.get("description", ""))
+        if blvl > 0:
+            bullish.append({**base, "level": blvl, "matched": bmatched})
+            for t in base["tickers"]:
+                catalysts.setdefault(t.upper(), []).append(base["title"])
     flagged.sort(key=lambda f: f["level"], reverse=True)
+    bullish.sort(key=lambda f: f["level"], reverse=True)
     top = flagged[0]["level"] if flagged else 0
     if top >= 2:
         n_at_top = len({f["title"] for f in flagged if f["level"] >= top})
         if n_at_top < 2:
             top -= 1  # one lone headline demotes — wire services echo real shocks
+    tail = bullish[0]["level"] if bullish else 0
     return {
         "level": top,
         "level_name": LEVEL_NAMES[top],
+        "tailwind_level": tail,
+        "tailwind_name": TAILWIND_NAMES[tail],
         "n_flagged": len(flagged),
+        "n_bullish": len(bullish),
         "n_scanned": len(articles),
         "headlines": flagged[:10],
+        "bullish_headlines": bullish[:10],
+        "ticker_catalysts": {k: v[:3] for k, v in catalysts.items()},
     }
 
 
@@ -187,6 +233,7 @@ class NewsRiskAgent:
                     "source": {"name": (a.get("publisher") or {}).get("name", "polygon")},
                     "publishedAt": a.get("published_utc", ""),
                     "url": a.get("article_url", ""),
+                    "tickers": a.get("tickers", []),
                 } for a in resp.json().get("results", [])]
         except Exception as exc:
             logger.warning("news_risk_polygon_failed", error=str(exc))

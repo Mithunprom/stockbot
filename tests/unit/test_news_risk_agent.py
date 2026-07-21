@@ -62,3 +62,26 @@ class TestGateFailsOpen:
         monkeypatch.setattr(nra, "REPORT_PATH", tmp_path / "missing.json")
         nra._gate_cache["at"] = None
         assert current_news_risk_level() == 0
+
+
+class TestBullishScorer:
+    def test_deal_headline_is_strong(self):
+        from src.agents.news_risk_agent import score_headline_bullish
+        assert score_headline_bullish("Broadcom in merger agreement to acquire ChipCo")[0] == 2
+
+    def test_asia_overnight_is_positive(self):
+        from src.agents.news_risk_agent import score_headline_bullish
+        assert score_headline_bullish("Asian shares rise as Nikkei surges 2%")[0] >= 1
+
+    def test_tailwind_and_catalysts_in_aggregate(self):
+        out = score_articles([
+            {"title": "MegaCorp beats estimates and raises guidance",
+             "description": "", "source": {"name": "t"}, "publishedAt": "", "url": "",
+             "tickers": ["AMD"]},
+        ])
+        assert out["tailwind_name"] == "strong"
+        assert "AMD" in out["ticker_catalysts"]
+
+    def test_benign_headline_no_tailwind(self):
+        from src.agents.news_risk_agent import score_headline_bullish
+        assert score_headline_bullish("Company announces new office opening")[0] == 0

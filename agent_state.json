@@ -125,6 +125,14 @@
    "pm_priority_note": "Calibration fix already in production; IC delta confirmation is useful but not blocking. Lowest Railway backtest priority.",
    "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-10 \u2014 10 DAYS (2\u00d7 FLAG THRESHOLD)",
    "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H8",
+   "hypothesis": "News catalyst tilt: entries on tickers with a fresh bullish catalyst (deal/earnings beat/guidance raise from the News Radar) outperform; macro tailwind days deserve fuller heat",
+   "test": "needs a backtest phase joining reports/news_risk history to entries \u2014 design after H0 baseline",
+   "status": "proposed",
+   "added": "2026-07-21",
+   "added_by": "owner request (two-sided news radar, v0.4.10)"
   }
  ],
  "completed_iterations": [

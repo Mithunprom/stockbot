@@ -680,12 +680,15 @@ async function refresh() {
 
   try {
     const nr = await fetchJson("/news-risk", 15000);
-    const lv = nr.level_name || "none";
-    $("news").textContent = lv.toUpperCase();
-    $("news").className = "big " + (lv === "none" ? "ok" : lv === "elevated" ? "warn" : "crit");
-    $("newsd").textContent = nr.headlines && nr.headlines.length
-      ? nr.headlines[0].title.slice(0, 80)
-      : "no macro shock headlines · scans every 15 min pre-market + market hours";
+    const lv = nr.level_name || "none", tw = nr.tailwind_name || "none";
+    $("news").innerHTML = '<span class="' + (lv === "none" ? "ok" : lv === "elevated" ? "warn" : "crit") +
+      '">' + lv.toUpperCase() + '</span> <span style="font-size:13px;color:var(--ink2)">risk · </span>' +
+      '<span class="' + (tw === "none" ? "" : "ok") + '" style="font-size:16px">' + tw.toUpperCase() + '</span>' +
+      '<span style="font-size:13px;color:var(--ink2)"> tailwind</span>';
+    newsCatalysts = nr.ticker_catalysts || {};
+    const top = (nr.headlines || [])[0] || (nr.bullish_headlines || [])[0];
+    $("newsd").textContent = top ? top.title.slice(0, 80)
+      : "quiet tape · scans every 30 min from 06:00 ET";
   } catch (e) { $("news").textContent = "–"; $("newsd").textContent = "unavailable"; }
 
   try {
@@ -737,7 +740,9 @@ async function refresh() {
           ? '<span class="ok">✓ ready — waiting for capacity/cooldown</span>'
           : (g.blocked_by || []).map(b => '<span class="tag">' + esc(b) + "</span>").join("") ||
             '<span class="warn">gated</span>';
-        return "<tr><td><b>" + esc(g.ticker) + "</b></td>" +
+        const cat = newsCatalysts[g.ticker]
+          ? ' <span class="tag ok" title="' + esc(newsCatalysts[g.ticker][0]) + '">📰 catalyst</span>' : "";
+        return "<tr><td><b>" + esc(g.ticker) + "</b>" + cat + "</td>" +
           "<td>" + (g.lgbm_pred_return * 100).toFixed(2) + "%</td>" +
           "<td>" + (g.lgbm_dir_prob * 100).toFixed(0) + "%</td>" +
           "<td>" + (g.ensemble_signal ?? 0).toFixed(2) + "</td>" +
@@ -755,7 +760,7 @@ async function refresh() {
 }
 
 /* ── Refresh loop: countdown, pause when hidden, manual refresh ───────── */
-let marketOpen = null;
+let marketOpen = null, newsCatalysts = {};
 let nextIn = 30;
 function tickCountdown() {
   if (document.hidden) return;
