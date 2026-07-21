@@ -735,7 +735,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.8"
+APP_VERSION = "0.4.9"
 
 app = FastAPI(
     title="StockBot API",

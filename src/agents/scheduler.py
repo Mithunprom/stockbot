@@ -113,11 +113,11 @@ def create_scheduler(
             trigger=CronTrigger(
                 day_of_week="mon-fri",
                 hour="6-16",
-                minute="3,18,33,48",
+                minute="3,33",
                 timezone="America/New_York",
             ),
             id="news_risk_agent",
-            name="News Risk Agent (15 min, 06:00-16:48 ET)",
+            name="News Risk Agent (30 min, 06:00-16:33 ET)",
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=300,

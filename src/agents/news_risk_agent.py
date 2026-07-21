@@ -157,15 +157,52 @@ class NewsRiskAgent:
         self._last_email_at: datetime | None = None
         self.last_report: dict[str, Any] | None = None
 
+    async def _fetch_polygon(self, hours_back: int = 12) -> list[dict[str, Any]]:
+        """Market-wide news via Polygon (free tier: no meaningful cap).
+
+        No ticker filter — macro shocks aren't tagged with our universe.
+        Normalized to the NewsAPI article shape the scorer expects.
+        """
+        import httpx
+
+        from src.config import get_settings
+        s = get_settings()
+        if not s.polygon_api_key:
+            return []
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours_back)
+                 ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(
+                    "https://api.polygon.io/v2/reference/news",
+                    params={"apiKey": s.polygon_api_key,
+                            "published_utc.gte": since,
+                            "limit": 100, "order": "desc"})
+                if resp.status_code != 200:
+                    logger.warning("news_risk_polygon_http", status=resp.status_code)
+                    return []
+                return [{
+                    "title": a.get("title", ""),
+                    "description": a.get("description", ""),
+                    "source": {"name": (a.get("publisher") or {}).get("name", "polygon")},
+                    "publishedAt": a.get("published_utc", ""),
+                    "url": a.get("article_url", ""),
+                } for a in resp.json().get("results", [])]
+        except Exception as exc:
+            logger.warning("news_risk_polygon_failed", error=str(exc))
+            return []
+
     async def run(self) -> dict[str, Any]:
         from src.data.news import NewsAPIClient
 
-        articles: list[dict[str, Any]] = []
+        # Polygon is primary (no request budget); NewsAPI is best-effort —
+        # its free tier is 100 req/day and the sentiment poller shares the key.
+        articles: list[dict[str, Any]] = await self._fetch_polygon()
         try:
-            articles = await NewsAPIClient().fetch_recent(
+            articles += await NewsAPIClient().fetch_recent(
                 query=MACRO_QUERY, hours_back=12)
         except Exception as exc:
-            logger.warning("news_risk_fetch_failed", error=str(exc))
+            logger.warning("news_risk_newsapi_failed", error=str(exc))
 
         scored = score_articles(articles)
         report = {
