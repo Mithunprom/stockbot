@@ -30,6 +30,14 @@ SHARPE_ALERT_THRESHOLD = 1.0
 class ProfitAgent:
     """Analyzes trade performance and proposes ensemble weight adjustments."""
 
+    def __init__(self, live_ic_tracker: Any | None = None,
+                 ensemble: Any | None = None) -> None:
+        # Optional handles: the IC tracker attributes LGBM (its IC is measured
+        # on every prediction, not just executed trades), and the ensemble
+        # handle lets the report show the weights actually running.
+        self._ic_tracker = live_ic_tracker
+        self._ensemble = ensemble
+
     async def run(self, mode: str = "paper") -> dict[str, Any]:
         """Run daily PnL attribution cycle."""
         start = datetime.now(timezone.utc)
@@ -42,6 +50,24 @@ class ProfitAgent:
 
         metrics = self._compute_metrics(trades)
         attribution = self._attribute_pnl(trades)
+
+        # LGBM attribution from the live IC tracker — measured on ALL
+        # predictions (n in the thousands), not only executed trades.
+        if self._ic_tracker is not None:
+            try:
+                lgbm = await self._ic_tracker.compute_live_ic(window_days=14)
+                attribution["lgbm_ic"] = round(float(lgbm.get("ic", 0.0)), 4)
+                attribution["lgbm_dir_acc"] = round(float(lgbm.get("dir_acc", 0.5)), 4)
+                attribution["lgbm_n_predictions"] = int(lgbm.get("n_predictions", 0))
+            except Exception as exc:
+                logger.warning("profit_agent_lgbm_ic_failed", error=str(exc))
+
+        # Rank components by measured contribution — the owner's question
+        # "who is actually earning their weight?" answered in one list.
+        ranking = sorted(
+            [(k.removesuffix("_ic"), v) for k, v in attribution.items()
+             if k.endswith("_ic")],
+            key=lambda kv: kv[1], reverse=True)
         proposed_weights = self._propose_weights(attribution, metrics)
 
         report: dict[str, Any] = {
@@ -52,6 +78,16 @@ class ProfitAgent:
             "n_trades": len(trades),
             "metrics": metrics,
             "pnl_attribution": attribution,
+            "component_ranking": [
+                {"component": k, "ic": v} for k, v in ranking
+            ],
+            "current_weights": (
+                {"lgbm": self._ensemble.weights.lgbm,
+                 "transformer": self._ensemble.weights.transformer,
+                 "tcn": self._ensemble.weights.tcn,
+                 "sentiment": self._ensemble.weights.sentiment}
+                if self._ensemble is not None else None
+            ),
             # "ensemble_weights" is the key read by EnsembleWeights.from_staging().
             # "proposed_weights" kept for human-readable context.
             "ensemble_weights": proposed_weights,
@@ -100,6 +136,7 @@ class ProfitAgent:
                 .where(Trade.mode == mode)
                 .where(Trade.entry_time >= since)
                 .where(Trade.exit_time.is_not(None))
+                .where(Trade.pnl_pct.is_not(None))
                 .order_by(Trade.entry_time)
             )
             rows = result.scalars().all()
@@ -153,6 +190,22 @@ class ProfitAgent:
             else:
                 corr = 0.0
             attribution[f"{model}_ic"] = round(corr, 4)
+            # Hit rate: how often the component's sign agreed with the outcome
+            signs = np.sign(vals) * np.sign(pnl_arr)
+            informative = signs != 0
+            if informative.sum() > 0:
+                attribution[f"{model}_hit_rate"] = round(
+                    float((signs[informative] > 0).mean()), 4)
+
+        ens = np.array([t.get("ensemble_signal") or 0.0 for t in trades])
+        if len(ens) > 2 and ens.std() > 1e-9:
+            attribution["ensemble_ic"] = round(
+                float(np.corrcoef(ens, pnl_arr)[0, 1]), 4)
+            signs = np.sign(ens) * np.sign(pnl_arr)
+            informative = signs != 0
+            if informative.sum() > 0:
+                attribution["ensemble_hit_rate"] = round(
+                    float((signs[informative] > 0).mean()), 4)
 
         return attribution
 

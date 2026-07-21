@@ -207,6 +207,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="exitReasons" class="muted">loading…</div>
   </div>
 </div>
+<h2>Model contribution — who is earning their weight</h2>
+<div class="panel scroll">
+  <table><thead><tr>
+    <th>Component</th><th>Measured IC</th><th>Hit rate</th>
+    <th>Running weight</th><th>Proposed weight</th>
+  </tr></thead><tbody id="modelAttr"><tr><td colspan="5">loading…</td></tr></tbody></table>
+  <div class="muted" id="modelAttrFoot"></div>
+</div>
+
 <h2>Closed trades <span class="spacer"></span>
   <span class="btns" id="tradeFilters">
     <button data-f="all" class="active">All</button>
@@ -676,6 +685,40 @@ async function refresh() {
   } catch (e) {
     $("integ").textContent = "–"; $("integd").textContent = "unavailable";
     $("ichecks").textContent = "unavailable: " + e.message;
+  }
+
+  try {
+    const en = await fetchJson("/ensemble", 15000);
+    const cur = en.current_weights || {};
+    const st = en.staged || {};
+    const attr = st.pnl_attribution || {};
+    const prop = st.ensemble_weights || st.proposed_weights || {};
+    const comps = [
+      { name: "LightGBM", key: "lgbm", ic: attr.lgbm_ic, hit: attr.lgbm_dir_acc },
+      { name: "FinBERT sentiment", key: "sentiment", ic: attr.sentiment_ic, hit: attr.sentiment_hit_rate },
+      { name: "Transformer", key: "transformer", ic: attr.transformer_ic, hit: attr.transformer_hit_rate },
+      { name: "TCN", key: "tcn", ic: attr.tcn_ic, hit: attr.tcn_hit_rate },
+      { name: "Ensemble (blended)", key: null, ic: attr.ensemble_ic, hit: attr.ensemble_hit_rate },
+    ];
+    $("modelAttr").innerHTML = comps.map(c => {
+      const icv = c.ic == null ? null : Number(c.ic);
+      const icc = icv == null ? "" : icv > 0.02 ? "ok" : icv < -0.02 ? "crit" : "warn";
+      const w = c.key ? cur[c.key] : null, pw = c.key ? prop[c.key] : null;
+      const chg = (w != null && pw != null && Math.abs(pw - w) > 0.001)
+        ? ' <span class="' + (pw > w ? "ok" : "crit") + '">→ ' + (pw * 100).toFixed(0) + "%</span>" : "";
+      return "<tr><td><b>" + c.name + "</b></td>" +
+        '<td class="' + icc + '">' + (icv == null ? "–" : (icv >= 0 ? "+" : "") + icv.toFixed(3)) + "</td>" +
+        "<td>" + (c.hit == null ? "–" : (c.hit * 100).toFixed(0) + "%") + "</td>" +
+        "<td>" + (w == null ? "–" : (w * 100).toFixed(0) + "%") + "</td>" +
+        "<td>" + (pw == null ? "–" : (pw * 100).toFixed(0) + "%" ) + chg + "</td></tr>";
+    }).join("");
+    $("modelAttrFoot").textContent = st.timestamp
+      ? "attribution from Profit Agent " + st.timestamp.slice(0, 16).replace("T", " ") +
+        " UTC · n=" + (st.n_trades ?? "?") + " trades (LGBM IC from all predictions)" +
+        " · apply proposal: POST /admin/ensemble/apply-staged"
+      : "no staged attribution yet — Profit Agent runs daily at 16:30 ET";
+  } catch (e) {
+    $("modelAttr").innerHTML = '<tr><td colspan="5" class="muted">unavailable: ' + esc(e.message) + "</td></tr>";
   }
 
   try {

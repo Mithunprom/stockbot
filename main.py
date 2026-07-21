@@ -390,7 +390,6 @@ async def lifespan(app: FastAPI):
 
     risk_agent = RiskAgent(circuit_breakers, pos_manager, alpaca_router)
     latency_agent = LatencyAgent()
-    profit_agent = ProfitAgent()
     screener_agent = ScreenerAgent(signal_loop=_signal_loop)
     critique_agent = CritiqueAgent(session_factory=session_factory)
     retrain_agent = RetrainAgent(
@@ -403,6 +402,7 @@ async def lifespan(app: FastAPI):
         retrain_agent=retrain_agent,
     )
     live_ic_tracker = LiveICTracker(session_factory=session_factory)
+    profit_agent = ProfitAgent(live_ic_tracker=live_ic_tracker, ensemble=ensemble)
     drift_agent = DriftAgent(lookback_days=7, live_ic_tracker=live_ic_tracker)
     forecast_agent = ForecastEmailAgent()
     from src.agents.watchdog_agent import WatchdogAgent
@@ -428,6 +428,7 @@ async def lifespan(app: FastAPI):
     app.state.watchdog_agent = watchdog_agent
     app.state.integrity_agent = integrity_agent
     app.state.news_risk_agent = news_risk_agent
+    app.state.ensemble = ensemble
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -735,7 +736,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.10"
+APP_VERSION = "0.4.11"
 
 app = FastAPI(
     title="StockBot API",
@@ -922,6 +923,60 @@ async def news_risk_status() -> JSONResponse:
     if report is None:
         report = await agent.run()
     return JSONResponse(content=jsonable_encoder(report))
+
+
+@app.get("/ensemble")
+async def ensemble_weights_status() -> JSONResponse:
+    """Running ensemble weights + latest staged attribution/proposal."""
+    engine = getattr(app.state, "ensemble", None)
+    current = None
+    if engine is not None:
+        w = engine.weights
+        current = {"lgbm": w.lgbm, "transformer": w.transformer,
+                   "tcn": w.tcn, "sentiment": w.sentiment}
+    staged = None
+    try:
+        staged = json.loads(Path("config/staging/profit_suggestions.json").read_text())
+    except Exception:
+        pass
+    return JSONResponse(content=jsonable_encoder({
+        "current_weights": current,
+        "staged": staged,
+        "apply_endpoint": "POST /admin/ensemble/apply-staged (paper mode only)",
+    }))
+
+
+@app.post("/admin/ensemble/apply-staged")
+async def apply_staged_weights() -> JSONResponse:
+    """Hot-swap the running ensemble to the Profit Agent's staged proposal.
+
+    Human-triggered by design (CLAUDE.md: agents write to staging; a human
+    applies). Paper mode only — live weight changes go through config review.
+    """
+    if get_settings().alpaca_mode != "paper":
+        return JSONResponse(status_code=403, content={"error": "paper mode only"})
+    engine = getattr(app.state, "ensemble", None)
+    if engine is None:
+        return JSONResponse(status_code=503, content={"error": "ensemble not initialized"})
+    from src.models.ensemble import EnsembleWeights
+    staging = Path("config/staging/profit_suggestions.json")
+    if not staging.exists():
+        return JSONResponse(status_code=404, content={"error": "no staged proposal"})
+    old = engine.weights
+    try:
+        new = EnsembleWeights.from_staging(staging)
+        engine.update_weights(new)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": f"staged weights invalid: {exc}"})
+    logger.info("ensemble_weights_applied_from_staging")
+    return JSONResponse(content={
+        "applied": True,
+        "old": {"lgbm": old.lgbm, "transformer": old.transformer,
+                "tcn": old.tcn, "sentiment": old.sentiment},
+        "new": {"lgbm": new.lgbm, "transformer": new.transformer,
+                "tcn": new.tcn, "sentiment": new.sentiment},
+        "note": "runtime-only change; restart reverts to defaults unless staged file persists",
+    })
 
 
 @app.post("/admin/news-risk/run")
