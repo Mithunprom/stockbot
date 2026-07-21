@@ -1398,6 +1398,17 @@ class SignalLoop:
             )
             return False
 
+        # Gate 0d: Macro news risk (opt-in via NEWS_RISK_GATE=block).
+        # Blocks NEW entries only — exits always run. Fails open on any
+        # error: a broken news feed must never halt trading by itself.
+        try:
+            from src.agents.news_risk_agent import news_risk_blocks_entries
+            if news_risk_blocks_entries():
+                logger.info("entry_blocked_news_risk", ticker=ticker)
+                return False
+        except Exception:
+            pass
+
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
             logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)

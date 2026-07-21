@@ -417,6 +417,8 @@ async def lifespan(app: FastAPI):
         signal_loop=_signal_loop,
         alpaca=alpaca_router,
     )
+    from src.agents.news_risk_agent import NewsRiskAgent
+    news_risk_agent = NewsRiskAgent()
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
@@ -425,6 +427,7 @@ async def lifespan(app: FastAPI):
     app.state.forecast_agent = forecast_agent
     app.state.watchdog_agent = watchdog_agent
     app.state.integrity_agent = integrity_agent
+    app.state.news_risk_agent = news_risk_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -439,6 +442,7 @@ async def lifespan(app: FastAPI):
         forecast_agent=forecast_agent,
         watchdog_agent=watchdog_agent,
         integrity_agent=integrity_agent,
+        news_risk_agent=news_risk_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -731,7 +735,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.7"
+APP_VERSION = "0.4.8"
 
 app = FastAPI(
     title="StockBot API",
@@ -906,6 +910,27 @@ async def trigger_forecast() -> JSONResponse:
         return JSONResponse(content={"error": "Forecast agent not initialized"}, status_code=503)
     result = await agent.run()
     return JSONResponse(content=result)
+
+
+@app.get("/news-risk")
+async def news_risk_status() -> JSONResponse:
+    """Macro news risk snapshot — level, flagged headlines, gate mode."""
+    agent = getattr(app.state, "news_risk_agent", None)
+    if agent is None:
+        return JSONResponse(status_code=503, content={"error": "news risk agent not initialized"})
+    report = agent.last_report
+    if report is None:
+        report = await agent.run()
+    return JSONResponse(content=jsonable_encoder(report))
+
+
+@app.post("/admin/news-risk/run")
+async def trigger_news_risk() -> JSONResponse:
+    """Manually run the macro news risk scan."""
+    agent = getattr(app.state, "news_risk_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "news risk agent not initialized"}, status_code=503)
+    return JSONResponse(content=jsonable_encoder(await agent.run()))
 
 
 @app.post("/admin/integrity/run")

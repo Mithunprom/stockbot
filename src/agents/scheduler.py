@@ -34,6 +34,7 @@ def create_scheduler(
     forecast_agent: Any | None = None,
     watchdog_agent: Any | None = None,
     integrity_agent: Any | None = None,
+    news_risk_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -100,6 +101,23 @@ def create_scheduler(
             trigger=CronTrigger(minute="25", timezone="America/New_York"),
             id="integrity_agent",
             name="Integrity Sentinel (hourly ledger audit, 24/7)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+
+    # ── News Risk Agent: every 15 min, pre-market through close ──────────────
+    if news_risk_agent is not None:
+        scheduler.add_job(
+            news_risk_agent.run,
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour="6-16",
+                minute="3,18,33,48",
+                timezone="America/New_York",
+            ),
+            id="news_risk_agent",
+            name="News Risk Agent (15 min, 06:00-16:48 ET)",
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=300,

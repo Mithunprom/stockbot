@@ -113,6 +113,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   @media (max-width: 800px) { .two { grid-template-columns: 1fr; } nav { display: none; } }
   svg text { fill: var(--ink2); font-size: 10px; font-family: inherit; }
   .scroll { overflow-x: auto; }
+  #posTable td, #posTable th, #tradeTable td, #tradeTable th { white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -146,6 +147,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <span id="posd"></span></div></div>
   <div class="card"><h3>Kelly sizing</h3><div class="big" id="kelly">–</div><div class="muted" id="kellyd"></div></div>
   <div class="card"><h3>Ledger integrity</h3><div class="big" id="integ">–</div><div class="muted" id="integd"></div></div>
+  <div class="card"><h3>News risk</h3><div class="big" id="news">–</div><div class="muted" id="newsd"></div></div>
   <div class="card"><h3>Trading halt</h3><div class="big" id="halt">–</div><div class="muted" id="haltd"></div></div>
   <div class="card"><h3>Last loop tick</h3><div class="big" id="tick">–</div><div class="muted" id="tickd"></div></div>
   <div class="card"><h3>Tick errors</h3><div class="big" id="errors">–</div><div class="muted" id="errorsd"></div></div>
@@ -595,7 +597,7 @@ async function refresh() {
     $("botd").textContent = "v" + health.version + " · loop " +
       (health.signal_loop_active ? "active" : "INACTIVE") + " · " + (health.mode || "");
 
-    const mkt = health.market_open ?? null;
+    const mkt = health.market_open ?? null; marketOpen = mkt;
     const et = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York",
       hour: "2-digit", minute: "2-digit" });
     $("mktpill").textContent = (mkt === null ? "" : mkt ? "market open · " : "market closed · ") + et + " ET";
@@ -677,6 +679,16 @@ async function refresh() {
   }
 
   try {
+    const nr = await fetchJson("/news-risk", 15000);
+    const lv = nr.level_name || "none";
+    $("news").textContent = lv.toUpperCase();
+    $("news").className = "big " + (lv === "none" ? "ok" : lv === "elevated" ? "warn" : "crit");
+    $("newsd").textContent = nr.headlines && nr.headlines.length
+      ? nr.headlines[0].title.slice(0, 80)
+      : "no macro shock headlines · scans every 15 min pre-market + market hours";
+  } catch (e) { $("news").textContent = "–"; $("newsd").textContent = "unavailable"; }
+
+  try {
     const pd = await fetchJson("/positions/detail");
     const rows = (pd.positions || []).map(p => {
       const dirn = p.side === "long" ? 1 : -1;
@@ -689,7 +701,7 @@ async function refresh() {
         { label: "Ticker", key: "ticker" }, { label: "Side" },
         { label: "Qty", key: "qty" }, { label: "Entry", key: "avg_entry_price" },
         { label: "Last", key: "last_price" }, { label: "PnL", key: "upnl" },
-        { label: "Held", key: "bars_held" }, { label: "→ Take profit", key: "move" },
+        { label: "Held", key: "bars_held", }, { label: "→ Take profit", key: "move" },
       ], rows, p => {
         const pnlc = p.upnl >= 0 ? "ok" : "crit";
         const prog = Math.max(0, Math.min(1, p.move / (p.take_profit_pct || 0.02)));
@@ -698,7 +710,7 @@ async function refresh() {
           "<td>$" + fmt(p.last_price) + "</td>" +
           '<td class="' + pnlc + '">' + signed(p.upnl) + " (" +
           (p.move * 100).toFixed(2) + "%)</td>" +
-          "<td>" + p.bars_held + "/" + p.max_hold_bars + " bars</td>" +
+          '<td title="minutes-in-market counter; resets to 0 on redeploy">' + p.bars_held + "/" + p.max_hold_bars + " bars</td>" +
           '<td><span class="bar"><i class="' + (p.move < 0 ? "crit" : "") + '" style="width:' +
           (prog * 100).toFixed(0) + '%"></i></span> <span class="muted">' +
           (p.move * 100).toFixed(2) + "% of " + ((p.take_profit_pct || 0) * 100).toFixed(1) +
@@ -732,7 +744,9 @@ async function refresh() {
           "<td>" + status + "</td></tr>";
       }).join("");
     $("watchlist").innerHTML = rows ||
-      '<tr><td colspan="5" class="muted">no bullish signals right now</td></tr>';
+      '<tr><td colspan="5" class="muted">' + (marketOpen === false
+        ? "market closed — signal analysis repopulates within a minute of the 09:30 ET open"
+        : "no bullish signals right now") + "</td></tr>";
   } catch (e) {
     $("watchlist").innerHTML = '<tr><td colspan="5" class="muted">unavailable: ' + esc(e.message) + "</td></tr>";
   }
@@ -741,6 +755,7 @@ async function refresh() {
 }
 
 /* ── Refresh loop: countdown, pause when hidden, manual refresh ───────── */
+let marketOpen = null;
 let nextIn = 30;
 function tickCountdown() {
   if (document.hidden) return;
