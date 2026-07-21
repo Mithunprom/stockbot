@@ -1,7 +1,29 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-07-20 (W30 weekly review).
+Last updated: 2026-07-20 (W30 weekly review + CODE RED declared).
+
+## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
+
+**Trigger:** trailing-7d PF 0.30 (n=17) AND a confirmed ledger defect: partial-fill
+exits wrote corrupted `pnl_pct` (e.g. −15.7% stored on a −4.0% trade, one row at
++993%), and `_seed_kelly_from_db()` re-injected those rows into position sizing
+after every redeploy. Two zombie open rows (MU/WDC, 2026-06-12) sat unclosable
+by orphan recovery. Full declaration: `reports/program/CODE-RED-2026-07-20.md`.
+
+**Posture (manifesto governance rule F):** integrity first, validation throughput
+second, new alpha queued. Personas 10 (Integrity Sentinel) + 11 (Principal
+Skeptic) onboarded; `src/agents/integrity_agent.py` audits the ledger hourly.
+
+**Exit criteria:** integrity report clean 5 consecutive trading days + Kelly
+window verified sane + ≥1 hypothesis reaches data_run. Exit is logged here.
+
+**403 note (revises W30):** the production endpoints are reachable from the
+owner's network (verified 2026-07-20 via curl — /health, /trades, /diagnostics
+all 200). The 403 affects the Claude sandbox proxy and GitHub Actions runners
+(external watchdog failing since ≥07-17) — i.e. datacenter IPs, not the service.
+M1/M2 are measurable again from the owner's side; an external uptime monitor is
+still recommended for automation-side visibility.
 
 ## North star
 Stable ops → measured edge → paper-trading gate → client product.
@@ -50,6 +72,8 @@ monitor (UptimeRobot/Pingdom) to restore M1/M2 visibility independent of the san
 | Alpaca paper account external resets | MED | /track + history now read broker directly; keep baseline notes in agent_state |
 
 ## Decision log
+- 2026-07-20: CODE RED declared (ledger defect + PF 0.30/7d); Integrity Sentinel
+  + Principal Skeptic personas onboarded; v0.4.5 fix + repair (freeze-exempt: bug/monitoring)
 - 2026-07-10: PR-only governance; risk controls never weakened (manifesto)
 - 2026-07-11: H5 must be signal-conditional (unconditional 3-day holds = −493bps, June backtest)
 - 2026-07-13: owner approved H5+H3 deploy ahead of data runs (paper = lab)

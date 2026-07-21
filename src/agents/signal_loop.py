@@ -2085,8 +2085,8 @@ class SignalLoop:
                 await self._write_trade_exit(
                     ticker=ticker,
                     fill_price=fill_price,
-                    qty=result.filled_qty,
                     pnl=pnl,
+                    pnl_pct=pnl_pct,
                     exit_time=filled_at,
                     exit_reason=exit_reason,
                 )
@@ -2163,12 +2163,19 @@ class SignalLoop:
         self,
         ticker: str,
         fill_price: float,
-        qty: float,
         pnl: float,
+        pnl_pct: float,
         exit_time: datetime,
         exit_reason: str = "signal_reversal",
     ) -> None:
-        """Update an existing trade row with exit price and PnL."""
+        """Update an existing trade row with exit price and PnL.
+
+        pnl_pct MUST be computed by the caller from the true entry notional.
+        Re-deriving it here from the order's filled_qty corrupted the ledger
+        on partially filled exits (filled_qty < position qty while pnl was
+        full-position), and _seed_kelly_from_db() then fed the garbage into
+        sizing after every redeploy (2026-07-20 audit).
+        """
         from sqlalchemy import update
 
         from src.data.db import Trade
@@ -2199,9 +2206,6 @@ class SignalLoop:
             logger.debug("trade_exit_no_open_record", ticker=ticker)
             return
 
-        # Use entry notional for accurate pnl_pct (not exit notional)
-        entry_notional = qty * fill_price - pnl  # entry_price * qty = exit_notional - pnl (for longs)
-        pnl_pct = pnl / max(abs(entry_notional), 1.0)
         try:
             async with self._sf() as session:
                 await session.execute(

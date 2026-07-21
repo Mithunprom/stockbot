@@ -33,6 +33,7 @@ def create_scheduler(
     live_ic_tracker: Any | None = None,
     forecast_agent: Any | None = None,
     watchdog_agent: Any | None = None,
+    integrity_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -87,6 +88,18 @@ def create_scheduler(
             trigger=CronTrigger(minute="10", timezone="America/New_York"),
             id="watchdog_agent_light",
             name="Watchdog Agent (hourly liveness, 24/7)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+
+    # ── Integrity Sentinel: hourly ledger audit, 24/7 ────────────────────────
+    if integrity_agent is not None:
+        scheduler.add_job(
+            integrity_agent.run,
+            trigger=CronTrigger(minute="25", timezone="America/New_York"),
+            id="integrity_agent",
+            name="Integrity Sentinel (hourly ledger audit, 24/7)",
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=300,

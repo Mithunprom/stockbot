@@ -411,6 +411,12 @@ async def lifespan(app: FastAPI):
         pos_manager=pos_manager,
         circuit_breakers=circuit_breakers,
     )
+    from src.agents.integrity_agent import IntegrityAgent
+    integrity_agent = IntegrityAgent(
+        session_factory=session_factory,
+        signal_loop=_signal_loop,
+        alpaca=alpaca_router,
+    )
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
@@ -418,6 +424,7 @@ async def lifespan(app: FastAPI):
     app.state.drift_agent = drift_agent
     app.state.forecast_agent = forecast_agent
     app.state.watchdog_agent = watchdog_agent
+    app.state.integrity_agent = integrity_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -431,6 +438,7 @@ async def lifespan(app: FastAPI):
         live_ic_tracker=live_ic_tracker,
         forecast_agent=forecast_agent,
         watchdog_agent=watchdog_agent,
+        integrity_agent=integrity_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -723,7 +731,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.4"
+APP_VERSION = "0.4.5"
 
 app = FastAPI(
     title="StockBot API",
@@ -815,6 +823,20 @@ async def watchdog_status() -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(payload))
 
 
+@app.get("/integrity")
+async def integrity_status() -> JSONResponse:
+    """Integrity Sentinel snapshot — ledger audit (pnl_pct, zombies, Kelly seed)."""
+    agent = getattr(app.state, "integrity_agent", None)
+    if agent is None:
+        return JSONResponse(
+            status_code=503, content={"status": "critical", "detail": "integrity agent not initialized"}
+        )
+    report = agent.last_report
+    if report is None:
+        report = await agent.run()
+    return JSONResponse(content=jsonable_encoder(report))
+
+
 @app.get("/dashboard")
 async def dashboard() -> HTMLResponse:
     """Operator dashboard — full internals (watchdog, Kelly, heat, gates)."""
@@ -874,6 +896,18 @@ async def trigger_forecast() -> JSONResponse:
         return JSONResponse(content={"error": "Forecast agent not initialized"}, status_code=503)
     result = await agent.run()
     return JSONResponse(content=result)
+
+
+@app.post("/admin/integrity/run")
+async def trigger_integrity(repair: bool = False) -> JSONResponse:
+    """Manually run the Integrity Sentinel. `?repair=true` also rewrites
+    divergent pnl_pct rows and closes zombie open rows (paper mode only,
+    with a JSON backup written to reports/integrity/ first)."""
+    agent = getattr(app.state, "integrity_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Integrity agent not initialized"}, status_code=503)
+    result = await agent.run(repair=repair)
+    return JSONResponse(content=jsonable_encoder(result))
 
 
 @app.post("/admin/research/daily")
