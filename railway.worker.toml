@@ -1,0 +1,24 @@
+# Config-as-code for the R&D WORKER service (NOT the main stockbot app).
+#
+# Usage: Railway dashboard → the worker service → Settings → Config-as-code
+# → set file path to `railway.worker.toml`. This overrides dashboard fields,
+# so the service is correct-by-construction:
+#   - starts the headless research daemon, not uvicorn
+#   - NO healthcheckPath: the worker serves no HTTP; a /health check would
+#     mark every deploy unhealthy and kill it (the main app's railway.toml
+#     keeps its /health check — do not share configs between the two)
+#
+# The worker still needs these Variables set on the service:
+#   AGENT_WORKER_ENABLE=true        (hard gate — refuses to start without it)
+#   ALPACA_API_KEY / ALPACA_SECRET_KEY   (paper keys — historical bars for backtests)
+#   ANTHROPIC_API_KEY               (optional — desk proposes next hypothesis)
+#   AGENT_WORKER_CYCLE_SECONDS      (optional — default 21600 = 6h)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python agent_worker.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
