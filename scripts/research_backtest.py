@@ -604,6 +604,19 @@ def phase_tune() -> None:
     vout.to_csv(CACHE / "validation_results.csv", index=False)
     print(vout.to_string())
 
+    # Machine-readable summary for agent_worker.extract_metrics — the tables
+    # above are for humans; the worker's regexes need key=value text. Report
+    # the VALIDATION-leg baseline (the honest out-of-sample number), never
+    # the tuned-leg figures.
+    print(
+        f"\nSUMMARY (baseline validation leg {base_v['start']}→{base_v['end']}): "
+        f"sharpe={base_v['sharpe']} "
+        f"pf={base_v['profit_factor']} "
+        f"return={base_v['total_return_pct']}% "
+        f"drawdown={base_v['max_dd_pct']}% "
+        f"n_trades={base_v['n_trades']}"
+    )
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
