@@ -10,14 +10,11 @@
   "lgbm_oos_ic": 0.166
  },
  "live_data_status": {
-  "date": "2026-07-20",
-  "endpoints_checked": [
-   "https://stockbot-production-cbde.up.railway.app/portfolio/summary",
-   "https://stockbot-production-cbde.up.railway.app/watchdog",
-   "https://stockbot-production-cbde.up.railway.app/trades?limit=200"
-  ],
-  "status": "UNAVAILABLE \u2014 HTTP 403 from proxy tunnel. Eighth consecutive day (Jul 12\u201320). M1 watchdog and M2 trade count unverifiable for second full week. Endpoint 403 escalated to CRITICAL in ROADMAP risk register.",
-  "action": "W30 weekly review executed. No live metrics readable. Program report written to reports/program/2026-W30.md; endpoint 403 + Railway worker both escalated to CRITICAL."
+  "date": "2026-07-21",
+  "status": "OK via snapshot relay",
+  "note": "Cloud sandbox cannot reach Railway directly (egress proxy refuses CONNECT \u2014 the 'endpoint 403'). GitHub Actions relays production state every 30 min (market hours) to the live-snapshot branch.",
+  "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades,meta}.json",
+  "action": "Cloud routines MUST read these snapshot files instead of hitting Railway. Local/owner sessions can still hit Railway directly."
  },
  "hypothesis_queue": [
   {
