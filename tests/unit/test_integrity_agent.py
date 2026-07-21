@@ -94,3 +94,12 @@ class TestKellySanityBound:
         # corruption (-24%, -15.7%) is caught by the recomputation check,
         # which is why both checks exist.
         assert sum(1 for p in corrupt_rows if abs(p) > KELLY_SANE_ABS_PNL_PCT) == 2
+
+
+class TestSharesReconciliation:
+    def test_implied_shares_math_matches_mstr_row_99(self):
+        # stored pnl_pct trusted (post-v0.4.5); shares column indicted:
+        # 51 recorded but pnl/(stored*entry) implies the true 156.5
+        pnl, stored, entry = 777.0, 0.05172, 96.047255
+        implied = pnl / (stored * entry)
+        assert abs(implied - 156.4) < 1.0

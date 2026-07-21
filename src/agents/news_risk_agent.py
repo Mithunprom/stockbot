@@ -43,7 +43,8 @@ EMAIL_DEDUPE_HOURS = 4
 # Phrases are deliberately specific: "war" alone would fire on "bidding war".
 SEVERITY_KEYWORDS: dict[int, tuple[str, ...]] = {
     3: (
-        "declares war", "declaration of war", "nuclear", "invasion of",
+        "declares war", "declaration of war", "nuclear strike", "nuclear threat",
+        "nuclear war", "nuclear attack", "invasion of",
         "invades", "market crash", "trading halted", "circuit breaker triggered",
         "bank collapse", "bank failure", "sovereign default", "flash crash",
         "state of emergency", "terrorist attack",
@@ -105,6 +106,21 @@ MACRO_QUERY = (
 _gate_cache: dict[str, Any] = {"at": None, "level": 0}
 
 
+SPECULATIVE_STARTS = ("if ", "should ", "could ", "would ", "why ", "what ",
+                      "which ", "is ", "are ", "will ", "can ", "here's ")
+
+
+def is_speculative(title: str) -> bool:
+    """Opinion/listicle detector: questions and hypotheticals aren't events.
+
+    Born 2026-07-21: 'If a Stock Market Crash Comes in July…' (Motley Fool)
+    plus a nuclear-energy ETF listicle pushed the radar to SEVERE on a calm
+    tape. Speculative headlines are capped at level 1.
+    """
+    t = (title or "").strip().lower()
+    return "?" in t or t.startswith(SPECULATIVE_STARTS)
+
+
 def score_headline(title: str, body: str = "") -> tuple[int, list[str]]:
     """Severity level (0-3) for one article + which phrases matched."""
     text = ((title or "") + " " + (body or "")).lower()
@@ -115,6 +131,8 @@ def score_headline(title: str, body: str = "") -> tuple[int, list[str]]:
             if phrase in text:
                 matched.append(phrase.strip())
                 level = max(level, lvl)
+    if level > 1 and is_speculative(title):
+        level = 1
     return level, matched
 
 

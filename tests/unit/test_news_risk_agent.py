@@ -85,3 +85,20 @@ class TestBullishScorer:
     def test_benign_headline_no_tailwind(self):
         from src.agents.news_risk_agent import score_headline_bullish
         assert score_headline_bullish("Company announces new office opening")[0] == 0
+
+
+class TestSpeculativeGuard:
+    def test_clickbait_hypothetical_capped(self):
+        from src.agents.news_risk_agent import score_headline
+        lvl, _ = score_headline("If a Stock Market Crash Comes in July, You'll Rest Easy")
+        assert lvl <= 1
+
+    def test_question_headline_capped(self):
+        from src.agents.news_risk_agent import score_headline
+        lvl, _ = score_headline("Which Is the Better Energy ETF for the AI Era: Nuclear NLR?")
+        assert lvl <= 1
+
+    def test_real_event_not_capped(self):
+        from src.agents.news_risk_agent import score_headline
+        assert score_headline("Nuclear threat escalates as talks collapse")[0] == 3
+        assert score_headline("Trading halted after market crash on NYSE")[0] == 3

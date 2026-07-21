@@ -49,6 +49,10 @@ STALE_OPEN_DAYS = 5
 # seed window is presumed poisoned by an accounting bug.
 KELLY_SANE_ABS_PNL_PCT = 0.25
 AUDIT_WINDOW_DAYS = 60
+# Exit rows written after this moment carry a caller-computed pnl_pct from the
+# true position notional (v0.4.5 root fix, deployed 2026-07-21 05:20 UTC).
+# For those rows a divergence means the entry-side SHARES column is wrong.
+TRUSTED_PNL_PCT_SINCE = datetime(2026, 7, 21, 5, 20, tzinfo=timezone.utc)
 EMAIL_DEDUPE_HOURS = 4
 
 
@@ -117,12 +121,25 @@ class IntegrityAgent:
         cutoff = datetime.now(timezone.utc) - timedelta(days=AUDIT_WINDOW_DAYS)
         result = await session.execute(
             select(Trade.id, Trade.ticker, Trade.pnl, Trade.pnl_pct,
-                   Trade.entry_price, Trade.shares)
+                   Trade.entry_price, Trade.shares, Trade.exit_time)
             .where(Trade.exit_time.isnot(None), Trade.exit_time >= cutoff)
         )
         divergent: list[dict[str, Any]] = []
-        for tid, ticker, pnl, stored, entry_price, shares in result.all():
+        for tid, ticker, pnl, stored, entry_price, shares, exit_time in result.all():
             exp = expected_pnl_pct(pnl, entry_price, shares)
+            ts = exit_time if exit_time.tzinfo else exit_time.replace(tzinfo=timezone.utc)
+            if ts >= TRUSTED_PNL_PCT_SINCE:
+                # stored is truth; a divergence indicts the shares column
+                if is_divergent(stored, exp) and stored and entry_price:
+                    true_shares = round(float(pnl) / (float(stored) * float(entry_price)), 4)
+                    divergent.append({
+                        "id": tid, "ticker": ticker,
+                        "stored_pnl_pct": round(float(stored), 5),
+                        "expected_pnl_pct": round(float(exp), 5) if exp is not None else None,
+                        "shares_recorded": shares, "shares_implied": true_shares,
+                        "action": "reconcile_shares",
+                    })
+                continue
             action = classify_row(stored, exp)
             if action is not None:
                 divergent.append({
@@ -247,6 +264,12 @@ class IntegrityAgent:
             indent=2, default=str))
 
         for row in divergent:
+            if row.get("action") == "reconcile_shares":
+                await session.execute(
+                    update(Trade).where(Trade.id == row["id"])
+                    .values(shares=row["shares_implied"])
+                )
+                continue
             if row.get("action") == "nullify":
                 # Entry columns corrupt — no derived pct is trustworthy.
                 # NULL keeps the dollar pnl and excludes the row from the

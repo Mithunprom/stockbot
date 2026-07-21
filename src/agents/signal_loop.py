@@ -2098,6 +2098,7 @@ class SignalLoop:
                     fill_price=fill_price,
                     pnl=pnl,
                     pnl_pct=pnl_pct,
+                    exit_qty=qty,
                     exit_time=filled_at,
                     exit_reason=exit_reason,
                 )
@@ -2176,6 +2177,7 @@ class SignalLoop:
         fill_price: float,
         pnl: float,
         pnl_pct: float,
+        exit_qty: float | None,
         exit_time: datetime,
         exit_reason: str = "signal_reversal",
     ) -> None:
@@ -2228,6 +2230,11 @@ class SignalLoop:
                         pnl=pnl,
                         pnl_pct=pnl_pct,
                         exit_reason=exit_reason,
+                        # Reconcile shares with the qty actually closed — the
+                        # entry write records the immediate filled_qty, which
+                        # under-counts on partial ENTRY fills (MA/MSTR rows
+                        # 98/99, 2026-07-21: 51 recorded vs 156.5 real).
+                        **({"shares": exit_qty} if exit_qty else {}),
                     )
                 )
                 await session.commit()
