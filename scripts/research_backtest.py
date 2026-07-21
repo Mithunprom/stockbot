@@ -282,10 +282,11 @@ class Params:
     max_hold_bars: int = 1170
     stag_bars: int = 780
     stag_pnl: float = 0.004
-    reversal_bars: int = 3
+    reversal_bars: int = 45
     catastrophic_mult: float = 2.0
     cost_threshold: float = 0.003
     dead_hi: float = 0.55
+    dead_lo: float = 0.40
     entry_start: tuple = (9, 40)
     entry_end: tuple = (15, 30)
     max_entries_tick: int = 2
@@ -321,6 +322,30 @@ def _exits(daily_vol: float, p: Params) -> tuple[float, float, float]:
 # real daily figure — with the 1m proxy as a per-row fallback.
 DAILY_VOL_FLOOR = 0.005
 DAILY_VOL_CEIL = 0.15
+
+
+def _is_confirmed_reversal_long(
+    pred_return: float,
+    dir_prob: float,
+    threshold: float,
+    dead_lo: float,
+) -> bool:
+    """True when this bar is a CONFIRMED bearish signal against a long position.
+
+    Mirrors production signal_loop._confirmed_opposite_signal:
+    opposite direction + magnitude above the cost threshold + dir_prob below
+    the lower dead-zone bound (strong bearish conviction, not noise).
+
+    Pre-v0.3.4 used a bare sign check (pred_return < 0) that misfired on
+    every momentary sign flip — the root cause of the 25-minute median hold
+    diagnosed on 2026-07-07. The production fix landed in v0.3.4; this
+    backtest was not updated until now.
+    """
+    if pred_return >= 0:
+        return False
+    if abs(pred_return) <= threshold:
+        return False
+    return dir_prob < dead_lo
 
 
 def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
@@ -420,7 +445,12 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             elif pos["bars"] >= p.stag_bars and abs(unreal) < p.stag_pnl:
                 reason = "stagnation"
             else:
-                if r.pred_return < 0:
+                # Confirmed reversal: opposite signal must clear quality gates
+                # (mirrors production _confirmed_opposite_signal — sign-only
+                # check was the pre-v0.3.4 bug that turned swing trades into
+                # 25-minute scalps).
+                rev_thr = day_thr.get(today, p.cost_threshold) if p.dyn_thresh_pct else p.cost_threshold
+                if _is_confirmed_reversal_long(r.pred_return, r.dir_prob, rev_thr, p.dead_lo):
                     pos["rev"] += 1
                 else:
                     pos["rev"] = 0
@@ -531,8 +561,8 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         "n_trades": len(tdf),
         "open_at_end": len(positions),
         "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1) if len(tdf) else 0.0,
-        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl > 0).any() else 0.0,
-        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl < 0).any() else 0.0,
+        "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if len(tdf) and (tdf.pnl > 0).any() else 0.0,
+        "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if len(tdf) and (tdf.pnl < 0).any() else 0.0,
         "avg_hold_bars": round(float(tdf.bars.mean()), 0) if len(tdf) else 0,
         "exit_reasons": tdf.reason.value_counts().to_dict() if len(tdf) else {},
         "_trades": tdf,
