@@ -71,11 +71,18 @@ def phase_fetch() -> None:
     from alpaca.data.timeframe import TimeFrame
     from alpaca.data.enums import Adjustment, DataFeed
 
-    keys: dict[str, str] = {}
-    for line in open(".env"):
-        if line.startswith(("ALPACA_API_KEY", "ALPACA_SECRET_KEY")) and "=" in line:
-            k, v = line.strip().split("=", 1)
-            keys[k] = v
+    # Env vars first (Railway worker has no .env file), .env fallback (local dev)
+    import os
+    keys: dict[str, str] = {
+        k: os.environ[k]
+        for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")
+        if os.environ.get(k)
+    }
+    if len(keys) < 2 and Path(".env").exists():
+        for line in open(".env"):
+            if line.startswith(("ALPACA_API_KEY", "ALPACA_SECRET_KEY")) and "=" in line:
+                k, v = line.strip().split("=", 1)
+                keys.setdefault(k.strip(), v.strip())
     client = StockHistoricalDataClient(keys["ALPACA_API_KEY"], keys["ALPACA_SECRET_KEY"])
 
     for ticker in universe():
