@@ -13,6 +13,7 @@ import pytest
 from src.agents.integrity_agent import (
     KELLY_SANE_ABS_PNL_PCT,
     PNL_PCT_TOLERANCE,
+    classify_row,
     expected_pnl_pct,
     is_divergent,
 )
@@ -58,6 +59,29 @@ class TestIsDivergent:
         # Rows lacking inputs are not flagged (no guessing)
         assert not is_divergent(stored=None, expected=0.05)
         assert not is_divergent(stored=0.05, expected=None)
+
+
+class TestClassifyRow:
+    def test_exit_side_corruption_rewritten(self):
+        # GOOGL: stored -15.7%, true -4.0% → rewrite to the recompute
+        assert classify_row(stored=-0.1570, expected=-0.0403) == "rewrite"
+
+    def test_entry_side_corruption_nullified(self):
+        # SMCI row 83: shares column under-recorded (partial ENTRY fill),
+        # so the recompute itself is impossible (-31.7%). If stored is also
+        # insane, no derived pct is trustworthy → NULL.
+        assert classify_row(stored=-0.3171, expected=-0.3171) == "nullify"
+
+    def test_sane_stored_with_insane_recompute_kept(self):
+        # Same row BEFORE the v0.4.5 repair: stored -6.9% (from true PM
+        # entry notional) vs insane recompute -31.7% → keep stored.
+        assert classify_row(stored=-0.0691, expected=-0.3171) is None
+
+    def test_consistent_row_untouched(self):
+        assert classify_row(stored=-0.0403, expected=-0.0403) is None
+
+    def test_missing_recompute_untouched(self):
+        assert classify_row(stored=-0.0403, expected=None) is None
 
 
 class TestKellySanityBound:
