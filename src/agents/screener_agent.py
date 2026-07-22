@@ -74,7 +74,13 @@ EXCLUDE_TICKERS: set[str] = {"META"}
 # ─── S&P 500 constituent fetch ─────────────────────────────────────────────────
 
 def _fetch_sp500_tickers() -> list[str]:
-    """Fetch current S&P 500 tickers from Wikipedia."""
+    """Fetch current S&P 500 tickers.
+
+    Primary: Wikipedia via pandas.read_html (needs lxml — its absence on
+    Railway silently reduced the screener to anchors-only for months, so a
+    failure here now falls back rather than returning empty).
+    Fallback: the datahub CSV mirror, parsed with the stdlib.
+    """
     try:
         import pandas as pd
         tables = pd.read_html(
@@ -85,7 +91,21 @@ def _fetch_sp500_tickers() -> list[str]:
         # Wikipedia uses . for class shares (BRK.B) — Alpaca uses /
         return [t.replace(".", "/") for t in tickers]
     except Exception as exc:
-        logger.warning("sp500_fetch_failed", error=str(exc))
+        logger.warning("sp500_fetch_failed_trying_fallback", error=str(exc))
+
+    try:
+        import csv
+        import io
+        import urllib.request
+        url = ("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
+               "main/data/constituents.csv")
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            rows = list(csv.DictReader(io.StringIO(resp.read().decode())))
+        tickers = [r["Symbol"].replace(".", "/") for r in rows if r.get("Symbol")]
+        logger.info("sp500_fetched_via_fallback", count=len(tickers))
+        return tickers
+    except Exception as exc:
+        logger.warning("sp500_fallback_failed", error=str(exc))
         return []
 
 
