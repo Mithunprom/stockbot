@@ -179,14 +179,59 @@ class LGBMSignalModel:
 
         return path
 
+    # A retrained model must be able to win. Selecting by the IC embedded in
+    # the FILENAME meant the best score ever recorded ruled forever: the May 28
+    # model (0.1860) beat every fresher checkpoint even after its live IC
+    # decayed to zero (2026-07-22 diagnosis). Order of preference now:
+    #   1. LGBM_MODEL_PATH env pin — explicit, auditable promotion
+    #   2. most recently TRAINED checkpoint clearing MIN_VAL_IC
+    #   3. best-IC filename (legacy fallback)
+    MIN_VAL_IC = 0.05
+
+    @classmethod
+    def _select_checkpoint(cls) -> Path:
+        import os
+
+        pinned = os.environ.get("LGBM_MODEL_PATH")
+        if pinned and Path(pinned).exists():
+            logger.info("lgbm_checkpoint_pinned: %s", pinned)
+            return Path(pinned)
+
+        candidates = sorted(MODEL_DIR.glob("lgbm_ic_*.pkl"), reverse=True)
+        if not candidates:
+            raise FileNotFoundError(f"No LightGBM checkpoints in {MODEL_DIR}")
+
+        # Order by the metadata's trained_at, NOT file mtime: a Docker build
+        # checks every file out at image-build time, so mtimes are identical
+        # in production and would make "newest" arbitrary. Checkpoints with no
+        # trained_at (pre-2026-07-22 convention) sort oldest, which is correct.
+        dated: list[tuple[str, str, Path]] = []
+        for p in candidates:
+            meta_path = Path(str(p)[:-4] + ".json")   # not with_suffix: "0.1654"
+            meta = {}
+            if meta_path.exists():
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                except Exception:
+                    meta = {}
+            val_ic = meta.get("val_ic")
+            if val_ic is None or float(val_ic) < cls.MIN_VAL_IC:
+                continue
+            dated.append((meta.get("trained_at", ""), p.name, p))
+
+        if dated:
+            newest = max(dated)[2]
+            logger.info("lgbm_checkpoint_selected_by_recency: %s", newest.name)
+            return newest
+        logger.warning("lgbm_no_checkpoint_met_min_val_ic — falling back to best-IC name")
+        return candidates[0]
+
     @classmethod
     def load(cls, path: Path | None = None) -> LGBMSignalModel:
-        """Load model from disk. Auto-selects best checkpoint by IC."""
+        """Load a checkpoint: env pin > most recently trained > best-IC name."""
         if path is None:
-            candidates = sorted(MODEL_DIR.glob("lgbm_ic_*.pkl"), reverse=True)
-            if not candidates:
-                raise FileNotFoundError(f"No LightGBM checkpoints in {MODEL_DIR}")
-            path = candidates[0]
+            path = cls._select_checkpoint()
 
         with open(path, "rb") as f:
             data = pickle.load(f)

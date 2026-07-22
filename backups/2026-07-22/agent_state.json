@@ -1,0 +1,233 @@
+{
+ "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
+ "last_iteration_date": "2026-07-20",
+ "active_hypothesis": "H1: Cross-sectional top-k ranking \u2014 backtest pending Railway worker.",
+ "metrics_history": {
+  "baseline_sharpe": 0.0,
+  "current_sharpe": 0.0,
+  "target_sharpe": 3.0,
+  "live_ic_baseline": 0.05,
+  "lgbm_oos_ic": 0.166
+ },
+ "live_data_status": {
+  "date": "2026-07-21",
+  "status": "OK via snapshot relay",
+  "note": "Cloud sandbox cannot reach Railway directly (egress proxy refuses CONNECT \u2014 the 'endpoint 403'). GitHub Actions relays production state every 30 min (market hours) to the live-snapshot branch.",
+  "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades,meta}.json",
+  "action": "Cloud routines MUST read these snapshot files instead of hitting Railway. Local/owner sessions can still hit Railway directly."
+ },
+ "hypothesis_queue": [
+  {
+   "id": "H0",
+   "hypothesis": "Production-baseline walk-forward backtest \u2014 the reference every H1-H7 comparison requires (also unblocks M2 attribution)",
+   "test": "python scripts/research_backtest.py --phase all",
+   "status": "pending",
+   "added": "2026-07-21",
+   "added_by": "Integrity/CODE-RED remediation (worker's first runnable job)"
+  },
+  {
+   "id": "H5",
+   "hypothesis": "Signal-reconfirmed hold extension: at max_hold (390 bars), if the ticker would qualify as a FRESH entry right now (lgbm_pred_return > dynamic cost threshold AND dir_prob >= 0.60), extend the hold one more day instead of exiting \u2014 equivalent to a re-entry without paying the round-trip spread. Hard caps: max 2 extensions (3 days absolute), stops/trail/target always active, extension NEVER allowed if position is at a loss > 1x daily vol.",
+   "test": "python scripts/research_backtest.py --phase holdext (4 variants: max_ext\u2208{1,2} \u00d7 loss_gate_mult\u2208{1.0,2.0}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "status": "blocked_phase_unmerged",
+   "priority": "high \u2014 owner-requested",
+   "implementation_date": "2026-07-14",
+   "backtest_phase_pr": 9,
+   "pr_branch": "feat/rnd-H5H3-hold-extension-earnings-blackout",
+   "pr_number": 6,
+   "pr_status": "MERGED \u2014 in production (v0.4.4). Backtest phase in PR #9 (DRAFT).",
+   "pm_priority": 1,
+   "pm_priority_note": "Highest Railway backtest priority: owner-requested, strongest live evidence base (5W/4L max_hold cohort). Backtest phase PR #9 correctly held as DRAFT.",
+   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-14 \u2014 6 DAYS (PAST FLAG THRESHOLD)",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H2",
+   "hypothesis": "SPY/QQQ regime overlay (only deploy full heat when SPY > 20d MA) improves Sharpe by cutting down-tape exposure",
+   "test": "python scripts/research_backtest.py --phase spy_ma (4 variants: MA period\u2208{10d,20d} \u00d7 action\u2208{gate,half}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "status": "blocked_phase_unmerged",
+   "implementation_date": "2026-07-11",
+   "backtest_phase_pr": 10,
+   "pr_branch": "feat/rnd-H2-spy-ma-overlay",
+   "pr_number": 4,
+   "pr_status": "MERGED \u2014 in production (v0.4.2). Backtest phase in PR #10 (DRAFT).",
+   "pm_priority": 2,
+   "pm_priority_note": "Conservative risk reduction; clean mechanism. Backtest phase PR #10 correctly held as DRAFT.",
+   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-11 \u2014 9 DAYS (PAST FLAG THRESHOLD)",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H1",
+   "hypothesis": "Cross-sectional daily top-k ranking (long top 3-4 by LGBM pred at 14:00 ET, exit next day) beats per-ticker threshold entries",
+   "test": "python scripts/research_backtest.py --phase topk (4 variants: k\u2208{3,4} \u00d7 snapshot\u2208{13:00,14:00 ET}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "status": "blocked_phase_unmerged",
+   "implementation_date": "2026-07-15",
+   "pr_branch": "feat/rnd-H1-cross-sectional-topk",
+   "pr_number": 7,
+   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact",
+   "pm_priority": 3,
+   "pm_priority_note": "Largest architectural change; backtest required before merge. Correctly held as DRAFT.",
+   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-15 \u2014 5 DAYS (AT FLAG THRESHOLD)",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H3",
+   "hypothesis": "Earnings-calendar blackout (no entries within 2 days of earnings) removes uncompensated gap risk on 1-day holds",
+   "test": "python scripts/research_backtest.py (phase TBD); report Sharpe/PF/win-rate/drawdown/n per leg, plus lost-opportunity cost (trades skipped)",
+   "status": "blocked_phase_unmerged",
+   "implementation_date": "2026-07-14",
+   "pr_branch": "feat/rnd-H5H3-hold-extension-earnings-blackout",
+   "pr_number": 6,
+   "pr_status": "MERGED \u2014 in production (v0.4.4). No dedicated backtest phase PR yet.",
+   "pm_priority": 4,
+   "pm_priority_note": "Risk reduction hypothesis; outcome uncertain (may remove alpha). Validate H5 and H2 first, then run opportunity-cost analysis.",
+   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-14 \u2014 6 DAYS (PAST FLAG THRESHOLD)",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H6",
+   "hypothesis": "Signal persistence filter: require N consecutive qualifying bars (pred_return > threshold AND dir_prob > dead_hi) before allowing a position entry. Filters noise at the cost of some delayed entries.",
+   "test": "python scripts/research_backtest.py --phase persistence (N \u2208 {0, 1, 2, 3}; N=0 is exactly current baseline); acceptance = improvement on BOTH tune AND hold-out legs",
+   "status": "blocked_phase_unmerged",
+   "implementation_date": "2026-07-17",
+   "pr_branch": "feat/rnd-H2H6-spy-ma-backtest-persistence",
+   "pr_number": 10,
+   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact",
+   "pm_priority": 5,
+   "pm_priority_note": "New noise-reduction hypothesis. Correctly held as DRAFT. Validate H5/H2 first \u2014 those are deployed and burning live sample. Lower priority than H1.",
+   "tpm_flag": "needs_data_run since 2026-07-17 \u2014 3 days",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H7",
+   "hypothesis": "Stagnation exits are dead code in production (SIZING_STAGNATION_BARS == SIZING_MAX_HOLD_BARS = 390, so max_hold always fires first on flat trades). Re-enabling stagnation at 50/67/80% of max_hold frees capital from flat trades earlier. Bonus: PROD_PARAMS establishes the first production-comparable backtest baseline.",
+   "test": "python scripts/research_backtest.py --phase stagnation (stag_bars \u2208 {390 disabled=baseline, 195 50%, 260 67%, 312 80%}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "status": "blocked_phase_unmerged",
+   "implementation_date": "2026-07-18",
+   "pr_branch": "feat/rnd-H7-prod-aligned-stagnation",
+   "pr_number": 11,
+   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact. PROD_PARAMS is read-only reference constant \u2014 no behavior change until explicitly used.",
+   "pm_priority": 6,
+   "pm_priority_note": "PROD_PARAMS baseline is the most intellectually honest addition this week \u2014 gives Railway worker a production-comparable floor. Stagnation exit is a reasonable optimization but unvalidated. Correctly held as DRAFT.",
+   "tpm_flag": "needs_data_run since 2026-07-18 \u2014 2 days",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H4",
+   "hypothesis": "Removing dead ensemble weights (Transformer/TCN contribute 0.0 in every live trade) and renormalizing LGBM 60->75, sentiment 20->25 sharpens the entry signal",
+   "test": "IC comparison of reweighted ensemble on validation window",
+   "status": "blocked_phase_unmerged",
+   "implementation_date": "2026-07-10",
+   "pr_branch": "feat/rnd-H4-dead-weight-renorm",
+   "pr_number": 3,
+   "pr_status": "MERGED \u2014 commit 16051d4. In production (v0.4.4). No dedicated backtest phase PR.",
+   "pm_priority": 7,
+   "pm_priority_note": "Calibration fix already in production; IC delta confirmation is useful but not blocking. Lowest Railway backtest priority.",
+   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-10 \u2014 10 DAYS (2\u00d7 FLAG THRESHOLD)",
+   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+  },
+  {
+   "id": "H8",
+   "hypothesis": "News catalyst tilt: entries on tickers with a fresh bullish catalyst (deal/earnings beat/guidance raise from the News Radar) outperform; macro tailwind days deserve fuller heat",
+   "test": "needs a backtest phase joining reports/news_risk history to entries \u2014 design after H0 baseline",
+   "status": "proposed",
+   "added": "2026-07-21",
+   "added_by": "owner request (two-sided news radar, v0.4.10)"
+  }
+ ],
+ "completed_iterations": [
+  {
+   "date": "2026-07-20",
+   "hypothesis_id": "W30_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW \u2014 W30 weekly review completed. No live data (403 day 8). Three new DRAFT PRs noted (#9/#10/#11). Freeze intact. ROADMAP + agent_state updated. Report at reports/program/2026-W30.md.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W30.md",
+    "agent_state.json"
+   ]
+  },
+  {
+   "date": "2026-07-15",
+   "hypothesis_id": "W29_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW \u2014 W29 first weekly review. Freeze confirmed. 3 owner decisions escalated. Report at reports/program/2026-W29.md.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W29.md",
+    "agent_state.json"
+   ]
+  },
+  {
+   "date": "2026-07-14",
+   "hypothesis_id": "H5+H3",
+   "result": "IMPLEMENTED \u2014 needs_data_run for Sharpe/PF/drawdown/win-rate/n backtest on Railway",
+   "tests_status": "131 passed / 2 skipped (torch tests, skipif decorator added) / 0 failures",
+   "new_tests": 17,
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 6,
+   "notes": "Railway endpoints HTTP 403 for 3rd consecutive day. Proceeded with codebase implementation."
+  },
+  {
+   "date": "2026-07-11",
+   "hypothesis_id": "H2",
+   "result": "IMPLEMENTED \u2014 needs_data_run for Sharpe/PF/drawdown delta backtest",
+   "tests_status": "71 passed / 11 pre-existing sandbox failures (sqlalchemy/pydantic) / test_signal_loop.py excluded (torch)",
+   "new_tests": 19,
+   "files_changed": [
+    "src/data/market_regime.py",
+    "src/agents/signal_loop.py",
+    "tests/unit/test_market_regime.py",
+    "agent_state.json"
+   ]
+  },
+  {
+   "date": "2026-07-10",
+   "hypothesis_id": "H4",
+   "result": "IMPLEMENTED \u2014 needs_data_run for IC validation",
+   "tests_status": "63 passed / 1 collection error (torch missing in sandbox)",
+   "files_changed": [
+    "src/models/ensemble.py",
+    "src/agents/profit_agent.py",
+    "tests/unit/test_ensemble_weights.py",
+    "tests/unit/test_forecast_agent.py",
+    "config/staging/profit_suggestions.json",
+    "agent_state.json"
+   ]
+  }
+ ],
+ "pending_tasks": [
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 2] Enable Railway worker service: AGENT_WORKER_ENABLE=true + Alpaca paper API keys in Railway dashboard (~10 min). Unblocks all 7 hypothesis validations (H1\u2013H5 deployed, H6/H7 in draft).",
+  "[OWNER ACTION \u2014 CRITICAL, DAY 8] Investigate Railway endpoint HTTP 403. Confirm if reachable outside Claude sandbox. Add external uptime monitor (UptimeRobot/Pingdom) for M1/M2 continuity.",
+  "[OWNER ACTION \u2014 SCOPE DECISION] Should R&D desk pause new hypothesis implementation (H6/H7 in draft, H1\u2013H5 unvalidated) until Railway runs at least one backtest? PM recommendation: yes, pause.",
+  "[OWNER ACTION \u2014 CARRIED] Confirm compound M2 baseline (H4+H2+H5+H3 all in v0.4.4). Individual attribution impossible without isolated backtests.",
+  "[Railway worker] Run H5 backtest (priority 1): --phase holdext \u2014 baseline 1-day vs signal-reconfirmed extension",
+  "[Railway worker] Run H2 backtest (priority 2): --phase spy_ma \u2014 Sharpe/PF/WR/DD/n with/without MA overlay",
+  "[Railway worker] Run H1 backtest (priority 3): --phase topk \u2014 4 variants (k\u2208{3,4} \u00d7 snapshot\u2208{13:00,14:00})",
+  "[Railway worker] Run H3 backtest (priority 4): blackout vs no-blackout + lost-opportunity cost",
+  "[Railway worker] Run H6 backtest (priority 5): --phase persistence \u2014 N\u2208{0,1,2,3}",
+  "[Railway worker] Run H7 backtest (priority 6): --phase stagnation \u2014 prod_baseline + stag_bars variants",
+  "[Railway worker] Run H4 IC comparison (priority 7): confirm calibration improvement"
+ ],
+ "blocked_by_token_limit": false,
+ "governance": {
+  "deploy_mode": "PR_REVIEW_REQUIRED",
+  "freeze_status": "FROZEN at v0.4.4 since 2026-07-13. Intact through W30 (2026-07-20). No strategy merges until M2 matures (n>=100) or validated backtest justifies exception. Bug fixes, infra, and docs always exempt.",
+  "note": "Per CLAUDE.md: no autonomous changes to live strategy/config. Agents research, implement, backtest, and open PRs; a human merges. Config staging: config/staging/."
+ },
+ "code_red": {
+  "active": true,
+  "declared": "2026-07-20",
+  "declared_by": "owner (CFO)",
+  "reason": "Confirmed ledger defect (partial-fill pnl_pct corruption poisoning Kelly seed) + trailing-7d PF 0.30 (n=17)",
+  "declaration": "reports/program/CODE-RED-2026-07-20.md",
+  "priority_order": [
+   "1. ledger/measurement integrity (Integrity Sentinel clean)",
+   "2. validation throughput (clear backtest queue \u2014 needs Railway worker)",
+   "3. new alpha work (QUEUED until exit criteria met)"
+  ],
+  "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run"
+ }
+}

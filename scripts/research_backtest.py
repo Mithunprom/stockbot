@@ -239,11 +239,12 @@ def phase_train() -> None:
     # uses, so this is the honest path from validated recipe to deployment.
     save_stem = os.environ.get("RESEARCH_SAVE_MODEL")
     if save_stem:
-        import pickle
         stem = Path(save_stem)
         stem.parent.mkdir(parents=True, exist_ok=True)
-        with open(stem.with_suffix(".pkl"), "wb") as f:
-            pickle.dump(model, f)
+        # model.save() writes the exact dict payload LGBMSignalModel.load()
+        # expects — a raw pickle.dump(model) loads as an object and breaks
+        # production with KeyError('feature_cols').
+        model.save(Path(str(stem) + ".pkl"))
         meta = {
             "feature_cols": cols,
             "trained_at": datetime.now(timezone.utc).isoformat(),
@@ -252,9 +253,9 @@ def phase_train() -> None:
             "train_rows": int(len(train_df)), "val_rows": int(len(val_df)),
             **{k: float(v) for k, v in metrics.items()},
         }
-        with open(stem.with_suffix(".json"), "w") as f:
+        with open(Path(str(stem) + ".json"), "w") as f:
             json.dump(meta, f, indent=2)
-        print(f"saved model → {stem.with_suffix('.pkl')}")
+        print(f"saved model → {stem}.pkl")
 
     # OOS predictions: strictly AFTER the validation window
     dvol_map = _daily_vol_map()
