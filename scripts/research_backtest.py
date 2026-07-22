@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import sys
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time as dtime, timedelta, timezone
@@ -37,16 +38,21 @@ structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(40))  # 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-CACHE = Path("/tmp/stockbot_research")
-CACHE.mkdir(exist_ok=True)
+CACHE = Path(os.environ.get("RESEARCH_CACHE", "/tmp/stockbot_research"))
+CACHE.mkdir(parents=True, exist_ok=True)
 ET = ZoneInfo("America/New_York")
 
-BARS_START = "2026-03-20"          # warmup for 200-bar rolling indicators
-BARS_END = "2026-06-21"            # through Fri Jun 20
-TRAIN_END = "2026-05-08"           # train ≤ this date
-VAL_END = "2026-05-15"             # val = (TRAIN_END, VAL_END] — metrics only
-TUNE_END = "2026-05-29"            # tune leg = (VAL_END, TUNE_END]
-                                   # validation leg = (TUNE_END, BARS_END] = Jun 1-20
+# Windows are env-overridable so a retrain can be pointed at the CURRENT
+# regime without editing code (RESEARCH_BARS_START=... python scripts/...).
+# CACHE_TAG isolates bar/feature caches per window — reusing one cache across
+# different date ranges silently trains on the wrong span.
+BARS_START = os.environ.get("RESEARCH_BARS_START", "2026-03-20")   # indicator warmup
+BARS_END = os.environ.get("RESEARCH_BARS_END", "2026-06-21")
+TRAIN_END = os.environ.get("RESEARCH_TRAIN_END", "2026-05-08")     # train <= this date
+VAL_END = os.environ.get("RESEARCH_VAL_END", "2026-05-15")         # metrics only
+TUNE_END = os.environ.get("RESEARCH_TUNE_END", "2026-05-29")       # tune leg
+VAL_LEG_START = os.environ.get("RESEARCH_VAL_LEG_START", "2026-06-01")
+VAL_LEG_END = os.environ.get("RESEARCH_VAL_LEG_END", "2026-06-11")
 FORWARD_N = 15
 DIRECTION_EPSILON = 0.0001
 
@@ -227,6 +233,30 @@ def phase_train() -> None:
     print(f"train_ic={metrics['train_ic']:.4f}  val_ic={metrics['val_ic']:.4f}  "
           f"val_dir_acc={metrics['val_dir_acc']:.4f}")
 
+    # Optional deployable artifact: RESEARCH_SAVE_MODEL=models/lgbm/name
+    # writes the .pkl/.json pair production loads. The research harness is
+    # the only place that trains on the same feature pipeline production
+    # uses, so this is the honest path from validated recipe to deployment.
+    save_stem = os.environ.get("RESEARCH_SAVE_MODEL")
+    if save_stem:
+        stem = Path(save_stem)
+        stem.parent.mkdir(parents=True, exist_ok=True)
+        # model.save() writes the exact dict payload LGBMSignalModel.load()
+        # expects — a raw pickle.dump(model) loads as an object and breaks
+        # production with KeyError('feature_cols').
+        model.save(Path(str(stem) + ".pkl"))
+        meta = {
+            "feature_cols": cols,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "train_end": TRAIN_END, "val_end": VAL_END,
+            "bars_start": BARS_START, "bars_end": BARS_END,
+            "train_rows": int(len(train_df)), "val_rows": int(len(val_df)),
+            **{k: float(v) for k, v in metrics.items()},
+        }
+        with open(Path(str(stem) + ".json"), "w") as f:
+            json.dump(meta, f, indent=2)
+        print(f"saved model → {stem}.pkl")
+
     # OOS predictions: strictly AFTER the validation window
     dvol_map = _daily_vol_map()
     rows = []
@@ -260,6 +290,12 @@ def phase_train() -> None:
             "regime": oos["regime"].values,
             "forward_return": oos["forward_return"].values,
         }))
+    if not rows:
+        # Training ran right up to the end of available data, so there is no
+        # out-of-sample span left to predict. Benign for a final production
+        # retrain (the recipe is validated separately with an earlier cutoff).
+        print("no OOS window after val_end — skipping prediction export")
+        return
     preds = pd.concat(rows, ignore_index=True)
     preds.to_csv(CACHE / "preds_oos.csv.gz", index=False)
 
@@ -289,10 +325,11 @@ class Params:
     max_hold_bars: int = 1170
     stag_bars: int = 780
     stag_pnl: float = 0.004
-    reversal_bars: int = 3
+    reversal_bars: int = 45
     catastrophic_mult: float = 2.0
     cost_threshold: float = 0.003
     dead_hi: float = 0.55
+    dead_lo: float = 0.40
     entry_start: tuple = (9, 40)
     entry_end: tuple = (15, 30)
     max_entries_tick: int = 2
@@ -328,6 +365,30 @@ def _exits(daily_vol: float, p: Params) -> tuple[float, float, float]:
 # real daily figure — with the 1m proxy as a per-row fallback.
 DAILY_VOL_FLOOR = 0.005
 DAILY_VOL_CEIL = 0.15
+
+
+def _is_confirmed_reversal_long(
+    pred_return: float,
+    dir_prob: float,
+    threshold: float,
+    dead_lo: float,
+) -> bool:
+    """True when this bar is a CONFIRMED bearish signal against a long position.
+
+    Mirrors production signal_loop._confirmed_opposite_signal:
+    opposite direction + magnitude above the cost threshold + dir_prob below
+    the lower dead-zone bound (strong bearish conviction, not noise).
+
+    Pre-v0.3.4 used a bare sign check (pred_return < 0) that misfired on
+    every momentary sign flip — the root cause of the 25-minute median hold
+    diagnosed on 2026-07-07. The production fix landed in v0.3.4; this
+    backtest was not updated until now.
+    """
+    if pred_return >= 0:
+        return False
+    if abs(pred_return) <= threshold:
+        return False
+    return dir_prob < dead_lo
 
 
 def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
@@ -427,7 +488,12 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
             elif pos["bars"] >= p.stag_bars and abs(unreal) < p.stag_pnl:
                 reason = "stagnation"
             else:
-                if r.pred_return < 0:
+                # Confirmed reversal: opposite signal must clear quality gates
+                # (mirrors production _confirmed_opposite_signal — sign-only
+                # check was the pre-v0.3.4 bug that turned swing trades into
+                # 25-minute scalps).
+                rev_thr = day_thr.get(today, p.cost_threshold) if p.dyn_thresh_pct else p.cost_threshold
+                if _is_confirmed_reversal_long(r.pred_return, r.dir_prob, rev_thr, p.dead_lo):
                     pos["rev"] += 1
                 else:
                     pos["rev"] = 0
@@ -526,22 +592,36 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
     eq = pd.Series(minute_equity)
     dd = float(((eq.cummax() - eq) / eq.cummax()).max()) if len(eq) else 0.0
     tdf = pd.DataFrame(trades)
-    wins = tdf[tdf.pnl > 0].pnl.sum() if len(tdf) else 0.0
-    losses = -tdf[tdf.pnl < 0].pnl.sum() if len(tdf) else 0.0
+    if not len(tdf) or "pnl" not in tdf.columns:
+        # No trades in this window (e.g. it precedes the train cutoff, so no
+        # out-of-sample predictions exist). Report zeros — never crash the run.
+        return {
+            "label": p.label, "start": start, "end": end,
+            "total_return_pct": 0.0, "sharpe": 0.0, "max_dd_pct": 0.0,
+            "profit_factor": 0.0, "win_rate": 0.0, "n_trades": 0,
+            "open_at_end": len(positions), "avg_notional_pct": 0.0,
+            "avg_win_pct": 0.0, "avg_loss_pct": 0.0, "avg_hold_bars": 0,
+            "exit_reasons": {}, "note": "no trades in window",
+            "_trades": tdf,
+        }
+    wins = tdf[tdf.pnl > 0].pnl.sum()
+    losses = -tdf[tdf.pnl < 0].pnl.sum()
     return {
         "label": p.label, "start": start, "end": end,
         "total_return_pct": round((final_pv / capital - 1) * 100, 2),
         "sharpe": round(sharpe, 2),
         "max_dd_pct": round(dd * 100, 2),
         "profit_factor": round(wins / losses, 2) if losses > 0 else float("inf"),
-        "win_rate": round(float((tdf.pnl > 0).mean()), 3) if len(tdf) else 0.0,
+        "win_rate": round(float((tdf.pnl > 0).mean()), 3),
         "n_trades": len(tdf),
         "open_at_end": len(positions),
-        "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1) if len(tdf) else 0.0,
+        # The empty-tdf early return above makes per-field len() guards
+        # redundant (PR #13 and main fixed this crash independently).
+        "avg_notional_pct": round(float(tdf.notional.mean()) / capital * 100, 1),
         "avg_win_pct": round(float(tdf[tdf.pnl > 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl > 0).any() else 0.0,
         "avg_loss_pct": round(float(tdf[tdf.pnl < 0].pnl_pct.mean()) * 100, 2) if (tdf.pnl < 0).any() else 0.0,
-        "avg_hold_bars": round(float(tdf.bars.mean()), 0) if len(tdf) else 0,
-        "exit_reasons": tdf.reason.value_counts().to_dict() if len(tdf) else {},
+        "avg_hold_bars": round(float(tdf.bars.mean()), 0),
+        "exit_reasons": tdf.reason.value_counts().to_dict(),
         "_trades": tdf,
     }
 
@@ -554,8 +634,10 @@ def load_preds() -> pd.DataFrame:
 
 def phase_simulate() -> None:
     preds = load_preds()
-    for (s, e, tag) in [("2026-05-18", TUNE_END, "tune-leg"),
-                        ("2026-06-01", "2026-06-11", "val-leg")]:
+    for (s, e, tag) in [
+        (os.environ.get("RESEARCH_TUNE_LEG_START", "2026-05-18"), TUNE_END, "tune-leg"),
+        (VAL_LEG_START, VAL_LEG_END, "val-leg"),
+    ]:
         res = simulate(preds, Params(label=f"baseline {tag}"), s, e)
         res.pop("_trades")
         print(json.dumps(res, indent=1))
@@ -593,11 +675,12 @@ def phase_tune() -> None:
     val_rows = []
     for lbl in top.label:
         p = next(g for g in grid if g.label == lbl)
-        r = simulate(preds, replace(p, label=lbl + "|VAL"), "2026-06-01", "2026-06-11")
+        r = simulate(preds, replace(p, label=lbl + "|VAL"), VAL_LEG_START, VAL_LEG_END)
         r.pop("_trades")
         val_rows.append(r)
-    base_t = simulate(preds, Params(label="baseline|TUNE"), "2026-05-18", TUNE_END)
-    base_v = simulate(preds, Params(label="baseline|VAL"), "2026-06-01", "2026-06-11")
+    base_t = simulate(preds, Params(label="baseline|TUNE"),
+                      os.environ.get("RESEARCH_TUNE_LEG_START", "2026-05-18"), TUNE_END)
+    base_v = simulate(preds, Params(label="baseline|VAL"), VAL_LEG_START, VAL_LEG_END)
     base_t.pop("_trades"); base_v.pop("_trades")
     val_rows.extend([base_t, base_v])
     vout = pd.DataFrame(val_rows)

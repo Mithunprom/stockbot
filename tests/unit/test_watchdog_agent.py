@@ -24,6 +24,7 @@ def _make_agent(market_open: bool = True) -> WatchdogAgent:
     loop._data_fresh = True
     loop._bars_held = {}
     loop._last_reset_date = None
+    loop._universe = ["T%d" % i for i in range(75)]   # healthy screened universe
     pm = MagicMock()
     pm._positions = {}
     cb = MagicMock()
@@ -200,3 +201,24 @@ class TestAlerting:
         agent._loop.tick_error_count = 3
         asyncio.run(agent.run(light=True))
         assert agent._send_email.call_count == 2
+
+
+class TestUniverseCheck:
+    def test_empty_universe_is_critical(self):
+        agent = _make_agent()
+        agent._loop._universe = []
+        c = agent._check_universe_fresh()
+        assert c["status"] == "critical"
+
+    def test_anchors_only_universe_warns(self):
+        # 52 == the anchor count: the S&P screen contributed nothing, which
+        # is exactly the silent degradation that froze the universe for weeks
+        agent = _make_agent()
+        agent._loop._universe = ["T%d" % i for i in range(52)]
+        c = agent._check_universe_fresh()
+        assert c["status"] == "warn"
+
+    def test_screened_universe_ok(self):
+        agent = _make_agent()
+        agent._loop._universe = ["T%d" % i for i in range(75)]
+        assert agent._check_universe_fresh()["status"] == "ok"

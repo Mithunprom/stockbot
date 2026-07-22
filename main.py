@@ -77,8 +77,18 @@ async def lifespan(app: FastAPI):
     await prune_old_data()
     session_factory = get_session_factory()
 
-    # ── Trading universe (screener → config → defaults) ───────────────────────
-    universe: list[str] = _load_universe()
+    # ── Trading universe (DB → config file → defaults) ────────────────────────
+    # DB first: Railway's container FS is ephemeral, so the nightly screener's
+    # config/universe.json write was reverted by every redeploy (universe sat
+    # frozen at the 2026-05-27 snapshot for eight weeks).
+    universe: list[str] = []
+    try:
+        from src.agents.screener_agent import load_universe_from_db
+        universe = await load_universe_from_db() or []
+    except Exception as exc:
+        logger.warning("universe_db_load_failed", error=str(exc))
+    if not universe:
+        universe = _load_universe()
 
     # ── Phase 1: Real-time data ingest ────────────────────────────────────────
     # WebSocket streaming is optional — disabled on Railway to prevent
@@ -429,6 +439,7 @@ async def lifespan(app: FastAPI):
     app.state.integrity_agent = integrity_agent
     app.state.news_risk_agent = news_risk_agent
     app.state.ensemble = ensemble
+    app.state.screener_agent = screener_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -736,7 +747,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.12"
+APP_VERSION = "0.5.0"
 
 app = FastAPI(
     title="StockBot API",
@@ -976,6 +987,19 @@ async def apply_staged_weights() -> JSONResponse:
         "new": {"lgbm": new.lgbm, "transformer": new.transformer,
                 "tcn": new.tcn, "sentiment": new.sentiment},
         "note": "runtime-only change; restart reverts to defaults unless staged file persists",
+    })
+
+
+@app.post("/admin/screener/run")
+async def trigger_screener() -> JSONResponse:
+    """Run the nightly universe screener now (rescans S&P 500, hot-swaps)."""
+    agent = getattr(app.state, "screener_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "screener agent not initialized"}, status_code=503)
+    await agent.run()
+    return JSONResponse(content={
+        "universe": getattr(_signal_loop, "_universe", []),
+        "count": len(getattr(_signal_loop, "_universe", [])),
     })
 
 

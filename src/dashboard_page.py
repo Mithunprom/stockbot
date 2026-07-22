@@ -122,9 +122,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <span class="pill" id="hpill">…</span>
   <span class="pill" id="mktpill">market …</span>
   <nav>
-    <a href="#overview">Overview</a><a href="#equity">Equity</a>
-    <a href="#positions">Positions</a><a href="#signals">Signals</a>
-    <a href="#trades">Trades</a><a href="#system">System</a>
+    <a href="#sec-overview">Overview</a><a href="#sec-equity">Equity</a>
+    <a href="#sec-positions">Positions</a><a href="#sec-signals">Signals</a>
+    <a href="#sec-trades">Trades</a><a href="#sec-system">System</a>
   </nav>
   <span class="hstat">
     <span id="updated">–</span>
@@ -136,7 +136,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div id="banner">⚠️ CANNOT REACH BOT — retrying every 30s…</div>
 <div id="tooltip"></div>
 
-<section id="overview">
+<section id="sec-overview">
 <div class="grid">
   <div class="card"><h3>Bot</h3><div class="big" id="bot">–</div><div class="muted" id="botd"></div></div>
   <div class="card"><h3>Deployment</h3><div class="big" id="deploy">–</div><div class="muted" id="deployd"></div></div>
@@ -154,7 +154,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 </section>
 
-<section id="equity">
+<section id="sec-equity">
 <h2>Equity curve <span class="spacer"></span>
   <span class="btns" id="rangeBtns">
     <button data-r="1D-15Min">1D</button>
@@ -169,7 +169,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 </section>
 
-<section id="positions">
+<section id="sec-positions">
 <h2>Open positions</h2>
 <div class="panel scroll">
   <table id="posTable"><thead></thead>
@@ -177,7 +177,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 </section>
 
-<section id="signals">
+<section id="sec-signals">
 <h2>Signal watchlist — bullish setups and what's gating them</h2>
 <div class="panel scroll">
   <table><thead><tr>
@@ -186,7 +186,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 </section>
 
-<section id="trades">
+<section id="sec-trades">
 <h2>Trade performance</h2>
 <div class="grid" style="margin-bottom:12px">
   <div class="card"><h3>Win rate</h3><div class="big" id="tr_wr">–</div><div class="muted" id="tr_wrd"></div></div>
@@ -257,7 +257,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </details>
 </div>
 
-<section id="system">
+<section id="sec-system">
 <h2>System checks — watchdog</h2>
 <div class="panel"><div id="checks">loading…</div></div>
 <h2>System checks — ledger integrity</h2>

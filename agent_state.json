@@ -26,11 +26,10 @@
   "principal_skeptic_flag": "MU #93 pnl=-512 vs fill-implied -114 (15.5%); SMCI #83 pnl=-638 vs fill-implied -139 (24.8%). Both pass existing pnl_pct check. New fill_price_pnl_consistency check catches both."
  },
  "live_data_status": {
-  "date": "2026-07-21",
-  "status": "OK via snapshot relay",
-  "note": "Cloud sandbox cannot reach Railway directly (egress proxy refuses CONNECT \u2014 the 'endpoint 403'). GitHub Actions relays production state every 30 min (market hours) to the live-snapshot branch.",
-  "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades,meta}.json",
-  "action": "Cloud routines MUST read these snapshot files instead of hitting Railway. Local/owner sessions can still hit Railway directly."
+  "date": "2026-07-22",
+  "status": "OK \u2014 direct + snapshot relay",
+  "note": "The '403' was never the service: Railway blocks datacenter IPs (cloud sandbox, GH Actions), not residential. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
+  "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
   {
