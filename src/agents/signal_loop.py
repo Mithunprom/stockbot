@@ -1213,7 +1213,16 @@ class SignalLoop:
 
             self._entry_dates[ticker] = entry_date
             days_held = max(0, np.busday_count(entry_date, today))
-            self._bars_held.setdefault(ticker, int(days_held) * 390)
+            # Market-minute-accurate age, not a whole-day rounding: a position
+            # entered at 09:48 today is ~300 bars old by 14:50, not 0 and not
+            # 390. Overwrite (not setdefault) — this count is authoritative.
+            now_et = datetime.now(et)
+            if row is not None and entry_date == today:
+                bars_est = max(0, int((now_et - row.astimezone(et)).total_seconds() // 60))
+            else:
+                mins_since_open = max(0, (now_et.hour * 60 + now_et.minute) - (9 * 60 + 30))
+                bars_est = int(days_held) * 390 + min(mins_since_open, 390)
+            self._bars_held[ticker] = min(bars_est, int(days_held + 1) * 390)
             pos = self._pm._positions.get(ticker)
             if pos is not None:
                 self._entry_prices.setdefault(ticker, pos.avg_entry_price)
@@ -1397,6 +1406,17 @@ class SignalLoop:
                 blackout_days=EARNINGS_BLACKOUT_DAYS,
             )
             return False
+
+        # Gate 0d: Macro news risk (opt-in via NEWS_RISK_GATE=block).
+        # Blocks NEW entries only — exits always run. Fails open on any
+        # error: a broken news feed must never halt trading by itself.
+        try:
+            from src.agents.news_risk_agent import news_risk_blocks_entries
+            if news_risk_blocks_entries():
+                logger.info("entry_blocked_news_risk", ticker=ticker)
+                return False
+        except Exception:
+            pass
 
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
@@ -1603,9 +1623,13 @@ class SignalLoop:
             self._entry_prices[ticker] = entry_price
             self._entry_directions[ticker] = entry_dir
             self._peak_prices[ticker] = pos.last_price or entry_price
-            # Treat as one day old: normal exit logic applies (a forced
-            # max_hold here used to dump every position on each redeploy)
-            self._bars_held.setdefault(ticker, 390)
+            # Do NOT guess bars_held here. This runs on the first tick after
+            # a restart, BEFORE _recover_entry_state() rebuilds the true age
+            # from the DB — and the old 390 default equalled the max-hold
+            # threshold, so every synced position was dumped as "max_hold"
+            # within a minute of each redeploy (AMZN/MU, 2026-07-21 18:50).
+            # Missing key reads as 0 below: hold one tick, then recovery's
+            # accurate count takes over.
 
         # ATR-adaptive exit thresholds (true daily vol)
         sl, ts, tp = _atr_exits(self._daily_vol_for(ticker))
@@ -2085,8 +2109,9 @@ class SignalLoop:
                 await self._write_trade_exit(
                     ticker=ticker,
                     fill_price=fill_price,
-                    qty=result.filled_qty,
                     pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    exit_qty=qty,
                     exit_time=filled_at,
                     exit_reason=exit_reason,
                 )
@@ -2163,12 +2188,20 @@ class SignalLoop:
         self,
         ticker: str,
         fill_price: float,
-        qty: float,
         pnl: float,
+        pnl_pct: float,
+        exit_qty: float | None,
         exit_time: datetime,
         exit_reason: str = "signal_reversal",
     ) -> None:
-        """Update an existing trade row with exit price and PnL."""
+        """Update an existing trade row with exit price and PnL.
+
+        pnl_pct MUST be computed by the caller from the true entry notional.
+        Re-deriving it here from the order's filled_qty corrupted the ledger
+        on partially filled exits (filled_qty < position qty while pnl was
+        full-position), and _seed_kelly_from_db() then fed the garbage into
+        sizing after every redeploy (2026-07-20 audit).
+        """
         from sqlalchemy import update
 
         from src.data.db import Trade
@@ -2199,9 +2232,6 @@ class SignalLoop:
             logger.debug("trade_exit_no_open_record", ticker=ticker)
             return
 
-        # Use entry notional for accurate pnl_pct (not exit notional)
-        entry_notional = qty * fill_price - pnl  # entry_price * qty = exit_notional - pnl (for longs)
-        pnl_pct = pnl / max(abs(entry_notional), 1.0)
         try:
             async with self._sf() as session:
                 await session.execute(
@@ -2213,6 +2243,11 @@ class SignalLoop:
                         pnl=pnl,
                         pnl_pct=pnl_pct,
                         exit_reason=exit_reason,
+                        # Reconcile shares with the qty actually closed — the
+                        # entry write records the immediate filled_qty, which
+                        # under-counts on partial ENTRY fills (MA/MSTR rows
+                        # 98/99, 2026-07-21: 51 recorded vs 156.5 real).
+                        **({"shares": exit_qty} if exit_qty else {}),
                     )
                 )
                 await session.commit()

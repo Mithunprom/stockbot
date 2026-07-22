@@ -77,8 +77,18 @@ async def lifespan(app: FastAPI):
     await prune_old_data()
     session_factory = get_session_factory()
 
-    # ── Trading universe (screener → config → defaults) ───────────────────────
-    universe: list[str] = _load_universe()
+    # ── Trading universe (DB → config file → defaults) ────────────────────────
+    # DB first: Railway's container FS is ephemeral, so the nightly screener's
+    # config/universe.json write was reverted by every redeploy (universe sat
+    # frozen at the 2026-05-27 snapshot for eight weeks).
+    universe: list[str] = []
+    try:
+        from src.agents.screener_agent import load_universe_from_db
+        universe = await load_universe_from_db() or []
+    except Exception as exc:
+        logger.warning("universe_db_load_failed", error=str(exc))
+    if not universe:
+        universe = _load_universe()
 
     # ── Phase 1: Real-time data ingest ────────────────────────────────────────
     # WebSocket streaming is optional — disabled on Railway to prevent
@@ -390,7 +400,6 @@ async def lifespan(app: FastAPI):
 
     risk_agent = RiskAgent(circuit_breakers, pos_manager, alpaca_router)
     latency_agent = LatencyAgent()
-    profit_agent = ProfitAgent()
     screener_agent = ScreenerAgent(signal_loop=_signal_loop)
     critique_agent = CritiqueAgent(session_factory=session_factory)
     retrain_agent = RetrainAgent(
@@ -403,6 +412,7 @@ async def lifespan(app: FastAPI):
         retrain_agent=retrain_agent,
     )
     live_ic_tracker = LiveICTracker(session_factory=session_factory)
+    profit_agent = ProfitAgent(live_ic_tracker=live_ic_tracker, ensemble=ensemble)
     drift_agent = DriftAgent(lookback_days=7, live_ic_tracker=live_ic_tracker)
     forecast_agent = ForecastEmailAgent()
     from src.agents.watchdog_agent import WatchdogAgent
@@ -411,6 +421,14 @@ async def lifespan(app: FastAPI):
         pos_manager=pos_manager,
         circuit_breakers=circuit_breakers,
     )
+    from src.agents.integrity_agent import IntegrityAgent
+    integrity_agent = IntegrityAgent(
+        session_factory=session_factory,
+        signal_loop=_signal_loop,
+        alpaca=alpaca_router,
+    )
+    from src.agents.news_risk_agent import NewsRiskAgent
+    news_risk_agent = NewsRiskAgent()
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
@@ -418,6 +436,10 @@ async def lifespan(app: FastAPI):
     app.state.drift_agent = drift_agent
     app.state.forecast_agent = forecast_agent
     app.state.watchdog_agent = watchdog_agent
+    app.state.integrity_agent = integrity_agent
+    app.state.news_risk_agent = news_risk_agent
+    app.state.ensemble = ensemble
+    app.state.screener_agent = screener_agent
 
     scheduler = create_scheduler(
         risk_agent=risk_agent,
@@ -431,6 +453,8 @@ async def lifespan(app: FastAPI):
         live_ic_tracker=live_ic_tracker,
         forecast_agent=forecast_agent,
         watchdog_agent=watchdog_agent,
+        integrity_agent=integrity_agent,
+        news_risk_agent=news_risk_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -723,7 +747,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.4.4"
+APP_VERSION = "0.5.0"
 
 app = FastAPI(
     title="StockBot API",
@@ -785,7 +809,17 @@ async def health() -> dict[str, Any]:
         "running_loop": getattr(_signal_loop, "_pipeline_id", None),
         "ab_test_enabled": settings.ab_test_enabled,
         "signal_loop_active": _signal_loop is not None,
+        "market_open": _is_market_open_et(),
     }
+
+
+def _is_market_open_et() -> bool:
+    """Regular-session check (09:30-16:00 ET, Mon-Fri; ignores holidays)."""
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if now.weekday() >= 5:
+        return False
+    return (9, 30) <= (now.hour, now.minute) < (16, 0)
 
 
 @app.get("/watchdog")
@@ -813,6 +847,20 @@ async def watchdog_status() -> JSONResponse:
         "last_tick_error": getattr(_signal_loop, "last_tick_error", ""),
     }
     return JSONResponse(content=jsonable_encoder(payload))
+
+
+@app.get("/integrity")
+async def integrity_status() -> JSONResponse:
+    """Integrity Sentinel snapshot — ledger audit (pnl_pct, zombies, Kelly seed)."""
+    agent = getattr(app.state, "integrity_agent", None)
+    if agent is None:
+        return JSONResponse(
+            status_code=503, content={"status": "critical", "detail": "integrity agent not initialized"}
+        )
+    report = agent.last_report
+    if report is None:
+        report = await agent.run()
+    return JSONResponse(content=jsonable_encoder(report))
 
 
 @app.get("/dashboard")
@@ -874,6 +922,106 @@ async def trigger_forecast() -> JSONResponse:
         return JSONResponse(content={"error": "Forecast agent not initialized"}, status_code=503)
     result = await agent.run()
     return JSONResponse(content=result)
+
+
+@app.get("/news-risk")
+async def news_risk_status() -> JSONResponse:
+    """Macro news risk snapshot — level, flagged headlines, gate mode."""
+    agent = getattr(app.state, "news_risk_agent", None)
+    if agent is None:
+        return JSONResponse(status_code=503, content={"error": "news risk agent not initialized"})
+    report = agent.last_report
+    if report is None:
+        report = await agent.run()
+    return JSONResponse(content=jsonable_encoder(report))
+
+
+@app.get("/ensemble")
+async def ensemble_weights_status() -> JSONResponse:
+    """Running ensemble weights + latest staged attribution/proposal."""
+    engine = getattr(app.state, "ensemble", None)
+    current = None
+    if engine is not None:
+        w = engine.weights
+        current = {"lgbm": w.lgbm, "transformer": w.transformer,
+                   "tcn": w.tcn, "sentiment": w.sentiment}
+    staged = None
+    try:
+        staged = json.loads(Path("config/staging/profit_suggestions.json").read_text())
+    except Exception:
+        pass
+    return JSONResponse(content=jsonable_encoder({
+        "current_weights": current,
+        "staged": staged,
+        "apply_endpoint": "POST /admin/ensemble/apply-staged (paper mode only)",
+    }))
+
+
+@app.post("/admin/ensemble/apply-staged")
+async def apply_staged_weights() -> JSONResponse:
+    """Hot-swap the running ensemble to the Profit Agent's staged proposal.
+
+    Human-triggered by design (CLAUDE.md: agents write to staging; a human
+    applies). Paper mode only — live weight changes go through config review.
+    """
+    if get_settings().alpaca_mode != "paper":
+        return JSONResponse(status_code=403, content={"error": "paper mode only"})
+    engine = getattr(app.state, "ensemble", None)
+    if engine is None:
+        return JSONResponse(status_code=503, content={"error": "ensemble not initialized"})
+    from src.models.ensemble import EnsembleWeights
+    staging = Path("config/staging/profit_suggestions.json")
+    if not staging.exists():
+        return JSONResponse(status_code=404, content={"error": "no staged proposal"})
+    old = engine.weights
+    try:
+        new = EnsembleWeights.from_staging(staging)
+        engine.update_weights(new)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": f"staged weights invalid: {exc}"})
+    logger.info("ensemble_weights_applied_from_staging")
+    return JSONResponse(content={
+        "applied": True,
+        "old": {"lgbm": old.lgbm, "transformer": old.transformer,
+                "tcn": old.tcn, "sentiment": old.sentiment},
+        "new": {"lgbm": new.lgbm, "transformer": new.transformer,
+                "tcn": new.tcn, "sentiment": new.sentiment},
+        "note": "runtime-only change; restart reverts to defaults unless staged file persists",
+    })
+
+
+@app.post("/admin/screener/run")
+async def trigger_screener() -> JSONResponse:
+    """Run the nightly universe screener now (rescans S&P 500, hot-swaps)."""
+    agent = getattr(app.state, "screener_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "screener agent not initialized"}, status_code=503)
+    await agent.run()
+    return JSONResponse(content={
+        "universe": getattr(_signal_loop, "_universe", []),
+        "count": len(getattr(_signal_loop, "_universe", [])),
+    })
+
+
+@app.post("/admin/news-risk/run")
+async def trigger_news_risk() -> JSONResponse:
+    """Manually run the macro news risk scan."""
+    agent = getattr(app.state, "news_risk_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "news risk agent not initialized"}, status_code=503)
+    return JSONResponse(content=jsonable_encoder(await agent.run()))
+
+
+@app.post("/admin/integrity/run")
+async def trigger_integrity(repair: bool = False) -> JSONResponse:
+    """Manually run the Integrity Sentinel. `?repair=true` also rewrites
+    divergent pnl_pct rows and closes zombie open rows (paper mode only,
+    with a JSON backup written to reports/integrity/ first)."""
+    agent = getattr(app.state, "integrity_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Integrity agent not initialized"}, status_code=503)
+    result = await agent.run(repair=repair)
+    return JSONResponse(content=jsonable_encoder(result))
 
 
 @app.post("/admin/research/daily")

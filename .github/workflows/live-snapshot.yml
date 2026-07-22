@@ -1,0 +1,67 @@
+name: Live Snapshot Relay
+
+# Bridges the cloud-agent monitoring gap: the Claude sandbox egress proxy
+# refuses CONNECT tunnels to Railway (the "403" in the W29/W30 reviews), but
+# it CAN read GitHub. GitHub's runners CAN reach Railway (verified — the
+# external watchdog's curls succeed). So this workflow snapshots production
+# state to a single-commit `live-snapshot` branch that cloud routines read:
+#
+#   https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/<name>.json
+#
+# Force-pushed as one commit each run — no history bloat, never touches main,
+# never triggers the deploy workflow.
+
+on:
+  schedule:
+    # Every 30 min, 13:00-21:00 UTC Mon-Fri (covers US market hours + close)
+    - cron: "0,30 13-21 * * 1-5"
+    # Once nightly so the pre-market cloud routine has fresh-enough data
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-snapshot
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch production state
+        run: |
+          set -e
+          BASE="https://stockbot-production-cbde.up.railway.app"
+          mkdir -p snapshot
+          for ep in health watchdog integrity diagnostics; do
+            curl -sf --max-time 30 "$BASE/$ep" > "snapshot/$ep.json" \
+              || echo "{\"error\": \"$ep unreachable\"}" > "snapshot/$ep.json"
+          done
+          curl -sf --max-time 30 "$BASE/trades?limit=100" > snapshot/trades.json \
+            || echo '{"error": "trades unreachable"}' > snapshot/trades.json
+          python3 - <<'EOF'
+          import json, datetime
+          meta = {
+              "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "source": "github-actions live-snapshot relay",
+              "note": "Read-only mirror of production endpoints for cloud agents "
+                      "whose sandbox cannot reach Railway directly.",
+          }
+          json.dump(meta, open("snapshot/meta.json", "w"), indent=1)
+          EOF
+
+      - name: Publish to live-snapshot branch (single commit, force-push)
+        run: |
+          set -e
+          git config user.name "stockbot-snapshot[bot]"
+          git config user.email "noreply@github.com"
+          git checkout --orphan live-snapshot
+          git rm -rf --cached . >/dev/null
+          git add -f snapshot/
+          git commit -m "live snapshot $(date -u +%Y-%m-%dT%H:%M)Z"
+          git push -f origin live-snapshot

@@ -82,8 +82,12 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def next_pending(state: dict[str, Any]) -> dict[str, Any] | None:
+    # "pending" is the worker's own vocabulary; "needs_data_run" is what the
+    # R&D desk personas write after implementing a hypothesis. Both mean
+    # "awaiting its backtest" — treating them differently idled the worker
+    # against a 7-deep queue on first boot (2026-07-21).
     for h in state.get("hypothesis_queue", []):
-        if h.get("status") == "pending":
+        if h.get("status") in ("pending", "needs_data_run"):
             return h
     return None
 

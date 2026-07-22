@@ -28,6 +28,7 @@ scikit-learn>=1.4.0
 
 # Feature engineering
 pandas>=2.2.2
+lxml>=5.2.0            # pandas.read_html — S&P 500 constituent fetch (screener)
 numpy>=1.26.4
 scipy>=1.13.0
 

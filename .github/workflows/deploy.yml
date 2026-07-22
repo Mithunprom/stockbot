@@ -11,6 +11,13 @@ name: Deploy to Railway on main
 on:
   push:
     branches: [main]
+  # Drift self-healer: merges performed by automation with the default
+  # GITHUB_TOKEN do NOT emit push-triggered workflows (GitHub recursion
+  # prevention), so bot-merged PRs were silently never deployed (prod sat at
+  # 4f0de50 while main advanced, Jul 15-20). This schedule re-checks every
+  # 30 min during waking hours and deploys only if prod commit != main HEAD.
+  schedule:
+    - cron: "5,35 11-23 * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -36,8 +43,22 @@ jobs:
             echo "have_token=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Deploy
+      - name: Check drift (skip if prod already at main HEAD)
+        id: drift
         if: steps.token.outputs.have_token == 'true'
+        run: |
+          LIVE=$(curl -s --max-time 15 "https://stockbot-production-cbde.up.railway.app/health" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit','unknown'))" 2>/dev/null || echo unknown)
+          echo "prod=$LIVE main=${GITHUB_SHA}"
+          if [ "$LIVE" = "${GITHUB_SHA}" ]; then
+            echo "needs_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "prod already at main HEAD — nothing to deploy"
+          else
+            echo "needs_deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy
+        if: steps.token.outputs.have_token == 'true' && steps.drift.outputs.needs_deploy == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
@@ -47,7 +68,7 @@ jobs:
           railway up --service stockbot --detach
 
       - name: Verify deploy (poll /health for new commit)
-        if: steps.token.outputs.have_token == 'true'
+        if: steps.token.outputs.have_token == 'true' && steps.drift.outputs.needs_deploy == 'true'
         run: |
           for i in $(seq 1 30); do
             sleep 20
