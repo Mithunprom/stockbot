@@ -292,6 +292,42 @@ async def load_universe_from_db() -> list[str] | None:
         return None
 
 
+def _filter_tradable(tickers: list[str]) -> list[str]:
+    """Drop symbols the broker won't trade (delistings, class-share quirks).
+
+    An untradable symbol in the universe makes the batch bar fetch and every
+    downstream feature silently incomplete for that name. Fails OPEN: if the
+    assets API is unreachable, keep the list as-is rather than emptying it.
+    """
+    import os
+
+    import httpx
+    key = os.environ.get("ALPACA_API_KEY", "")
+    secret = os.environ.get("ALPACA_SECRET_KEY", "")
+    if not key or not secret:
+        return tickers
+    base = os.environ.get("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
+    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
+    keep, dropped = [], []
+    try:
+        with httpx.Client(timeout=15, headers=headers) as client:
+            for t in tickers:
+                try:
+                    r = client.get(f"{base}/v2/assets/{t}")
+                    if r.status_code == 200 and r.json().get("tradable"):
+                        keep.append(t)
+                    else:
+                        dropped.append(t)
+                except Exception:
+                    keep.append(t)   # network hiccup — don't punish the ticker
+    except Exception as exc:
+        logger.warning("tradability_check_failed", error=str(exc))
+        return tickers
+    if dropped:
+        logger.warning("screener_dropped_untradable", tickers=dropped)
+    return keep
+
+
 class ScreenerAgent:
     """Nightly universe screener — updates config/universe.json.
 
@@ -370,6 +406,8 @@ class ScreenerAgent:
             if ticker not in universe_set and ticker not in EXCLUDE_TICKERS and ticker not in CRYPTO_TICKERS:
                 universe.append(ticker)
                 universe_set.add(ticker)
+
+        universe = _filter_tradable(universe)
 
         # Write detailed report
         self._write_report(scored, universe)

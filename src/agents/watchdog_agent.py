@@ -169,6 +169,29 @@ class WatchdogAgent:
                 "detail": f"TRADING HALTED: {getattr(self._cb, '_halt_reason', '')} — "
                           "human must call resume_trading()"}
 
+    def _check_universe_fresh(self) -> dict[str, Any]:
+        """Universe rotating? A silently degraded screener froze it for weeks.
+
+        Two independent failures (ephemeral FS, missing lxml) each fell back
+        to 'anchors only' while logging nothing louder than a warning. This
+        check makes that state visible instead of invisible.
+        """
+        universe = getattr(self._loop, "_universe", None)
+        if universe is None:
+            return {"name": "universe_fresh", "status": "ok", "healed": False,
+                    "detail": "not applicable (loop exposes no universe)"}
+        n = len(universe)
+        if n == 0:
+            return {"name": "universe_fresh", "status": "critical", "healed": False,
+                    "detail": "signal loop has an EMPTY universe — nothing can trade"}
+        if n <= 52:
+            return {"name": "universe_fresh", "status": "warn", "healed": False,
+                    "detail": f"universe is {n} names — at or below the anchor count, "
+                              "so the S&P screen likely fell back to anchors-only "
+                              "(check screener logs for sp500_fetch_failed)"}
+        return {"name": "universe_fresh", "status": "ok", "healed": False,
+                "detail": f"{n} tickers, screener contributing beyond anchors"}
+
     def _check_data_fresh(self) -> dict[str, Any]:
         if not self._market_open():
             return {"name": "data_fresh", "status": "ok", "healed": False,
@@ -196,6 +219,7 @@ class WatchdogAgent:
             checks.append(zombie_check)
             checks.append(self._check_circuit_breaker())
             checks.append(self._check_data_fresh())
+            checks.append(self._check_universe_fresh())
 
         worst = "ok"
         for c in checks:
