@@ -1,13 +1,29 @@
 {
  "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
- "last_iteration_date": "2026-07-20",
- "active_hypothesis": "H1: Cross-sectional top-k ranking \u2014 backtest pending Railway worker.",
+ "last_iteration_date": "2026-07-22",
+ "active_hypothesis": "INTEGRITY \u2014 fill_price_pnl_consistency check shipped (PR pending). H1\u2013H7 backtest still blocked on Railway worker.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
-  "lgbm_oos_ic": 0.166
+  "lgbm_oos_ic": 0.166,
+  "snapshot_date": "2026-07-21",
+  "all_time_n_closed": 96,
+  "all_time_win_rate": 0.458,
+  "all_time_gross_profit": 4375,
+  "all_time_gross_loss": 5716,
+  "all_time_pf": 0.77,
+  "trailing_30_pf": 0.60,
+  "trailing_30_win_rate": 0.433,
+  "kelly_fraction": -0.73,
+  "kelly_mode": "probation",
+  "open_positions": 2,
+  "n_trades_today": 1,
+  "signals_passing": 0,
+  "today_closed_pnl": 1401.29,
+  "suspected_corrupt_rows": [93, 83],
+  "principal_skeptic_flag": "MU #93 pnl=-512 vs fill-implied -114 (15.5%); SMCI #83 pnl=-638 vs fill-implied -139 (24.8%). Both pass existing pnl_pct check. New fill_price_pnl_consistency check catches both."
  },
  "live_data_status": {
   "date": "2026-07-22",
@@ -132,9 +148,33 @@
    "status": "proposed",
    "added": "2026-07-21",
    "added_by": "owner request (two-sided news radar, v0.4.10)"
+  },
+  {
+   "id": "H9",
+   "hypothesis": "Probe quality floor: during Kelly probation, require a minimum ensemble_signal >= 0.10 (and sentiment >= -0.50) for the daily probe entry. SNDK id=104 entered with ensemble=0.018 and sentiment=-0.90 \u2014 essentially pure noise. Historical ticker IC may be >= 0.05 over 30d but the current-bar signal can still be junk. A simple floor prevents noise-level probe entries while preserving the right to probe on genuine opportunity.",
+   "test": "python scripts/research_backtest.py --phase probe_floor (variants: min_signal \u2208 {0.05, 0.10, 0.15} \u00d7 min_sentiment \u2208 {-0.50, 0.0}); acceptance = fewer noise entries, no reduction in Kelly IC recovery rate, improvement on BOTH tune AND hold-out legs",
+   "status": "proposed",
+   "added": "2026-07-22",
+   "added_by": "Principal Skeptic / Integrity Sentinel review of SNDK probe id=104 (ensemble=0.018, sentiment=-0.90 \u2014 clear noise-level entry in probation mode). Separate from CODE RED integrity work; needs dedicated backtest on Railway.",
+   "pm_priority_note": "Low-risk guard. Does not change live strategy for non-probe paths. Safe to implement once Railway worker is enabled.",
+   "blocked_note": "needs_data_run on Railway; implement AFTER H0 baseline is established"
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-07-22",
+   "hypothesis_id": "INTEGRITY_FILL_PRICE_CHECK",
+   "result": "SHIPPED — fill_price_pnl_consistency check added to Integrity Sentinel (CODE RED P1). Closes blind spot where pnl=pnl_pct×entry×shares was internally consistent even when pnl itself was corrupted vs actual fill prices. Two pre-v0.4.5 rows confirmed: MU #93 (15.5% deviation) and SMCI #83 (24.8% deviation). New FILL_PNL_TOLERANCE=0.05 (5%) calibrated from live data (clean trades 0-3%, corrupted trades 15-25%). H9 proposed: probe quality floor (ensemble_signal >= 0.10 for probation probes).",
+   "tests_status": "24/24 tests pass in test_integrity_agent.py; 105 pass full suite (18 pre-existing sandbox failures unchanged — torch/pydantic deps absent in sandbox)",
+   "new_tests": 8,
+   "files_changed": [
+    "src/agents/integrity_agent.py",
+    "tests/unit/test_integrity_agent.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-integrity-fill-price-check",
+   "notes": "CODE RED P1: ledger integrity. No strategy change. All new code is pure functions (no DB writes). Status 'warn' (not 'critical') because auto-repair would require all fill records which may not be available for historical trades."
+  },
   {
    "date": "2026-07-20",
    "hypothesis_id": "W30_PROGRAM_REVIEW",
