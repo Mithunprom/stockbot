@@ -11,10 +11,12 @@ from __future__ import annotations
 import pytest
 
 from src.agents.integrity_agent import (
+    FILL_PNL_TOLERANCE,
     KELLY_SANE_ABS_PNL_PCT,
     PNL_PCT_TOLERANCE,
     classify_row,
     expected_pnl_pct,
+    fill_price_pnl_deviation,
     is_divergent,
 )
 
@@ -103,3 +105,72 @@ class TestSharesReconciliation:
         pnl, stored, entry = 777.0, 0.05172, 96.047255
         implied = pnl / (stored * entry)
         assert abs(implied - 156.4) < 1.0
+
+
+class TestFillPricePnlDeviation:
+    """Pin the fill-price vs stored-pnl reconciliation helper.
+
+    The existing pnl_pct check verifies pnl_pct = pnl/(entry*shares) which is
+    internally consistent even when pnl itself is corrupted. This helper catches
+    the complementary case: pnl doesn't match (exit-entry)*shares.
+    """
+
+    def test_clean_trade_near_zero_deviation(self):
+        # MA #98: entry 540.12, exit 542.84, 28.22 shares, pnl 76.76
+        # fill_pnl = (542.84-540.12)*28.22 = 76.76 → deviation ≈ 0
+        dev = fill_price_pnl_deviation(
+            pnl=76.76, exit_price=542.84, entry_price=540.12, shares=28.22
+        )
+        assert dev is not None
+        assert dev < FILL_PNL_TOLERANCE
+
+    def test_mu_93_corruption_flagged(self):
+        # MU #93 (pre-v0.4.5): price moved from 860.46→822.58 on 3 shares
+        # → fill_pnl ≈ -113.64, but stored pnl = -512.48 (15.45% deviation)
+        dev = fill_price_pnl_deviation(
+            pnl=-512.48, exit_price=822.58, entry_price=860.46, shares=3.0
+        )
+        assert dev is not None
+        assert dev > FILL_PNL_TOLERANCE
+        assert dev == pytest.approx(0.1545, abs=0.002)
+
+    def test_smci_83_corruption_flagged(self):
+        # SMCI #83 (pre-v0.4.5): price moved from 27.95→26.02 on 72 shares
+        # → fill_pnl ≈ -138.96, but stored pnl = -638.06 (24.8% deviation)
+        dev = fill_price_pnl_deviation(
+            pnl=-638.06, exit_price=26.02, entry_price=27.95, shares=72.0
+        )
+        assert dev is not None
+        assert dev > FILL_PNL_TOLERANCE
+        assert dev == pytest.approx(0.2481, abs=0.002)
+
+    def test_multi_fill_tolerance_not_exceeded(self):
+        # WDC #97: entry 482.82, exit 494.44, 7 shares, pnl 154.16
+        # fill_pnl = 81.34 → deviation 2.15%, within 5% tolerance
+        dev = fill_price_pnl_deviation(
+            pnl=154.16, exit_price=494.44, entry_price=482.82, shares=7.0
+        )
+        assert dev is not None
+        assert dev < FILL_PNL_TOLERANCE
+
+    def test_missing_inputs_return_none(self):
+        assert fill_price_pnl_deviation(None, 100.0, 90.0, 10.0) is None
+        assert fill_price_pnl_deviation(50.0, None, 90.0, 10.0) is None
+        assert fill_price_pnl_deviation(50.0, 100.0, None, 10.0) is None
+        assert fill_price_pnl_deviation(50.0, 100.0, 90.0, None) is None
+        assert fill_price_pnl_deviation(50.0, 100.0, 0.0, 10.0) is None
+
+    def test_dust_notional_returns_none(self):
+        # entry_price=0.09 * shares=10 = notional=0.9 < 1.0 → skip
+        assert fill_price_pnl_deviation(0.5, 0.11, 0.09, 10.0) is None
+
+    def test_zero_deviation_perfect_fill(self):
+        # Sanity: (exit-entry)*shares exactly matches pnl → deviation = 0
+        dev = fill_price_pnl_deviation(
+            pnl=100.0, exit_price=110.0, entry_price=100.0, shares=10.0
+        )
+        assert dev == pytest.approx(0.0)
+
+    def test_fill_pnl_tolerance_constant_is_five_pct(self):
+        # Ensures calibration hasn't drifted from the design spec
+        assert FILL_PNL_TOLERANCE == pytest.approx(0.05)

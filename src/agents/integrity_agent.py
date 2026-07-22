@@ -49,6 +49,12 @@ STALE_OPEN_DAYS = 5
 # seed window is presumed poisoned by an accounting bug.
 KELLY_SANE_ABS_PNL_PCT = 0.25
 AUDIT_WINDOW_DAYS = 60
+# Fill-price vs stored-pnl tolerance: the stored pnl and (exit-entry)*shares
+# should agree within this fraction of entry notional. A 5% tolerance absorbs
+# legitimate deviations from multi-fill averaging (observed max ~2-3% on clean
+# trades) while still catching the partial-fill corruption signature seen in the
+# 2026-07-20 audit where MU #93 diverged by 15% and SMCI #83 by 25%.
+FILL_PNL_TOLERANCE = 0.05
 # Exit rows written after this moment carry a caller-computed pnl_pct from the
 # true position notional (v0.4.5 root fix, deployed 2026-07-21 05:20 UTC).
 # For those rows a divergence means the entry-side SHARES column is wrong.
@@ -68,6 +74,30 @@ def expected_pnl_pct(pnl: float | None, entry_price: float | None,
     if notional < 1.0:
         return None
     return pnl / notional
+
+
+def fill_price_pnl_deviation(
+    pnl: float | None,
+    exit_price: float | None,
+    entry_price: float | None,
+    shares: float | None,
+) -> float | None:
+    """Fraction of entry notional by which stored pnl deviates from fill prices.
+
+    Computes |pnl - (exit_price - entry_price) * shares| / |entry_price * shares|.
+    Returns None when any input is missing or the notional is too small.
+
+    A non-zero result is expected for legitimate multi-fill trades (observed
+    1-3% from fill averaging). Deviations above FILL_PNL_TOLERANCE (5%)
+    are the partial-fill corruption signature (MU #93: 15%, SMCI #83: 25%).
+    """
+    if pnl is None or exit_price is None or not entry_price or not shares:
+        return None
+    notional = abs(entry_price * shares)
+    if notional < 1.0:
+        return None
+    fill_pnl = (exit_price - entry_price) * shares
+    return abs(float(pnl) - fill_pnl) / notional
 
 
 def is_divergent(stored: float | None, expected: float | None,
@@ -156,6 +186,74 @@ class IntegrityAgent:
                               "pnl/(entry_price*shares) — partial-fill exit bug signature"}
         return {"name": "pnl_pct_consistency", "status": "ok", "healed": False,
                 "rows": [], "detail": "all stored pnl_pct match recomputation"}
+
+    async def _audit_fill_price_pnl(self, session: Any) -> dict[str, Any]:
+        """Closed trades where pnl cannot be reconciled from fill prices.
+
+        The existing pnl_pct check verifies internal consistency:
+        pnl_pct = pnl / (entry_price * shares). It passes even when the pnl
+        dollar amount itself is corrupted, because both sides of the ratio are
+        wrong by the same factor. This check closes that blind spot: for each
+        closed trade with a stored exit_price it verifies that
+        |pnl - (exit_price - entry_price) * shares| / |entry_price * shares|
+        is below FILL_PNL_TOLERANCE.
+
+        Known anomalies motivating this check (pre-v0.4.5 repair window):
+          MU #93   pnl=-512 vs fill-implied -114 (15.5% deviation, 3 shares)
+          SMCI #83 pnl=-638 vs fill-implied -139 (24.8% deviation, 72 shares)
+        Both passed pnl_pct_consistency because the pct was internally consistent
+        with the corrupted pnl — not with the actual fill prices.
+        """
+        from sqlalchemy import select
+
+        from src.data.db import Trade
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=AUDIT_WINDOW_DAYS)
+        result = await session.execute(
+            select(Trade.id, Trade.ticker, Trade.pnl, Trade.entry_price,
+                   Trade.exit_price, Trade.shares, Trade.exit_time)
+            .where(Trade.exit_time.isnot(None), Trade.exit_time >= cutoff,
+                   Trade.exit_price.isnot(None))
+        )
+        anomalous: list[dict[str, Any]] = []
+        for tid, ticker, pnl, entry_price, exit_price, shares, _exit_time in result.all():
+            dev = fill_price_pnl_deviation(pnl, exit_price, entry_price, shares)
+            if dev is None or dev <= FILL_PNL_TOLERANCE:
+                continue
+            fill_pnl = (float(exit_price) - float(entry_price)) * float(shares)
+            anomalous.append({
+                "id": tid,
+                "ticker": ticker,
+                "stored_pnl": round(float(pnl), 2),
+                "fill_price_pnl": round(fill_pnl, 2),
+                "deviation_pct": round(dev * 100, 2),
+                "entry_price": round(float(entry_price), 4),
+                "exit_price": round(float(exit_price), 4),
+                "shares": shares,
+                "note": ("pnl does not reconcile with (exit-entry)*shares — "
+                         "suspect residual partial-fill corruption in pnl column"),
+            })
+        if anomalous:
+            return {
+                "name": "fill_price_pnl_consistency",
+                "status": "warn",
+                "healed": False,
+                "rows": anomalous,
+                "detail": (
+                    f"{len(anomalous)} closed trade(s) in {AUDIT_WINDOW_DAYS}d where "
+                    f"|pnl - fill_pnl| > {int(FILL_PNL_TOLERANCE * 100)}% of notional — "
+                    "pnl_pct is internally consistent but the dollar pnl itself "
+                    "cannot be reconciled from fill prices; investigate before "
+                    "trusting cumulative PnL totals"
+                ),
+            }
+        return {
+            "name": "fill_price_pnl_consistency",
+            "status": "ok",
+            "healed": False,
+            "rows": [],
+            "detail": "all closed trade pnl values reconcile with fill prices",
+        }
 
     async def _audit_stale_open_rows(self, session: Any) -> dict[str, Any]:
         """Open DB rows too old for orphan recovery to ever close."""
@@ -314,6 +412,7 @@ class IntegrityAgent:
         async with self._sf() as session:
             checks = [
                 await self._audit_pnl_pct(session),
+                await self._audit_fill_price_pnl(session),
                 await self._audit_stale_open_rows(session),
                 await self._audit_kelly_window(session),
                 await self._audit_db_vs_broker(session),
