@@ -1213,7 +1213,16 @@ class SignalLoop:
 
             self._entry_dates[ticker] = entry_date
             days_held = max(0, np.busday_count(entry_date, today))
-            self._bars_held.setdefault(ticker, int(days_held) * 390)
+            # Market-minute-accurate age, not a whole-day rounding: a position
+            # entered at 09:48 today is ~300 bars old by 14:50, not 0 and not
+            # 390. Overwrite (not setdefault) — this count is authoritative.
+            now_et = datetime.now(et)
+            if row is not None and entry_date == today:
+                bars_est = max(0, int((now_et - row.astimezone(et)).total_seconds() // 60))
+            else:
+                mins_since_open = max(0, (now_et.hour * 60 + now_et.minute) - (9 * 60 + 30))
+                bars_est = int(days_held) * 390 + min(mins_since_open, 390)
+            self._bars_held[ticker] = min(bars_est, int(days_held + 1) * 390)
             pos = self._pm._positions.get(ticker)
             if pos is not None:
                 self._entry_prices.setdefault(ticker, pos.avg_entry_price)
@@ -1614,9 +1623,13 @@ class SignalLoop:
             self._entry_prices[ticker] = entry_price
             self._entry_directions[ticker] = entry_dir
             self._peak_prices[ticker] = pos.last_price or entry_price
-            # Treat as one day old: normal exit logic applies (a forced
-            # max_hold here used to dump every position on each redeploy)
-            self._bars_held.setdefault(ticker, 390)
+            # Do NOT guess bars_held here. This runs on the first tick after
+            # a restart, BEFORE _recover_entry_state() rebuilds the true age
+            # from the DB — and the old 390 default equalled the max-hold
+            # threshold, so every synced position was dumped as "max_hold"
+            # within a minute of each redeploy (AMZN/MU, 2026-07-21 18:50).
+            # Missing key reads as 0 below: hold one tick, then recovery's
+            # accurate count takes over.
 
         # ATR-adaptive exit thresholds (true daily vol)
         sl, ts, tp = _atr_exits(self._daily_vol_for(ticker))
