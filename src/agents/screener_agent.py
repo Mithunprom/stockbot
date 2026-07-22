@@ -3,7 +3,8 @@
 Runs every weekday at 18:00 ET (after market close).
 
 Scoring model:
-  score = 0.35 * mom_5d + 0.35 * mom_20d + 0.20 * vol_ratio + 0.10 * rs_vs_spy
+  score = 0.25*|mom_5d| + 0.25*|mom_20d| + 0.15*vol_surge
+        + 0.25*realized_vol + 0.10*|rs_vs_spy|
 
 Selection:
   1. Fetch S&P 500 constituents from Wikipedia
@@ -11,11 +12,14 @@ Selection:
   3. Filter on liquidity (avg vol > 500k, price $5-$2000)
   4. Always include ANCHOR_TICKERS (defense, momentum names, core large-caps)
   5. Fill remaining slots (up to MAX_UNIVERSE) with top scorers
-  6. Write result to config/universe.json
+  6. Persist result to the DB (app_state) AND config/universe.json
   7. Hot-swap the signal loop universe (no restart needed)
 
 Output:
-  config/universe.json — read by main.py on startup and by the signal loop
+  app_state["universe"] — DURABLE store; survives redeploys (Railway's
+      container filesystem does not, which silently froze the universe at
+      the 2026-05-27 repo snapshot for eight weeks)
+  config/universe.json — same payload, read as fallback on a cold DB
   reports/opportunities/screener_YYYY-MM-DD.json — audit trail
 """
 
@@ -32,23 +36,33 @@ logger = structlog.get_logger(__name__)
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
-MAX_UNIVERSE = 40          # max tickers in trading universe
+MAX_UNIVERSE = 75          # max tickers (was 40) — anchors + momentum/vol picks
 MIN_AVG_VOLUME = 500_000   # daily avg volume floor
 MIN_PRICE = 5.0
 MAX_PRICE = 2000.0
 
 # These tickers are ALWAYS in the universe regardless of momentum score.
+# Sector-diversified so the book isn't one macro bet (owner request 2026-07-21:
+# the bot missed a broadly bullish tape while confined to 20 correlated names).
 ANCHOR_TICKERS: list[str] = [
-    # Core mega-cap tech (high liquidity, tight spreads)
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
-    # Semiconductors / storage
-    "AVGO", "AMD", "MU", "SMCI", "SNDK", "WDC",
-    # Financials
-    "JPM", "V", "MA",
-    # High-momentum / AI
-    "PLTR", "ARM", "MSTR",
+    # Mega-cap tech / FAANG (high liquidity, tight spreads)
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA", "NFLX",
+    # Memory & storage complex
+    "MU", "SNDK", "WDC", "STX",
+    # Semis / AI hardware
+    "AVGO", "AMD", "SMCI", "ARM", "TSM", "QCOM", "INTC", "LRCX", "AMAT", "KLAC",
+    # AI software / infrastructure
+    "PLTR", "CRM", "NOW", "SNOW", "ORCL", "ANET", "DELL",
+    # Defense / aerospace / missiles (war-regime hedge)
+    "LMT", "RTX", "NOC", "GD", "LHX", "HII",
+    # Financials / banks
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    # Healthcare (defensive diversifier)
+    "UNH", "JNJ", "LLY", "ABBV", "PFE", "MRK",
     # Energy
-    "XOM", "CVX",
+    "XOM", "CVX", "COP",
+    # High-beta / crypto-proxy
+    "MSTR", "COIN",
 ]
 
 # Crypto tickers — excluded until a crypto-specific model is trained.
@@ -140,16 +154,26 @@ def _score_tickers(tickers: list[str]) -> list[dict[str, Any]]:
         mom_20d = float(closes[-1] / closes[-20] - 1) if len(closes) >= 20 else 0.0
         vol_ratio = float(np.mean(volumes[-5:]) / max(avg_vol_20d, 1)) if len(volumes) >= 5 else 1.0
 
+        # Realized daily volatility (annualization not needed — relative only).
+        # The exit engine scales stops by ATR, so volatile names are handled
+        # correctly; a low-vol name simply cannot pay for its spread + fees.
+        rets = np.diff(closes[-21:]) / closes[-21:-1] if len(closes) >= 21 else np.array([0.0])
+        realized_vol = float(np.std(rets)) if rets.size > 1 else 0.0
+
         # Relative strength vs SPY
         rs_5d = mom_5d - spy_ret_5d
         rs_20d = mom_20d - spy_ret_20d
         rs_vs_spy = 0.5 * rs_5d + 0.5 * rs_20d
 
+        # Absolute momentum, so strong DOWNSIDE movers also qualify: the
+        # signal model predicts direction, and a name that only moves up is
+        # half a universe.
         score = (
-            0.35 * mom_5d
-            + 0.35 * mom_20d
-            + 0.20 * min(vol_ratio - 1.0, 2.0)   # cap vol surge at 3x
-            + 0.10 * rs_vs_spy
+            0.25 * abs(mom_5d)
+            + 0.25 * abs(mom_20d)
+            + 0.15 * min(vol_ratio - 1.0, 2.0)     # cap vol surge at 3x
+            + 0.25 * min(realized_vol / 0.02, 2.0)  # 2%/day vol = 1.0
+            + 0.10 * abs(rs_vs_spy)
         )
 
         results.append({
@@ -160,6 +184,7 @@ def _score_tickers(tickers: list[str]) -> list[dict[str, Any]]:
             "mom_5d": round(mom_5d * 100, 2),
             "mom_20d": round(mom_20d * 100, 2),
             "vol_ratio": round(vol_ratio, 2),
+            "realized_vol_pct": round(realized_vol * 100, 2),
             "rs_vs_spy": round(rs_vs_spy * 100, 2),
         })
 
@@ -194,6 +219,59 @@ def _parse_yf_batch(raw: Any, tickers: list[str]) -> dict[str, dict]:
 
 # ─── Screener agent ────────────────────────────────────────────────────────────
 
+async def save_universe_to_db(universe: list[str]) -> None:
+    """Persist the screened universe to app_state (survives redeploys)."""
+    from sqlalchemy.dialects.postgresql import insert as _pg_insert
+
+    from src.data.db import AppState, get_session_factory
+    payload = json.dumps({
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "screener_agent",
+        "count": len(universe),
+        "symbols": universe,
+    })
+    try:
+        sf = get_session_factory()
+        async with sf() as session:
+            stmt = _pg_insert(AppState).values(
+                key="universe", value=payload,
+                updated_at=datetime.now(timezone.utc),
+            ).on_conflict_do_update(
+                index_elements=["key"],
+                set_={"value": payload, "updated_at": datetime.now(timezone.utc)},
+            )
+            await session.execute(stmt)
+            await session.commit()
+        logger.info("universe_persisted_to_db", count=len(universe))
+    except Exception as exc:
+        logger.warning("universe_db_persist_failed", error=str(exc))
+
+
+async def load_universe_from_db() -> list[str] | None:
+    """Read the last screened universe from app_state, or None."""
+    from sqlalchemy import select as _sel
+
+    from src.data.db import AppState, get_session_factory
+    try:
+        sf = get_session_factory()
+        async with sf() as session:
+            row = (await session.execute(
+                _sel(AppState.value, AppState.updated_at)
+                .where(AppState.key == "universe")
+            )).first()
+        if row is None:
+            return None
+        data = json.loads(row[0])
+        symbols = data.get("symbols") or None
+        if symbols:
+            logger.info("universe_loaded_from_db", count=len(symbols),
+                        updated_at=data.get("updated_at"))
+        return symbols
+    except Exception as exc:
+        logger.warning("universe_db_load_failed", error=str(exc))
+        return None
+
+
 class ScreenerAgent:
     """Nightly universe screener — updates config/universe.json.
 
@@ -218,7 +296,8 @@ class ScreenerAgent:
                 logger.warning("screener_no_results_keeping_existing")
                 return
 
-            # Write to config/universe.json
+            # Persist: DB first (durable), file second (fallback/local dev)
+            await save_universe_to_db(new_universe)
             self._write_universe(new_universe)
 
             # Hot-swap signal loop universe if running

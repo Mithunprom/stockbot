@@ -259,6 +259,22 @@ class Trade(Base):
 # ─── Prediction Outcomes (Live IC Tracker) ─────────────────────────────────────
 
 
+class AppState(Base):
+    """Small key-value store for state that must survive redeploys.
+
+    Railway's filesystem is ephemeral — anything written to config/ or
+    reports/ at runtime dies with the container. First user: the nightly
+    screener's universe rotation (stuck at the 2026-05-27 repo file for two
+    months because every deploy reverted config/universe.json).
+    """
+
+    __tablename__ = "app_state"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)          # JSON-encoded
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False)
+
+
 class PredictionOutcome(Base):
     """Prediction-outcome pairs for live IC tracking.
 
