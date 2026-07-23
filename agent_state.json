@@ -1,33 +1,37 @@
 {
  "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
- "last_iteration_date": "2026-07-22",
- "active_hypothesis": "INTEGRITY \u2014 fill_price_pnl_consistency check shipped (PR pending). H1\u2013H7 backtest still blocked on Railway worker.",
+ "last_iteration_date": "2026-07-23",
+ "active_hypothesis": "INTEGRITY \u2014 corrected_metrics_summary shipped (PR pending). fill_price_pnl_consistency merged (PR #17). H1\u2013H7 backtest still blocked on Railway worker.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-21",
-  "all_time_n_closed": 96,
-  "all_time_win_rate": 0.458,
-  "all_time_gross_profit": 4375,
-  "all_time_gross_loss": 5716,
-  "all_time_pf": 0.77,
+  "snapshot_date": "2026-07-23",
+  "all_time_n_closed": 94,
+  "all_time_win_rate": 0.383,
+  "all_time_gross_profit": 4179.83,
+  "all_time_gross_loss": 3935.68,
+  "all_time_pf_stored": 1.06,
+  "all_time_pf_corrected": 1.587,
+  "all_time_net_profit_stored": 244.15,
+  "all_time_net_profit_corrected": 1533.48,
   "trailing_30_pf": 0.60,
   "trailing_30_win_rate": 0.433,
-  "kelly_fraction": -0.73,
+  "kelly_fraction": -0.1551,
   "kelly_mode": "probation",
-  "open_positions": 2,
-  "n_trades_today": 1,
-  "signals_passing": 0,
-  "today_closed_pnl": 1401.29,
-  "suspected_corrupt_rows": [93, 83],
-  "principal_skeptic_flag": "MU #93 pnl=-512 vs fill-implied -114 (15.5%); SMCI #83 pnl=-638 vs fill-implied -139 (24.8%). Both pass existing pnl_pct check. New fill_price_pnl_consistency check catches both."
+  "kelly_lookback_trades": 25,
+  "open_positions": 6,
+  "signals_passing": 4,
+  "signals_blocked_reason": "Kelly probation",
+  "confirmed_corrupt_rows": [54, 68, 82, 83, 93],
+  "principal_skeptic_flag": "CONFIRMED 5 corrupt rows (up from 2 suspected): V #54 (10.5%), XOM #68 (6.9%), MSFT #82 (11.0%), MU #93 (15.5%), SMCI #83 (24.8%). Gross loss overstated by $1,324. Corrected PF 1.587 vs stored 1.06. Kelly probation may be driven by corrupted losses. Integrity Sentinel corrected_metrics check now quantifies this automatically.",
+  "code_red_progress": "Day 3 (declared 2026-07-20). Integrity checks: fill_price_pnl merged. Corrected metrics function added. Kelly window passes sanity but may still contain inflated-loss rows within the 25% threshold."
  },
  "live_data_status": {
-  "date": "2026-07-22",
-  "status": "OK \u2014 direct + snapshot relay",
+  "date": "2026-07-23",
+  "status": "OK \u2014 snapshot relay (Railway blocks datacenter IPs, reading live-snapshot branch)",
   "note": "The '403' was never the service: Railway blocks datacenter IPs (cloud sandbox, GH Actions), not residential. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
@@ -161,6 +165,20 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-07-23",
+   "hypothesis_id": "INTEGRITY_CORRECTED_METRICS",
+   "result": "SHIPPED — corrected_metrics_summary() pure function added to Integrity Sentinel (CODE RED P1). Substitutes fill-price PnL for the 5 confirmed-corrupt rows and recomputes PF, win rate, net profit, and half-Kelly estimate. _audit_corrected_metrics() calls the function after each fill_price_pnl audit and writes reports/integrity/corrected_metrics.json. Principal Skeptic finding: corrected PF 1.587 vs stored 1.06, corrected net profit $1,533 vs stored $244. The scoreboard has been understating true performance. Kelly probation may be partially driven by inflated-loss data in the 10-day lookback window.",
+   "tests_status": "39/39 tests pass in test_integrity_agent.py (24 pre-existing + 15 new). 105 pass full suite (10 pre-existing sandbox failures unchanged — numpy/pydantic deps absent in sandbox).",
+   "new_tests": 15,
+   "files_changed": [
+    "src/agents/integrity_agent.py",
+    "tests/unit/test_integrity_agent.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-integrity-corrected-metrics",
+   "notes": "CODE RED P1: ledger truth quantification. Pure function, no DB writes. Integrity report now always includes corrected vs stored PF/net-profit/Kelly in every run. Integrity overall status remains 'warn' (5 corrupt rows unrepaired). Exit criteria progress: corrected_metrics check is now part of every Integrity Sentinel run, providing daily evidence of true performance."
+  },
   {
    "date": "2026-07-22",
    "hypothesis_id": "INTEGRITY_FILL_PRICE_CHECK",

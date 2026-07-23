@@ -108,6 +108,103 @@ def is_divergent(stored: float | None, expected: float | None,
     return abs(stored - expected) > tol
 
 
+def corrected_metrics_summary(
+    all_trades: list[dict[str, Any]],
+    fill_anomalies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Recompute aggregate performance metrics using fill-price PnL for flagged rows.
+
+    For each row in fill_anomalies the stored pnl is replaced by
+    fill_price_pnl before computing gross profit, gross loss, profit factor,
+    win rate, and a half-Kelly estimate.  Stored metrics are also reported so
+    the owner can see the gap between the dashboard number and the truth.
+
+    Args:
+        all_trades: list of dicts with at minimum: id (int|None), pnl (float).
+        fill_anomalies: list of dicts from _audit_fill_price_pnl, each with:
+                        id (int), stored_pnl (float), fill_price_pnl (float).
+    """
+    if not all_trades:
+        return {"n_trades": 0, "n_corrected": 0, "note": "no closed trades in window"}
+
+    corrections: dict[Any, float] = {
+        row["id"]: float(row["fill_price_pnl"]) for row in fill_anomalies
+    }
+
+    stored_gp = stored_gl = 0.0
+    corr_gp = corr_gl = 0.0
+    n_corrected = 0
+    corr_wins: list[float] = []
+    corr_losses: list[float] = []
+
+    for t in all_trades:
+        stored_pnl = float(t.get("pnl") or 0.0)
+        tid = t.get("id")
+        if tid in corrections:
+            effective_pnl = corrections[tid]
+            n_corrected += 1
+        else:
+            effective_pnl = stored_pnl
+
+        if stored_pnl >= 0:
+            stored_gp += stored_pnl
+        else:
+            stored_gl += abs(stored_pnl)
+
+        if effective_pnl >= 0:
+            corr_gp += effective_pnl
+            corr_wins.append(effective_pnl)
+        else:
+            corr_gl += abs(effective_pnl)
+            corr_losses.append(abs(effective_pnl))
+
+    n = len(all_trades)
+    stored_pf = stored_gp / stored_gl if stored_gl > 0.0 else None
+    corr_pf = corr_gp / corr_gl if corr_gl > 0.0 else None
+    stored_wr = sum(1 for t in all_trades if float(t.get("pnl") or 0.0) >= 0) / n
+    corr_wr = len(corr_wins) / n
+
+    # Half-Kelly: f* = (p*b - (1-p)) / b / 2 where b = avg_win / avg_loss.
+    # Using half-Kelly is conservative; negative value means unfavourable edge.
+    corr_kelly: float | None = None
+    if corr_wins and corr_losses:
+        avg_win = sum(corr_wins) / len(corr_wins)
+        avg_loss = sum(corr_losses) / len(corr_losses)
+        b = avg_win / avg_loss
+        p = corr_wr
+        corr_kelly = round((p * b - (1.0 - p)) / b / 2.0, 4)
+
+    stored_pf_r = round(stored_pf, 4) if stored_pf is not None else None
+    corr_pf_r = round(corr_pf, 4) if corr_pf is not None else None
+
+    if stored_pf is not None and corr_pf is not None and n_corrected:
+        note = (
+            f"{n_corrected} of {n} trades corrected from fill-price reconciliation; "
+            f"corrected PF {corr_pf:.3f} vs stored PF {stored_pf:.3f}"
+        )
+    elif n_corrected == 0:
+        note = f"all {n} trades reconcile with fill prices — stored metrics are correct"
+    else:
+        note = f"{n_corrected} of {n} trades corrected"
+
+    return {
+        "n_trades": n,
+        "n_corrected": n_corrected,
+        "stored_gross_profit": round(stored_gp, 2),
+        "stored_gross_loss": round(stored_gl, 2),
+        "stored_net_profit": round(stored_gp - stored_gl, 2),
+        "stored_pf": stored_pf_r,
+        "stored_win_rate": round(stored_wr, 4),
+        "corrected_gross_profit": round(corr_gp, 2),
+        "corrected_gross_loss": round(corr_gl, 2),
+        "corrected_net_profit": round(corr_gp - corr_gl, 2),
+        "corrected_pf": corr_pf_r,
+        "corrected_win_rate": round(corr_wr, 4),
+        "corrected_kelly_half": corr_kelly,
+        "note": note,
+    }
+
+
 def classify_row(stored: float | None, expected: float | None) -> str | None:
     """Repair action for a closed-trade row, or None to leave it alone.
 
@@ -305,6 +402,49 @@ class IntegrityAgent:
         return {"name": "kelly_seed_sanity", "status": "ok", "healed": False,
                 "rows": [], "detail": "Kelly seed window is sane"}
 
+    async def _audit_corrected_metrics(
+        self, session: Any, fill_anomalies: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Aggregate impact of fill-price corrections on PF, win rate, and Kelly.
+
+        Substitutes fill-price PnL for flagged rows and reports corrected vs
+        stored aggregate metrics.  Writes corrected_metrics.json so the owner
+        has a standalone answer to "what does the ledger actually say?"
+        """
+        from sqlalchemy import select
+
+        from src.data.db import Trade
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=AUDIT_WINDOW_DAYS)
+        result = await session.execute(
+            select(Trade.id, Trade.pnl)
+            .where(Trade.exit_time.isnot(None), Trade.exit_time >= cutoff,
+                   Trade.pnl.isnot(None))
+        )
+        trades = [{"id": tid, "pnl": float(pnl)} for tid, pnl in result.all()]
+
+        summary = corrected_metrics_summary(trades, fill_anomalies)
+
+        try:
+            REPORT_DIR.mkdir(parents=True, exist_ok=True)
+            (REPORT_DIR / "corrected_metrics.json").write_text(
+                json.dumps(summary, indent=2))
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            (REPORT_DIR / f"corrected_metrics_{stamp}.json").write_text(
+                json.dumps(summary, indent=2))
+        except Exception:
+            logger.exception("integrity_corrected_metrics_write_failed")
+
+        status = "warn" if summary.get("n_corrected", 0) > 0 else "ok"
+        return {
+            "name": "corrected_metrics",
+            "status": status,
+            "healed": False,
+            "rows": [],
+            "detail": summary.get("note", ""),
+            "summary": summary,
+        }
+
     async def _audit_db_vs_broker(self, session: Any) -> dict[str, Any]:
         """Open DB rows vs actual broker positions (count + ticker set)."""
         from sqlalchemy import select
@@ -410,12 +550,15 @@ class IntegrityAgent:
     async def run(self, repair: bool = False) -> dict[str, Any]:
         """Full audit; optionally repair what the audit found (paper only)."""
         async with self._sf() as session:
+            fill_check = await self._audit_fill_price_pnl(session)
             checks = [
                 await self._audit_pnl_pct(session),
-                await self._audit_fill_price_pnl(session),
+                fill_check,
                 await self._audit_stale_open_rows(session),
                 await self._audit_kelly_window(session),
                 await self._audit_db_vs_broker(session),
+                await self._audit_corrected_metrics(
+                    session, fill_check.get("rows", [])),
             ]
 
             repair_result: dict[str, Any] | None = None

@@ -15,6 +15,7 @@ from src.agents.integrity_agent import (
     KELLY_SANE_ABS_PNL_PCT,
     PNL_PCT_TOLERANCE,
     classify_row,
+    corrected_metrics_summary,
     expected_pnl_pct,
     fill_price_pnl_deviation,
     is_divergent,
@@ -174,3 +175,148 @@ class TestFillPricePnlDeviation:
     def test_fill_pnl_tolerance_constant_is_five_pct(self):
         # Ensures calibration hasn't drifted from the design spec
         assert FILL_PNL_TOLERANCE == pytest.approx(0.05)
+
+
+# Live values from the 2026-07-22 integrity snapshot — five pre-v0.4.5 rows
+# flagged by fill_price_pnl_consistency.  Used to pin the corrected-metrics math.
+_LIVE_FILL_ANOMALIES = [
+    {"id": 54,  "stored_pnl":  37.63,   "fill_price_pnl":   2.56},   # V
+    {"id": 68,  "stored_pnl": -169.33,  "fill_price_pnl": -42.90},   # XOM
+    {"id": 82,  "stored_pnl": -363.73,  "fill_price_pnl": -63.70},   # MSFT
+    {"id": 93,  "stored_pnl": -512.48,  "fill_price_pnl": -113.64},  # MU
+    {"id": 83,  "stored_pnl": -638.06,  "fill_price_pnl": -138.96},  # SMCI
+]
+
+# Three clean trades that should pass through unchanged.
+_CLEAN_TRADES = [
+    {"id": 98, "pnl":  76.76},   # MA — clean
+    {"id": 97, "pnl": 154.16},   # WDC — clean
+    {"id": 99, "pnl": -24.10},   # AMD — clean
+]
+
+
+class TestCorrectedMetricsSummary:
+    def test_empty_trades_returns_zero_counts(self):
+        result = corrected_metrics_summary([], [])
+        assert result["n_trades"] == 0
+        assert result["n_corrected"] == 0
+        assert "note" in result
+
+    def test_no_anomalies_corrected_equals_stored(self):
+        trades = [{"id": 1, "pnl": 100.0}, {"id": 2, "pnl": -50.0}]
+        result = corrected_metrics_summary(trades, [])
+        assert result["n_corrected"] == 0
+        assert result["stored_pf"] == result["corrected_pf"]
+        assert result["stored_win_rate"] == result["corrected_win_rate"]
+        assert result["stored_net_profit"] == result["corrected_net_profit"]
+
+    def test_single_loss_correction_reduces_gross_loss(self):
+        # MU #93 alone: stored -512.48, corrected -113.64
+        trades = [{"id": 93, "pnl": -512.48}]
+        anomalies = [{"id": 93, "stored_pnl": -512.48, "fill_price_pnl": -113.64}]
+        result = corrected_metrics_summary(trades, anomalies)
+        assert result["n_corrected"] == 1
+        assert result["stored_gross_loss"] == pytest.approx(512.48)
+        assert result["corrected_gross_loss"] == pytest.approx(113.64)
+        assert result["corrected_net_profit"] == pytest.approx(-113.64)
+
+    def test_correction_reduces_win_amount_not_win_count(self):
+        # V #54: stored winner $37.63 → corrected winner $2.56. Still a win.
+        trades = [{"id": 54, "pnl": 37.63}]
+        anomalies = [{"id": 54, "stored_pnl": 37.63, "fill_price_pnl": 2.56}]
+        result = corrected_metrics_summary(trades, anomalies)
+        assert result["n_corrected"] == 1
+        assert result["corrected_win_rate"] == pytest.approx(1.0)
+        assert result["corrected_gross_profit"] == pytest.approx(2.56)
+
+    def test_five_live_anomalies_improve_pf(self):
+        # All five corrupted rows + three clean trades.
+        trades = _CLEAN_TRADES + [
+            {"id": row["id"], "pnl": row["stored_pnl"]} for row in _LIVE_FILL_ANOMALIES
+        ]
+        result = corrected_metrics_summary(trades, _LIVE_FILL_ANOMALIES)
+        assert result["n_corrected"] == 5
+        assert result["n_trades"] == 8
+        # Corrected PF must exceed stored PF (losses were overstated)
+        assert result["corrected_pf"] > result["stored_pf"]
+
+    def test_five_live_anomalies_corrected_gross_loss(self):
+        # Gross loss after correction = 113.64 + 63.70 + 42.90 + 138.96 + 24.10 (clean)
+        trades = _CLEAN_TRADES + [
+            {"id": row["id"], "pnl": row["stored_pnl"]} for row in _LIVE_FILL_ANOMALIES
+        ]
+        result = corrected_metrics_summary(trades, _LIVE_FILL_ANOMALIES)
+        expected_corr_gl = 113.64 + 63.70 + 42.90 + 138.96 + 24.10
+        assert result["corrected_gross_loss"] == pytest.approx(expected_corr_gl, abs=0.05)
+
+    def test_five_live_anomalies_net_profit_larger_after_correction(self):
+        trades = _CLEAN_TRADES + [
+            {"id": row["id"], "pnl": row["stored_pnl"]} for row in _LIVE_FILL_ANOMALIES
+        ]
+        result = corrected_metrics_summary(trades, _LIVE_FILL_ANOMALIES)
+        assert result["corrected_net_profit"] > result["stored_net_profit"]
+
+    def test_kelly_present_when_wins_and_losses_exist(self):
+        trades = [{"id": 1, "pnl": 100.0}, {"id": 2, "pnl": -50.0}]
+        result = corrected_metrics_summary(trades, [])
+        assert result["corrected_kelly_half"] is not None
+
+    def test_kelly_none_when_all_wins(self):
+        trades = [{"id": 1, "pnl": 100.0}, {"id": 2, "pnl": 50.0}]
+        result = corrected_metrics_summary(trades, [])
+        assert result["corrected_kelly_half"] is None
+
+    def test_kelly_none_when_all_losses(self):
+        trades = [{"id": 1, "pnl": -100.0}, {"id": 2, "pnl": -50.0}]
+        result = corrected_metrics_summary(trades, [])
+        assert result["corrected_kelly_half"] is None
+
+    def test_kelly_negative_when_edge_unfavourable(self):
+        # 33% win rate, small wins vs large losses → negative edge
+        trades = [
+            {"id": 1, "pnl": 10.0},
+            {"id": 2, "pnl": -100.0},
+            {"id": 3, "pnl": -100.0},
+        ]
+        result = corrected_metrics_summary(trades, [])
+        assert result["corrected_kelly_half"] is not None
+        assert result["corrected_kelly_half"] < 0
+
+    def test_kelly_positive_when_edge_favourable(self):
+        # 67% win rate, large wins vs small losses → positive edge
+        trades = [
+            {"id": 1, "pnl": 100.0},
+            {"id": 2, "pnl": 100.0},
+            {"id": 3, "pnl": -10.0},
+        ]
+        result = corrected_metrics_summary(trades, [])
+        assert result["corrected_kelly_half"] is not None
+        assert result["corrected_kelly_half"] > 0
+
+    def test_unknown_anomaly_ids_are_ignored(self):
+        # An anomaly id that's not in the trade list should not raise or corrupt
+        trades = [{"id": 1, "pnl": 50.0}]
+        anomalies = [{"id": 999, "stored_pnl": -200.0, "fill_price_pnl": -10.0}]
+        result = corrected_metrics_summary(trades, anomalies)
+        assert result["n_corrected"] == 0
+        assert result["corrected_pf"] is None  # single winner, no losses
+
+    def test_n_corrected_equals_matched_anomaly_count(self):
+        trades = [
+            {"id": 1, "pnl": -100.0},
+            {"id": 2, "pnl": -200.0},
+            {"id": 3, "pnl": 50.0},
+        ]
+        anomalies = [
+            {"id": 1, "stored_pnl": -100.0, "fill_price_pnl": -20.0},
+            {"id": 2, "stored_pnl": -200.0, "fill_price_pnl": -30.0},
+        ]
+        result = corrected_metrics_summary(trades, anomalies)
+        assert result["n_corrected"] == 2
+
+    def test_note_contains_pf_comparison_when_corrections_exist(self):
+        trades = [{"id": 1, "pnl": 100.0}, {"id": 2, "pnl": -200.0}]
+        anomalies = [{"id": 2, "stored_pnl": -200.0, "fill_price_pnl": -50.0}]
+        result = corrected_metrics_summary(trades, anomalies)
+        assert "corrected PF" in result["note"]
+        assert "stored PF" in result["note"]
