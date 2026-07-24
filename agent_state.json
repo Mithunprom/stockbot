@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
- "last_iteration_date": "2026-07-22",
- "active_hypothesis": "INTEGRITY \u2014 fill_price_pnl_consistency check shipped (PR pending). H1\u2013H7 backtest still blocked on Railway worker.",
+ "last_iteration_date": "2026-07-24",
+ "active_hypothesis": "INTEGRITY_FILL_PNL_REPAIR DEPLOYED \u2014 PR #20 merged (v0.5.1); repair code live. 5 corrupted rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) will be fixed on next Sentinel run once INTEGRITY_AUTO_REPAIR=true is set in Railway. PR #19 (our parallel effort) closed as superseded. H10/H11 queued by owner. H1\u2013H7 backtest still blocked on Railway worker.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -183,6 +183,14 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-07-24",
+   "hypothesis_id": "INTEGRITY_FILL_PNL_REPAIR",
+   "result": "DEPLOYED — PR #20 (fix(integrity): heal residual fill-price pnl corruption v0.5.1) merged by owner at 05:36 UTC. Extends _repair() to rewrite pnl + pnl_pct to fill-implied values for rows with action=rewrite_pnl. 5 known corrupt rows: V#54 ($37.63→$2.56), XOM#68 (-$169.33→-$42.90), MSFT#82 (-$363.73→-$63.70), MU#93 (-$512.48→-$113.64), SMCI#83 (-$638.06→-$138.96). Fill-corrected trailing-30 PF=0.864 (stored 0.60). Our parallel PR #19 (same objective, different function name corrected_fill_pnl vs fill_price_implied_pnl) closed as superseded. Repair will activate on next hourly Sentinel run once INTEGRITY_AUTO_REPAIR=true is set. Two repair backups in reports/integrity/ (05:32+05:33 UTC) predate the merge and show empty corruption — they are from pre-v0.5.1 sentinel. H10 (short max-hold, owner preliminary data) and H11 (IC-block gate deadlock fix) queued on main.",
+   "pr_number": 20,
+   "pr_branch": "merged to main",
+   "notes": "CODE RED P1: repair now deployed. Owner must set INTEGRITY_AUTO_REPAIR=true in Railway. After repair runs: Kelly seed will update (MU#93 -19.85%→-4.40%, MSFT#82 -13.35%→-2.34%), improving Kelly fraction from -0.102. Integrity clean 5-day clock starts only after repair + 5 consecutive days of clean sentinel runs."
+  },
   {
    "date": "2026-07-22",
    "hypothesis_id": "INTEGRITY_FILL_PRICE_CHECK",
