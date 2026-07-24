@@ -282,3 +282,29 @@ class TestRepairHealsFillCorruption:
         result = self._run(agent._repair(session, [], [], fill_rows))
         assert session.updates == 0
         assert result["fill_pnl_rewritten"] == 0
+
+
+class TestBrokerOrphanReconcile:
+    """db_vs_broker: DB-open rows the broker doesn't hold must be closeable,
+    but only past the grace window, and 'at broker only' names never auto-heal.
+    Born 2026-07-24: NVDA #111 open in DB, gone at broker, emailed forever."""
+
+    def test_grace_constant_is_short(self):
+        from src.agents.integrity_agent import DB_BROKER_GRACE_MINUTES
+        assert 1 <= DB_BROKER_GRACE_MINUTES <= 60
+
+    def test_orphan_repair_closes_with_null_pnl(self):
+        # A closed orphan keeps pnl NULL (true exit unknowable) — never
+        # fabricates a zero that would pollute Kelly or win-rate stats.
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        session = MagicMock()
+        session.execute = AsyncMock()
+        session.commit = AsyncMock()
+        orphans = [{"id": 111, "ticker": "NVDA", "entry_time": "2026-07-23T14:15"}]
+        asyncio.run(agent._repair(session, [], [], [], orphans))
+        # one UPDATE for the orphan close + the commit
+        assert session.execute.await_count == 1
+        assert session.commit.await_count == 1

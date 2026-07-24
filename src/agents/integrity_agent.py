@@ -47,6 +47,7 @@ PNL_PCT_TOLERANCE = 0.005
 # An open DB row older than this can never be the "most recent open trade"
 # the orphan-recovery path matches on — it is a zombie.
 STALE_OPEN_DAYS = 5
+DB_BROKER_GRACE_MINUTES = 10   # min age before a DB-only open row is a true orphan
 # No sane single swing trade returns more than ±25%; beyond that the Kelly
 # seed window is presumed poisoned by an accounting bug.
 KELLY_SANE_ABS_PNL_PCT = 0.25
@@ -361,17 +362,33 @@ class IntegrityAgent:
                     "detail": f"broker positions unavailable: {exc}"}
         broker_tickers = {p.get("ticker") or p.get("symbol") for p in positions}
         broker_tickers.discard(None)
+        # Grace period: a position entered seconds ago is written to the DB
+        # before the broker-position read reflects it. Only rows older than
+        # this can be true orphans, never an in-flight entry.
+        grace_cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=DB_BROKER_GRACE_MINUTES)
         result = await session.execute(
-            select(Trade.ticker).where(Trade.exit_time.is_(None))
+            select(Trade.id, Trade.ticker, Trade.entry_time)
+            .where(Trade.exit_time.is_(None))
         )
-        db_tickers = {row[0] for row in result.all()}
-        only_db = sorted(db_tickers - broker_tickers)
+        open_rows = result.all()
+        db_tickers = {r[1] for r in open_rows}
         only_broker = sorted(broker_tickers - db_tickers)
+        # only_db orphans eligible to auto-close: DB-open, not at broker, past grace.
+        orphans = [
+            {"id": tid, "ticker": tkr, "entry_time": str(et)}
+            for tid, tkr, et in open_rows
+            if tkr not in broker_tickers
+            and (et if et.tzinfo else et.replace(tzinfo=timezone.utc)) < grace_cutoff
+        ]
+        only_db = sorted({o["ticker"] for o in orphans})
         if only_db or only_broker:
             return {"name": "db_vs_broker", "status": "critical", "healed": False,
-                    "detail": f"ledger/broker mismatch — open in DB only: {only_db}; "
-                              f"at broker only: {only_broker}"}
+                    "orphans": orphans,
+                    "detail": f"ledger/broker mismatch — open in DB only (closeable): "
+                              f"{only_db}; at broker only (needs human): {only_broker}"}
         return {"name": "db_vs_broker", "status": "ok", "healed": False,
+                "orphans": [],
                 "detail": f"{len(db_tickers)} open position(s) reconcile"}
 
     # ── Repair (paper mode only, gated) ─────────────────────────────────────
@@ -384,7 +401,8 @@ class IntegrityAgent:
 
     async def _repair(self, session: Any, divergent: list[dict[str, Any]],
                       stale: list[dict[str, Any]],
-                      fill_corrupt: list[dict[str, Any]] | None = None
+                      fill_corrupt: list[dict[str, Any]] | None = None,
+                      broker_orphans: list[dict[str, Any]] | None = None
                       ) -> dict[str, Any]:
         """Rewrite bad pnl_pct + dollar pnl + close zombie rows, backing up first.
 
@@ -405,13 +423,14 @@ class IntegrityAgent:
         from src.data.db import Trade
 
         fill_corrupt = fill_corrupt or []
+        broker_orphans = broker_orphans or []
         healable_fill = [r for r in fill_corrupt if r.get("action") == "rewrite_pnl"]
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
         backup_path = REPORT_DIR / f"repair_backup_{stamp}.json"
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
         backup_path.write_text(json.dumps(
             {"divergent_pnl_pct": divergent, "stale_open_rows": stale,
-             "fill_corrupt_pnl": healable_fill},
+             "fill_corrupt_pnl": healable_fill, "broker_orphans": broker_orphans},
             indent=2, default=str))
 
         for row in divergent:
@@ -447,12 +466,22 @@ class IntegrityAgent:
                 update(Trade).where(Trade.id == row["id"])
                 .values(exit_time=now, exit_reason="integrity_stale_cleanup")
             )
+        for row in broker_orphans:
+            # Broker is the source of truth for whether a position exists.
+            # The position closed at the broker without a DB exit write
+            # (redeploy lost _open_trade_ids, or a watchdog/broker-side close
+            # bypassed the exit path). Close the row; the true exit price is
+            # unknowable so pnl/pnl_pct stay NULL (kept out of Kelly + stats).
+            await session.execute(
+                update(Trade).where(Trade.id == row["id"])
+                .values(exit_time=now, exit_reason="integrity_broker_reconcile")
+            )
         await session.commit()
 
         # Re-seed Kelly from the repaired ledger so sizing recovers without
         # waiting for the next redeploy.
         kelly_reseeded = False
-        if self._loop is not None and (divergent or stale or healable_fill):
+        if self._loop is not None and (divergent or stale or healable_fill or broker_orphans):
             try:
                 await self._loop._seed_kelly_from_db()
                 kelly_reseeded = True
@@ -465,6 +494,7 @@ class IntegrityAgent:
                        kelly_reseeded=kelly_reseeded, backup=str(backup_path))
         return {"pnl_pct_rewritten": len(divergent), "stale_closed": len(stale),
                 "fill_pnl_rewritten": len(healable_fill),
+                "broker_orphans_closed": len(broker_orphans),
                 "kelly_reseeded": kelly_reseeded, "backup": str(backup_path)}
 
     # ── Run cycle ───────────────────────────────────────────────────────────
@@ -483,15 +513,24 @@ class IntegrityAgent:
             repair_result: dict[str, Any] | None = None
             divergent = next(c for c in checks if c["name"] == "pnl_pct_consistency")["rows"]
             stale = next(c for c in checks if c["name"] == "stale_open_rows")["rows"]
+            broker_orphans = next(
+                (c.get("orphans", []) for c in checks if c["name"] == "db_vs_broker"), [])
             fill_corrupt = next(
                 c for c in checks if c["name"] == "fill_price_pnl_consistency")["rows"]
             healable_fill = [r for r in fill_corrupt if r.get("action") == "rewrite_pnl"]
-            if (divergent or stale or healable_fill) and self._repair_allowed(repair):
-                repair_result = await self._repair(session, divergent, stale, fill_corrupt)
+            if (divergent or stale or healable_fill or broker_orphans) \
+                    and self._repair_allowed(repair):
+                repair_result = await self._repair(
+                    session, divergent, stale, fill_corrupt, broker_orphans)
                 healed_names = {"pnl_pct_consistency", "stale_open_rows"}
                 # Only mark the fill check healed if every flagged row was healable.
                 if healable_fill and len(healable_fill) == len(fill_corrupt):
                     healed_names.add("fill_price_pnl_consistency")
+                # db_vs_broker heals only when the mismatch was purely closeable
+                # orphans (no "at broker only" names, which need a human).
+                dbc = next(c for c in checks if c["name"] == "db_vs_broker")
+                if broker_orphans and "at broker only (needs human): []" in dbc["detail"]:
+                    healed_names.add("db_vs_broker")
                 for c in checks:
                     if c["name"] in healed_names and c["status"] != "ok":
                         c["healed"] = True
