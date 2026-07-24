@@ -6,8 +6,10 @@ Scope: Verify that every number downstream systems consume can be recomputed
        Kelly-seed sanity (a poisoned pnl_pct window silently corrupts sizing
        after every redeploy), and DB-vs-broker open-position reconciliation.
 Can act autonomously (paper mode, repair=True or INTEGRITY_AUTO_REPAIR=true):
-       Rewrite divergent pnl_pct to the recomputed value and close stale open
-       rows — after writing a JSON backup of every row it touches.
+       Rewrite divergent pnl_pct to the recomputed value, rewrite corrupt
+       dollar pnl (and its pnl_pct) to the fill-based truth when the shares
+       column is trustworthy, and close stale open rows — after writing a JSON
+       backup of every row it touches.
 Must NOT: Touch live config, place orders, or modify any strategy parameter.
 Output: reports/integrity/latest.json + dated snapshot + email escalation via
        the same SMTP path as the watchdog.
@@ -98,6 +100,33 @@ def fill_price_pnl_deviation(
         return None
     fill_pnl = (exit_price - entry_price) * shares
     return abs(float(pnl) - fill_pnl) / notional
+
+
+def corrected_fill_pnl(
+    exit_price: float | None,
+    entry_price: float | None,
+    shares: float | None,
+) -> tuple[float, float] | None:
+    """Recompute the true (pnl, pnl_pct) from fill prices and the shares column.
+
+    Used to HEAL fill-price corruption. This is only trustworthy when the
+    ``shares`` column is the reliable one — verified because every corrupt row
+    seen (XOM #68, MSFT #82, MU #93, SMCI #83) has a ``shares`` count that sits
+    inside the sizer's notional cap, while the shares *implied* by the corrupt
+    dollar pnl would blow through it (e.g. MU #93 stored pnl implies 13.5 shares
+    = $11.6k notional, impossible under the $2.5k cap; the recorded 3 shares =
+    $2.6k fits). So the dollar ``pnl`` column is the corrupt side and
+    ``(exit - entry) * shares`` is the fill-based truth.
+
+    Returns None when inputs are missing or the notional is dust.
+    """
+    if exit_price is None or not entry_price or not shares:
+        return None
+    notional = abs(entry_price * shares)
+    if notional < 1.0:
+        return None
+    pnl = (exit_price - entry_price) * shares
+    return pnl, pnl / notional
 
 
 def is_divergent(stored: float | None, expected: float | None,
@@ -221,6 +250,14 @@ class IntegrityAgent:
             if dev is None or dev <= FILL_PNL_TOLERANCE:
                 continue
             fill_pnl = (float(exit_price) - float(entry_price)) * float(shares)
+            corrected = corrected_fill_pnl(exit_price, entry_price, shares)
+            # Only offer to auto-heal when the fill-based recompute is itself
+            # sane (|pnl_pct| ≤ KELLY_SANE bound). Beyond that the shares column
+            # is suspect too, so leave the row for a human (action=None).
+            can_heal = (
+                corrected is not None
+                and abs(corrected[1]) <= KELLY_SANE_ABS_PNL_PCT
+            )
             anomalous.append({
                 "id": tid,
                 "ticker": ticker,
@@ -230,6 +267,9 @@ class IntegrityAgent:
                 "entry_price": round(float(entry_price), 4),
                 "exit_price": round(float(exit_price), 4),
                 "shares": shares,
+                "corrected_pnl": round(corrected[0], 2) if corrected else None,
+                "corrected_pnl_pct": round(corrected[1], 5) if corrected else None,
+                "action": "rewrite_pnl" if can_heal else None,
                 "note": ("pnl does not reconcile with (exit-entry)*shares — "
                          "suspect residual partial-fill corruption in pnl column"),
             })
@@ -343,22 +383,35 @@ class IntegrityAgent:
         return repair or os.environ.get("INTEGRITY_AUTO_REPAIR", "false").lower() == "true"
 
     async def _repair(self, session: Any, divergent: list[dict[str, Any]],
-                      stale: list[dict[str, Any]]) -> dict[str, Any]:
-        """Rewrite bad pnl_pct + close zombie rows, backing up every row first.
+                      stale: list[dict[str, Any]],
+                      fill_corrupt: list[dict[str, Any]] | None = None
+                      ) -> dict[str, Any]:
+        """Rewrite bad pnl_pct + dollar pnl + close zombie rows, backing up first.
 
         Stale rows are closed with pnl/pnl_pct left NULL: the true exit price
         is unknowable, and NULL keeps them out of the Kelly seed query and the
         profit reports rather than injecting a fabricated zero.
+
+        ``fill_corrupt`` rows are the fill-price-reconciliation failures: the
+        dollar ``pnl`` column is corrupt (inflated 4-6x by a stale full-position
+        qty) while ``shares`` is trustworthy. Each row carries the corrected
+        ``pnl``/``pnl_pct`` computed from ``(exit-entry)*shares``; rewriting both
+        removes the phantom loss from cumulative PnL and from the Kelly seed
+        window. Only rows the audit marked ``action="rewrite_pnl"`` (sane
+        recompute) are healed.
         """
         from sqlalchemy import update
 
         from src.data.db import Trade
 
+        fill_corrupt = fill_corrupt or []
+        healable_fill = [r for r in fill_corrupt if r.get("action") == "rewrite_pnl"]
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
         backup_path = REPORT_DIR / f"repair_backup_{stamp}.json"
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
         backup_path.write_text(json.dumps(
-            {"divergent_pnl_pct": divergent, "stale_open_rows": stale},
+            {"divergent_pnl_pct": divergent, "stale_open_rows": stale,
+             "fill_corrupt_pnl": healable_fill},
             indent=2, default=str))
 
         for row in divergent:
@@ -381,6 +434,13 @@ class IntegrityAgent:
                     update(Trade).where(Trade.id == row["id"])
                     .values(pnl_pct=row["expected_pnl_pct"])
                 )
+        for row in healable_fill:
+            # Corrupt dollar pnl → rewrite both pnl and pnl_pct to the
+            # fill-based truth (shares is the trustworthy column here).
+            await session.execute(
+                update(Trade).where(Trade.id == row["id"])
+                .values(pnl=row["corrected_pnl"], pnl_pct=row["corrected_pnl_pct"])
+            )
         now = datetime.now(timezone.utc)
         for row in stale:
             await session.execute(
@@ -392,7 +452,7 @@ class IntegrityAgent:
         # Re-seed Kelly from the repaired ledger so sizing recovers without
         # waiting for the next redeploy.
         kelly_reseeded = False
-        if self._loop is not None and (divergent or stale):
+        if self._loop is not None and (divergent or stale or healable_fill):
             try:
                 await self._loop._seed_kelly_from_db()
                 kelly_reseeded = True
@@ -401,8 +461,10 @@ class IntegrityAgent:
 
         logger.warning("integrity_repair_applied",
                        pnl_pct_rewritten=len(divergent), stale_closed=len(stale),
+                       fill_pnl_rewritten=len(healable_fill),
                        kelly_reseeded=kelly_reseeded, backup=str(backup_path))
         return {"pnl_pct_rewritten": len(divergent), "stale_closed": len(stale),
+                "fill_pnl_rewritten": len(healable_fill),
                 "kelly_reseeded": kelly_reseeded, "backup": str(backup_path)}
 
     # ── Run cycle ───────────────────────────────────────────────────────────
@@ -421,11 +483,17 @@ class IntegrityAgent:
             repair_result: dict[str, Any] | None = None
             divergent = next(c for c in checks if c["name"] == "pnl_pct_consistency")["rows"]
             stale = next(c for c in checks if c["name"] == "stale_open_rows")["rows"]
-            if (divergent or stale) and self._repair_allowed(repair):
-                repair_result = await self._repair(session, divergent, stale)
+            fill_corrupt = next(
+                c for c in checks if c["name"] == "fill_price_pnl_consistency")["rows"]
+            healable_fill = [r for r in fill_corrupt if r.get("action") == "rewrite_pnl"]
+            if (divergent or stale or healable_fill) and self._repair_allowed(repair):
+                repair_result = await self._repair(session, divergent, stale, fill_corrupt)
+                healed_names = {"pnl_pct_consistency", "stale_open_rows"}
+                # Only mark the fill check healed if every flagged row was healable.
+                if healable_fill and len(healable_fill) == len(fill_corrupt):
+                    healed_names.add("fill_price_pnl_consistency")
                 for c in checks:
-                    if c["name"] in ("pnl_pct_consistency", "stale_open_rows") \
-                            and c["status"] != "ok":
+                    if c["name"] in healed_names and c["status"] != "ok":
                         c["healed"] = True
                         c["detail"] += " — REPAIRED (backup written)"
 
