@@ -1,32 +1,28 @@
 {
  "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
  "last_iteration_date": "2026-07-24",
- "active_hypothesis": "INTEGRITY_FILL_PNL_REPAIR DEPLOYED \u2014 PR #20 merged (v0.5.1); repair code live. 5 corrupted rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) will be fixed on next Sentinel run once INTEGRITY_AUTO_REPAIR=true is set in Railway. PR #19 (our parallel effort) closed as superseded. H10/H11 queued by owner. H1\u2013H7 backtest still blocked on Railway worker.",
+ "active_hypothesis": "INTEGRITY CLEAN \u2014 Sentinel 08:25 UTC 2026-07-24 is ALL GREEN (fill_price_pnl_consistency OK, zero rows). DAY 1 of 5 consecutive clean days required for CODE RED exit. Railway worker still the bottleneck for H0\u2013H11 backtest queue.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-21",
+  "snapshot_date": "2026-07-24",
+  "integrity_clean_streak": 1,
+  "integrity_clean_streak_started": "2026-07-24",
+  "integrity_sentinel_last_run": "2026-07-24T08:25:00Z",
+  "integrity_sentinel_status": "ok",
   "all_time_n_closed": 96,
   "all_time_win_rate": 0.458,
-  "all_time_gross_profit": 4375,
-  "all_time_gross_loss": 5716,
-  "all_time_pf": 0.77,
-  "trailing_30_pf": 0.6,
+  "all_time_pf_stored": 0.77,
+  "all_time_pf_fill_corrected": 0.860,
+  "trailing_30_pf_stored": 0.60,
+  "trailing_30_pf_fill_corrected": 0.864,
   "trailing_30_win_rate": 0.433,
-  "kelly_fraction": -0.73,
   "kelly_mode": "probation",
-  "open_positions": 2,
-  "n_trades_today": 1,
-  "signals_passing": 0,
-  "today_closed_pnl": 1401.29,
-  "suspected_corrupt_rows": [
-   93,
-   83
-  ],
-  "principal_skeptic_flag": "MU #93 pnl=-512 vs fill-implied -114 (15.5%); SMCI #83 pnl=-638 vs fill-implied -139 (24.8%). Both pass existing pnl_pct check. New fill_price_pnl_consistency check catches both."
+  "suspected_corrupt_rows": [],
+  "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure."
  },
  "live_data_status": {
   "date": "2026-07-22",
@@ -297,6 +293,11 @@
    "2. validation throughput (clear backtest queue \u2014 needs Railway worker)",
    "3. new alpha work (QUEUED until exit criteria met)"
   ],
-  "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run"
+  "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
+  "exit_criteria_status": {
+   "integrity_clean_5_days": "DAY 1/5 — Sentinel clean at 08:25 UTC 2026-07-24",
+   "kelly_window_sane": "OK — sentinel confirmed kelly_seed_sanity ok",
+   "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled"
+  }
  }
 }
