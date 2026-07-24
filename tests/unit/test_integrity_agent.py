@@ -16,6 +16,7 @@ from src.agents.integrity_agent import (
     PNL_PCT_TOLERANCE,
     classify_row,
     expected_pnl_pct,
+    fill_price_implied_pnl,
     fill_price_pnl_deviation,
     is_divergent,
 )
@@ -174,3 +175,77 @@ class TestFillPricePnlDeviation:
     def test_fill_pnl_tolerance_constant_is_five_pct(self):
         # Ensures calibration hasn't drifted from the design spec
         assert FILL_PNL_TOLERANCE == pytest.approx(0.05)
+
+
+class TestFillPriceImpliedPnl:
+    """Pin the repair-path math: fill_price_implied_pnl must agree with
+    the live integrity.json fill_price_pnl values for every known-corrupt row.
+
+    These are the 5 rows identified in the 2026-07-24 nightly run:
+      #54  V     entry 333.58, exit 336.14, shares 1.0   → fill_pnl  +2.56
+      #68  XOM   entry 141.20, exit 137.90, shares 13.0  → fill_pnl  -42.90
+      #82  MSFT  entry 389.27, exit 380.17, shares 7.0   → fill_pnl  -63.70
+      #83  SMCI  entry  27.95, exit  26.02, shares 72.0  → fill_pnl -138.96
+      #93  MU    entry 860.46, exit 822.58, shares 3.0   → fill_pnl -113.64
+    """
+
+    def test_v_54_fill_implied(self):
+        pnl, pnl_pct = fill_price_implied_pnl(333.58, 336.14, 1.0)
+        assert pnl == pytest.approx(2.56, abs=0.01)
+        assert pnl_pct == pytest.approx(2.56 / 333.58, abs=1e-4)
+
+    def test_xom_68_fill_implied(self):
+        pnl, pnl_pct = fill_price_implied_pnl(141.2, 137.9, 13.0)
+        assert pnl == pytest.approx(-42.90, abs=0.01)
+        assert pnl_pct == pytest.approx(-42.9 / (141.2 * 13), abs=1e-4)
+
+    def test_msft_82_fill_implied(self):
+        pnl, pnl_pct = fill_price_implied_pnl(389.27, 380.17, 7.0)
+        assert pnl == pytest.approx(-63.70, abs=0.01)
+        assert pnl_pct == pytest.approx(-63.70 / (389.27 * 7), abs=1e-4)
+
+    def test_smci_83_fill_implied(self):
+        pnl, pnl_pct = fill_price_implied_pnl(27.95, 26.02, 72.0)
+        assert pnl == pytest.approx(-138.96, abs=0.01)
+        assert pnl_pct == pytest.approx(-138.96 / (27.95 * 72), abs=1e-4)
+
+    def test_mu_93_fill_implied(self):
+        pnl, pnl_pct = fill_price_implied_pnl(860.46, 822.58, 3.0)
+        assert pnl == pytest.approx(-113.64, abs=0.01)
+        assert pnl_pct == pytest.approx(-113.64 / (860.46 * 3), abs=1e-4)
+
+    def test_clean_trade_round_trip(self):
+        # MA #98 is not corrupted — repair should leave it unchanged
+        pnl, pnl_pct = fill_price_implied_pnl(540.12, 542.84, 28.22)
+        assert pnl == pytest.approx(76.76, abs=0.1)
+        assert pnl_pct is not None and pnl_pct > 0
+
+    def test_dust_notional_returns_none_pct(self):
+        # notional = 0.09 * 10 = 0.9 < 1.0 → pnl_pct is None
+        pnl, pnl_pct = fill_price_implied_pnl(entry_price=0.09, exit_price=0.10, shares=10.0)
+        assert pnl == pytest.approx(0.10, abs=0.01)
+        assert pnl_pct is None
+
+    def test_return_values_are_rounded(self):
+        # Both return values should be rounded (no raw float tail)
+        pnl, pnl_pct = fill_price_implied_pnl(100.1234567, 105.9876543, 3.0)
+        # pnl rounded to 4 decimal places, pnl_pct to 6
+        assert pnl == round(pnl, 4)
+        assert pnl_pct is not None and pnl_pct == round(pnl_pct, 6)
+
+    def test_repair_reduces_loss_magnitude_for_corrupted_rows(self):
+        # Every known-corrupt row had stored_pnl much more negative than fill_pnl.
+        # The repair must produce a less negative (closer to zero) loss in each case.
+        cases = [
+            (860.46, 822.58, 3.0, -512.48),   # MU #93
+            (27.95, 26.02, 72.0, -638.06),    # SMCI #83
+            (389.27, 380.17, 7.0, -363.73),   # MSFT #82
+            (141.2, 137.9, 13.0, -169.33),    # XOM #68
+        ]
+        for ep, xp, sh, stored_pnl in cases:
+            implied_pnl, _ = fill_price_implied_pnl(ep, xp, sh)
+            # Fill-implied loss is always smaller in magnitude than stored
+            assert abs(implied_pnl) < abs(stored_pnl), (
+                f"entry={ep} exit={xp} shares={sh}: "
+                f"implied {implied_pnl} vs stored {stored_pnl}"
+            )

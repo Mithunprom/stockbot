@@ -1,33 +1,37 @@
 {
  "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
- "last_iteration_date": "2026-07-22",
- "active_hypothesis": "INTEGRITY \u2014 fill_price_pnl_consistency check shipped (PR pending). H1\u2013H7 backtest still blocked on Railway worker.",
+ "last_iteration_date": "2026-07-24",
+ "active_hypothesis": "INTEGRITY_FILL_PNL_REPAIR \u2014 repair path for fill_price_pnl_consistency shipped. 5 corrupted rows confirmed in production (3 new: V #54, XOM #68, MSFT #82). Fill-corrected trailing-30 PF=0.864 (was stored 0.60). All H1-H7 still blocked on Railway worker.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-21",
-  "all_time_n_closed": 96,
-  "all_time_win_rate": 0.458,
-  "all_time_gross_profit": 4375,
-  "all_time_gross_loss": 5716,
-  "all_time_pf": 0.77,
-  "trailing_30_pf": 0.60,
+  "snapshot_date": "2026-07-24",
+  "all_time_n_closed": 97,
+  "all_time_win_rate": 0.443,
+  "all_time_gross_profit_fill_corrected": 4929.5,
+  "all_time_gross_loss_fill_corrected": 5738.0,
+  "all_time_pf_fill_corrected": 0.860,
+  "all_time_pf_stored_corrupted": 0.77,
+  "trailing_30_pf_fill_corrected": 0.864,
+  "trailing_30_pf_stored_corrupted": 0.60,
   "trailing_30_win_rate": 0.433,
-  "kelly_fraction": -0.73,
+  "trailing_30_gross_profit_fill_corrected": 3089.6,
+  "trailing_30_gross_loss_fill_corrected": 3574.9,
+  "kelly_fraction": -0.102,
   "kelly_mode": "probation",
-  "open_positions": 2,
+  "kelly_n_trades": 29,
+  "open_positions": 1,
   "n_trades_today": 1,
-  "signals_passing": 0,
-  "today_closed_pnl": 1401.29,
-  "suspected_corrupt_rows": [93, 83],
-  "principal_skeptic_flag": "MU #93 pnl=-512 vs fill-implied -114 (15.5%); SMCI #83 pnl=-638 vs fill-implied -139 (24.8%). Both pass existing pnl_pct check. New fill_price_pnl_consistency check catches both."
+  "signals_passing": 1,
+  "suspected_corrupt_rows": [54, 68, 82, 83, 93],
+  "principal_skeptic_flag": "5 fill_price_pnl_consistency rows confirmed in 2026-07-24 integrity.json. NEW tonight: V #54 (stored +37.63 vs fill +2.56, +10.5% dev), XOM #68 (stored -169.33 vs fill -42.90, 6.9% dev), MSFT #82 (stored -363.73 vs fill -63.70, 11.0% dev). Known: MU #93 (15.5% dev), SMCI #83 (24.8% dev). Fill-corrected PF=0.86 vs stored 0.60 \u2014 scoreboard was significantly wrong. Repair path now in code; owner must set INTEGRITY_AUTO_REPAIR=true to apply."
  },
  "live_data_status": {
-  "date": "2026-07-22",
-  "status": "OK \u2014 direct + snapshot relay",
+  "date": "2026-07-24",
+  "status": "OK \u2014 live-snapshot branch relay (Railway blocks datacenter IPs)",
   "note": "The '403' was never the service: Railway blocks datacenter IPs (cloud sandbox, GH Actions), not residential. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
@@ -161,6 +165,20 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-07-24",
+   "hypothesis_id": "INTEGRITY_FILL_PNL_REPAIR",
+   "result": "SHIPPED — fill_price_pnl_consistency repair path added to Integrity Sentinel (CODE RED P1). _repair() now accepts fill_pnl_rows, computes fill_price_implied_pnl(), rewrites pnl+pnl_pct to fill-implied values, marks check healed, and includes fill_pnl_corrupted in backup JSON. 3 new corrupted rows found tonight in production integrity.json: V #54 (10.5% dev), XOM #68 (6.9% dev), MSFT #82 (11.0% dev) — in addition to known MU #93 and SMCI #83. Fill-corrected trailing-30 PF=0.864 (was stored 0.60). Fill-corrected all-time PF=0.860 (was stored 0.77). Kelly-in-window rows MU #93 (-19.85%→-4.40%) and MSFT #82 (-13.35%→-2.34%) will improve Kelly on next repair+reseed.",
+   "tests_status": "33/33 tests pass in test_integrity_agent.py (9 new tests for fill_price_implied_pnl repair math, all 5 known-corrupt rows validated against live integrity.json values); 10 pre-existing failures in other test files unchanged",
+   "new_tests": 9,
+   "files_changed": [
+    "src/agents/integrity_agent.py",
+    "tests/unit/test_integrity_agent.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-integrity-fill-pnl-repair",
+   "notes": "CODE RED P1: repair-path for fill_price_pnl_consistency. Gated: paper mode + INTEGRITY_AUTO_REPAIR=true or repair=True flag. Backup JSON written before any DB write. Kelly re-seeded after repair. No strategy change."
+  },
   {
    "date": "2026-07-22",
    "hypothesis_id": "INTEGRITY_FILL_PRICE_CHECK",

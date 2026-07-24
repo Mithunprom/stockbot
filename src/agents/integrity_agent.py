@@ -76,6 +76,26 @@ def expected_pnl_pct(pnl: float | None, entry_price: float | None,
     return pnl / notional
 
 
+def fill_price_implied_pnl(
+    entry_price: float,
+    exit_price: float,
+    shares: float,
+) -> tuple[float, float | None]:
+    """Compute the fill-price-implied pnl and pnl_pct.
+
+    Used in the repair path to overwrite a corrupted stored pnl with the
+    value that pure arithmetic on fill prices gives us.
+
+    Returns (pnl, pnl_pct). pnl_pct is None when notional < $1 (dust).
+    """
+    pnl = (exit_price - entry_price) * shares
+    notional = abs(entry_price * shares)
+    pnl_pct: float | None = None
+    if notional >= 1.0:
+        pnl_pct = round(pnl / notional, 6)
+    return round(pnl, 4), pnl_pct
+
+
 def fill_price_pnl_deviation(
     pnl: float | None,
     exit_price: float | None,
@@ -342,9 +362,19 @@ class IntegrityAgent:
             return False
         return repair or os.environ.get("INTEGRITY_AUTO_REPAIR", "false").lower() == "true"
 
-    async def _repair(self, session: Any, divergent: list[dict[str, Any]],
-                      stale: list[dict[str, Any]]) -> dict[str, Any]:
-        """Rewrite bad pnl_pct + close zombie rows, backing up every row first.
+    async def _repair(
+        self,
+        session: Any,
+        divergent: list[dict[str, Any]],
+        stale: list[dict[str, Any]],
+        fill_pnl_rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Rewrite bad pnl_pct, close zombie rows, and fix corrupted pnl amounts.
+
+        fill_pnl_rows: rows from fill_price_pnl_consistency that have a stored
+        pnl diverging from (exit-entry)*shares. For each, overwrite pnl and
+        pnl_pct with fill-implied values so profit-factor and Kelly consume
+        correct dollar figures rather than the partial-fill corruption artifact.
 
         Stale rows are closed with pnl/pnl_pct left NULL: the true exit price
         is unknowable, and NULL keeps them out of the Kelly seed query and the
@@ -354,11 +384,16 @@ class IntegrityAgent:
 
         from src.data.db import Trade
 
+        fill_pnl_rows = fill_pnl_rows or []
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
         backup_path = REPORT_DIR / f"repair_backup_{stamp}.json"
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
         backup_path.write_text(json.dumps(
-            {"divergent_pnl_pct": divergent, "stale_open_rows": stale},
+            {
+                "divergent_pnl_pct": divergent,
+                "stale_open_rows": stale,
+                "fill_pnl_corrupted": fill_pnl_rows,
+            },
             indent=2, default=str))
 
         for row in divergent:
@@ -381,6 +416,27 @@ class IntegrityAgent:
                     update(Trade).where(Trade.id == row["id"])
                     .values(pnl_pct=row["expected_pnl_pct"])
                 )
+
+        # Repair fill-price corrupted rows: overwrite pnl (dollar) and pnl_pct
+        # with values derived purely from the stored fill prices. These rows had
+        # pnl that was internally consistent with a wrong notional (partial-fill
+        # accounting bug) but could not be reconciled from exit_price/shares.
+        fill_pnl_repaired = 0
+        for row in fill_pnl_rows:
+            ep = row.get("entry_price")
+            xp = row.get("exit_price")
+            sh = row.get("shares")
+            if ep is None or xp is None or not ep or not sh:
+                continue
+            implied_pnl, implied_pct = fill_price_implied_pnl(
+                float(ep), float(xp), float(sh)
+            )
+            await session.execute(
+                update(Trade).where(Trade.id == row["id"])
+                .values(pnl=implied_pnl, pnl_pct=implied_pct)
+            )
+            fill_pnl_repaired += 1
+
         now = datetime.now(timezone.utc)
         for row in stale:
             await session.execute(
@@ -392,7 +448,7 @@ class IntegrityAgent:
         # Re-seed Kelly from the repaired ledger so sizing recovers without
         # waiting for the next redeploy.
         kelly_reseeded = False
-        if self._loop is not None and (divergent or stale):
+        if self._loop is not None and (divergent or stale or fill_pnl_rows):
             try:
                 await self._loop._seed_kelly_from_db()
                 kelly_reseeded = True
@@ -400,10 +456,17 @@ class IntegrityAgent:
                 logger.exception("integrity_kelly_reseed_failed")
 
         logger.warning("integrity_repair_applied",
-                       pnl_pct_rewritten=len(divergent), stale_closed=len(stale),
+                       pnl_pct_rewritten=len(divergent),
+                       fill_pnl_repaired=fill_pnl_repaired,
+                       stale_closed=len(stale),
                        kelly_reseeded=kelly_reseeded, backup=str(backup_path))
-        return {"pnl_pct_rewritten": len(divergent), "stale_closed": len(stale),
-                "kelly_reseeded": kelly_reseeded, "backup": str(backup_path)}
+        return {
+            "pnl_pct_rewritten": len(divergent),
+            "fill_pnl_repaired": fill_pnl_repaired,
+            "stale_closed": len(stale),
+            "kelly_reseeded": kelly_reseeded,
+            "backup": str(backup_path),
+        }
 
     # ── Run cycle ───────────────────────────────────────────────────────────
 
@@ -421,13 +484,27 @@ class IntegrityAgent:
             repair_result: dict[str, Any] | None = None
             divergent = next(c for c in checks if c["name"] == "pnl_pct_consistency")["rows"]
             stale = next(c for c in checks if c["name"] == "stale_open_rows")["rows"]
-            if (divergent or stale) and self._repair_allowed(repair):
-                repair_result = await self._repair(session, divergent, stale)
+            fill_pnl_rows = next(
+                c for c in checks if c["name"] == "fill_price_pnl_consistency"
+            )["rows"]
+            if (divergent or stale or fill_pnl_rows) and self._repair_allowed(repair):
+                repair_result = await self._repair(
+                    session, divergent, stale, fill_pnl_rows
+                )
                 for c in checks:
                     if c["name"] in ("pnl_pct_consistency", "stale_open_rows") \
                             and c["status"] != "ok":
                         c["healed"] = True
                         c["detail"] += " — REPAIRED (backup written)"
+                    if (c["name"] == "fill_price_pnl_consistency"
+                            and c["status"] != "ok"
+                            and repair_result.get("fill_pnl_repaired", 0) > 0):
+                        c["healed"] = True
+                        n = repair_result["fill_pnl_repaired"]
+                        c["detail"] += (
+                            f" — REPAIRED ({n} row(s) pnl rewritten to "
+                            "fill-implied; backup written)"
+                        )
 
         worst = "ok"
         for c in checks:
