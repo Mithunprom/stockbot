@@ -114,15 +114,35 @@ DAILY_VOL_CEIL = 0.15              # 15% max daily vol (clip flash-crash reads)
 # the ATR scaling actually reaches high-vol names instead of being clipped.
 # Calm names (JPM ~0.8% daily) stay on the floors — unchanged. Volatile names
 # (SNDK ~9%) now get proportional room: stop ~9.9%, trail ~10%, TP ~20%.
+#
+# 2026-07-24 — TP RESCALED 3.0σ → 1.5σ. The target was unreachable inside the
+# hold window: TP sat at 3× daily sigma while SIZING_MAX_HOLD_BARS caps the
+# trade at ONE day, i.e. one sigma of time. P(3σ move in 1 day) ≈ 0.1%, versus
+# ~27% for the 1.1σ stop — the trade was built to hit its stop and never its
+# target. Ledger over n=108 confirms: take_profit fired 2× (1.9%), and BOTH
+# were multi-day holds that escaped the timer. Meanwhile max_hold became the
+# dominant exit (55/108 = 51%) at mean +0.02% — a coin flip at zero
+# expectancy. Those two TP trades (+$775) were the only profit engine in the
+# whole book; everything else netted −$1,580.
+# At 1.5σ the reward:risk is 1.36 against the 1.1σ stop and the barrier is
+# genuinely reachable within one day, converting timer-exits into decisions.
+# Floor/cap come down with the mult so the clamps don't silently restore the
+# old unreachable geometry: at the 0.5% daily-vol floor the raw TP is 0.75%,
+# so a 2.0% floor would still bind and re-break calm names.
 SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma (cut losers fast)
 SIZING_TRAILING_DVOL_MULT = 1.2    # trail ≈ 1.2× daily sigma (give winners room)
-SIZING_TAKE_PROFIT_DVOL_MULT = 3.0 # TP ≈ 3× daily sigma (bigger profit target)
+SIZING_TAKE_PROFIT_DVOL_MULT = 1.5 # TP ≈ 1.5× daily sigma (reachable in 1 day)
 SIZING_STOP_LOSS_FLOOR = 0.010     # 1.0% minimum stop
 SIZING_STOP_LOSS_CAP = 0.100       # 10% max stop (was 2.5% — clipped volatile names)
 SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
 SIZING_TRAILING_STOP_CAP = 0.100   # 10% max trailing (was 3.0%)
-SIZING_TAKE_PROFIT_FLOOR = 0.020   # 2.0% take profit floor
-SIZING_TAKE_PROFIT_CAP = 0.200     # 20% take profit cap (was 7.0%)
+SIZING_TAKE_PROFIT_FLOOR = 0.015   # 1.5% take profit floor (was 2.0%)
+# TP cap MUST stay above SIZING_STOP_LOSS_CAP or the geometry inverts at the
+# high-vol end: with both capped at 10%, a SNDK-like 12% daily-vol name gets
+# reward == risk (R:R 1.00), which loses money at any win rate under 50%.
+# 13.5% ≈ 1.35 × the 10% stop cap, mirroring the 1.5/1.1 mult ratio, and is
+# still only ~1.1σ for a 12%-vol name — i.e. reachable, unlike the old 20%.
+SIZING_TAKE_PROFIT_CAP = 0.135     # 13.5% take profit cap (was 20% — unreachable)
 # Max hold 1 trading day (was 4h): holds right signals longer to capture the
 # bigger targets. Past ~1 day the signal decays into pure market beta (3-day
 # holds were −493bps in the June leg), so 1 day is the validated ceiling.

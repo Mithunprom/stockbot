@@ -110,7 +110,17 @@ _MAX_NOTIONAL = 2500.0     # hard $ cap per position on small accounts
 # Per-position cap on larger accounts (2026-07-01: 0.10→0.15 — "fewer, bigger
 # bets"). With MAX_OPEN_POSITIONS=4 and the 60% heat ceiling, 4 × 15% = 60%
 # fully deploys at max conviction. Backtest-validated before deploy.
-_MAX_NOTIONAL_PCT = 0.15   # on larger accounts: cap at 15% of portfolio
+#
+# 2026-07-24: 0.15→0.125. The 15% cap was derived against 4 slots / 60% heat,
+# but v0.3.5 moved production to 6 slots / 75% heat and this constant was never
+# re-derived — 6 × 15% = 90% overshoots the 75% ceiling by construction, which
+# is how the book reached 87.2% heat on 07-24. 6 × 12.5% = 75% exactly, so max
+# conviction now lands ON the ceiling instead of through it.
+# Second reason: over n=108, size was ANTI-predictive — above-median-size
+# trades won 40.7% (net −$527) vs 51.9% (net −$278) below-median. Until the
+# sizer earns its dispersion back, compressing the cap is the conservative
+# direction: it reduces the amount of capital steered by the weaker signal.
+_MAX_NOTIONAL_PCT = 0.125  # on larger accounts: cap at 12.5% of portfolio
 _MIN_SHARES_FRACTIONAL = 0.01   # Paper mode minimum
 _MIN_SHARES_WHOLE = 1.0         # Live mode minimum
 
