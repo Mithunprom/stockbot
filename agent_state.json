@@ -12,8 +12,9 @@
   "integrity_clean_streak": 2,
   "integrity_clean_streak_note": "2 sentinel confirmations of 2026-07-24 (08:25 UTC + 21:59 UTC). 2026-07-25 is Saturday — no trading. Per governance 'consecutive trading days': Day 1 trading day = Fri 2026-07-24 (fully confirmed). Day 2 trading day = Mon 2026-07-27 (pending). Streak counter will be corrected if Monday sentinel is clean.",
   "integrity_clean_streak_started": "2026-07-24",
-  "integrity_sentinel_last_run": "2026-07-24T21:59:00Z",
+  "integrity_sentinel_last_run": "2026-07-25T07:25:00Z",
   "integrity_sentinel_status": "ok",
+  "integrity_sentinel_weekend_runs_clean": true,
   "integrity_sentinel_next_trading_day": "2026-07-27",
   "all_time_n_closed": 91,
   "all_time_n_closed_note": "91 from 2026-07-25 live-snapshot pull; prior state showed 96 (likely snapshot lag or open-trade count difference)",
@@ -224,6 +225,14 @@
     "nvda_orphan_resolved": "NVDA id=111 broker orphan flagged at 02:12 UTC reconciled by 21:59 UTC sentinel. db_vs_broker clean.",
     "streak_clarification": "2026-07-25 = Saturday. Governance requires 5 TRADING DAYS. Day 1 confirmed = 2026-07-24 (Fri). Day 2 = 2026-07-27 (Mon, pending clean run). Streak counter note added.",
     "next_checkin": "2026-07-27 (Monday) — first trading-day sentinel run will confirm Day 2/5 or reset streak."
+   },
+   "checkin_10h42_utc": {
+    "pr_22_status": "DRAFT, open, mergeable_state=unknown (transient — GitHub recomputing, not a conflict), 0 review comments",
+    "integrity_snapshot": "2026-07-25T07:25 UTC — ALL GREEN, 5/5 checks ok. Weekend 24/7 run; does NOT count as trading-day streak increment.",
+    "portfolio_heat": "87.21% unchanged — market closed (Saturday). 6 open positions. No change possible until Monday open.",
+    "kelly_mode": "normal (0.0916) — stable",
+    "signal_gate": "3/10 passing (AVGO, MRVL, SMCI) — same as Friday. Pre-market Saturday snapshot, no trades possible.",
+    "action_taken": "None — all clear, no blockers. Next meaningful checkpoint: Monday market open (13:30 UTC) for heat resolution and Day 2 sentinel confirmation (post-market close)."
    }
   },
   {
