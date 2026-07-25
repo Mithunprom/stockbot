@@ -177,6 +177,15 @@ TICKER_IC_MIN_ENTRY = 0.0          # live IC must exceed this to enter (n≥MIN_
 # reset the sample count back below the bar and re-trigger the deadlock. The
 # block gate keeps the 7d + `since` behavior (judging only the live incarnation).
 KELLY_PROBE_IC_WINDOW_DAYS = 30
+# H9: Probe quality floor — during Kelly probation the daily probe requires
+# a minimum CURRENT-BAR signal quality in addition to the 30d IC threshold.
+# Motivation: SNDK id=104 entered with ensemble=0.018 and sentiment=-0.90 —
+# essentially pure noise at bar time even though the 30d IC was positive.
+# A positive historical IC means the signal WORKS on this name when it fires;
+# it does NOT mean every bar is worth trading. These floors block noise-level
+# probe entries while preserving the right to probe on genuine opportunity.
+KELLY_PROBE_MIN_ENSEMBLE: float = 0.10   # min |ensemble_signal| for probe entry
+KELLY_PROBE_MIN_SENTIMENT: float = -0.50  # reject deeply bearish sentiment on probe
 
 # PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades
 # per rolling 5 business days. A same-day round trip is a day trade, so the
@@ -1433,12 +1442,19 @@ class SignalLoop:
         # The probe uses the 30d IC cache (reachable across redeploys), NOT the
         # 7d block cache whose ~250-sample ceiling made n>=300 unsatisfiable and
         # deadlocked the governor (2026-06-26 → 06-30 halt).
+        # H9: additionally require current-bar signal quality floors so a positive
+        # 30d IC doesn't send us into a noise-level bar (SNDK id=104: ensemble=0.018,
+        # sentiment=-0.90 — clear noise at bar time despite historical IC > 0.05).
         if self._kelly_mode() == "probation":
             ic, n = self._ticker_ic_probe.get(ticker, (0.0, 0))
+            ensemble_ok = float(sig.ensemble_signal) >= KELLY_PROBE_MIN_ENSEMBLE
+            sentiment_ok = float(sig.sentiment_index) >= KELLY_PROBE_MIN_SENTIMENT
             probe_ok = (
                 self._probation_entries_today < 1
                 and n >= TICKER_IC_MIN_N
                 and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                and ensemble_ok
+                and sentiment_ok
             )
             if not probe_ok:
                 logger.debug(
@@ -1447,6 +1463,10 @@ class SignalLoop:
                     kelly=round(self._kelly_fraction, 4),
                     probes_used=self._probation_entries_today,
                     ticker_ic=round(ic, 3),
+                    ensemble_signal=round(float(sig.ensemble_signal), 4),
+                    sentiment_index=round(float(sig.sentiment_index), 4),
+                    ensemble_ok=ensemble_ok,
+                    sentiment_ok=sentiment_ok,
                 )
                 return False
 
