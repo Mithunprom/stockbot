@@ -182,6 +182,10 @@ def test_kelly_probation_allows_single_probe():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    # H9: probe also requires current-bar signal quality (ensemble ≥ 0.10,
+    # sentiment ≥ -0.50) — set both to passing values for this regression test.
+    sig.ensemble_signal = 0.25
+    sig.sentiment_index = 0.10
 
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
@@ -217,6 +221,9 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    # H9: set passing quality floors so this test isolates the 7d-vs-30d IC check
+    sig.ensemble_signal = 0.25
+    sig.sentiment_index = 0.10
 
     # 7d block cache full & positive, but probe cache empty → still blocked
     loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
@@ -225,6 +232,102 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
 
     # Once the 30d probe cache clears the bar, the probe fires
     loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def _probation_loop_with_eligible_ticker(ticker: str = "AAPL"):
+    """Helper: SignalLoop in Kelly probation with a probe-eligible ticker in the 30d cache."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+    loop._ticker_ic_probe = {ticker: (0.15, TICKER_IC_MIN_N + 50)}
+    return loop
+
+
+def _quality_sig(ticker: str = "AAPL") -> EnsembleSignal:
+    """Helper: EnsembleSignal that clears all H9 probe quality floors."""
+    sig = EnsembleSignal(ticker=ticker, timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.25   # > KELLY_PROBE_MIN_ENSEMBLE (0.10)
+    sig.sentiment_index = 0.10   # > KELLY_PROBE_MIN_SENTIMENT (-0.50)
+    return sig
+
+
+def test_h9_probe_floor_blocks_sndk104_case():
+    """H9: SNDK id=104 scenario (ensemble=0.018, sentiment=-0.90) is blocked.
+
+    A positive 30d ticker IC means the signal WORKS on a name over time; it
+    does NOT mean every bar is worth trading. ensemble=0.018 is essentially
+    random noise — below the 0.10 floor — and sentiment=-0.90 signals extreme
+    bearishness. Both H9 checks fire simultaneously on this trade.
+    """
+    loop = _probation_loop_with_eligible_ticker()
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.018   # SNDK #104 actual value — below floor
+    sig.sentiment_index = -0.90   # SNDK #104 actual value — below floor
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_floor_blocks_low_ensemble_only():
+    """H9: ensemble below floor blocks even when sentiment is neutral-positive."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE
+    loop = _probation_loop_with_eligible_ticker()
+    sig = _quality_sig()
+    sig.ensemble_signal = KELLY_PROBE_MIN_ENSEMBLE - 0.01   # just under floor
+    sig.sentiment_index = 0.30                               # clearly above sentiment floor
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_floor_blocks_bearish_sentiment_only():
+    """H9: deeply bearish sentiment blocks even when ensemble signal is strong."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_SENTIMENT
+    loop = _probation_loop_with_eligible_ticker()
+    sig = _quality_sig()
+    sig.ensemble_signal = 0.40                               # clearly above ensemble floor
+    sig.sentiment_index = KELLY_PROBE_MIN_SENTIMENT - 0.01  # just under floor
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_floor_allows_at_exact_boundary():
+    """H9: probe fires when ensemble and sentiment sit exactly on the floor."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE, KELLY_PROBE_MIN_SENTIMENT
+    loop = _probation_loop_with_eligible_ticker()
+    sig = _quality_sig()
+    sig.ensemble_signal = KELLY_PROBE_MIN_ENSEMBLE    # exactly at floor
+    sig.sentiment_index = KELLY_PROBE_MIN_SENTIMENT   # exactly at floor
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_floor_only_applies_in_probation():
+    """H9: quality floors are irrelevant in normal Kelly mode (no regression)."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    # Mix of wins and losses → positive Kelly (normal mode)
+    loop._sizing_recent_outcomes = (
+        [(_stamp(0.5), 0.02)] * (KELLY_MIN_TRADES // 2 + 2)
+        + [(_stamp(0.5), -0.01)] * (KELLY_MIN_TRADES // 2)
+    )
+    loop._update_kelly()
+    assert loop._kelly_mode() == "normal"
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.00   # would fail H9 probe floor
+    sig.sentiment_index = -0.99  # would fail H9 sentiment floor
+    # In normal mode the Kelly gate is skipped entirely, so signal quality
+    # in Gate 6 (pred_ret + dir_prob) is what matters, not the probe floors.
     assert loop._sizing_entry_gate_open(sig)
 
 
