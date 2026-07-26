@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
  "last_iteration_date": "2026-07-24",
- "active_hypothesis": "INTEGRITY CLEAN \u2014 Sentinel 07:25 UTC 2026-07-25 ALL GREEN. DAY 2/5 toward CODE RED exit. v0.5.2 deployed. Railway worker still the bottleneck for H0\u2013H11 backtest queue.",
+ "active_hypothesis": "INTEGRITY CLEAN \u2014 Sentinel 08:25 UTC 2026-07-26 ALL GREEN. DAY 3/5 toward CODE RED exit. Railway worker still the bottleneck for H0\u2013H11 backtest queue.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -9,9 +9,9 @@
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
   "snapshot_date": "2026-07-24",
-  "integrity_clean_streak": 2,
+  "integrity_clean_streak": 3,
   "integrity_clean_streak_started": "2026-07-24",
-  "integrity_sentinel_last_run": "2026-07-25T07:25:00Z",
+  "integrity_sentinel_last_run": "2026-07-26T08:25:00Z",
   "integrity_sentinel_status": "ok",
   "deployed_version": "0.5.2",
   "all_time_n_closed": 96,
@@ -296,7 +296,7 @@
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "DAY 2/5 — Sentinel clean at 07:25 UTC 2026-07-25 (streak started 2026-07-24)",
+   "integrity_clean_5_days": "DAY 3/5 — Sentinel clean at 08:25 UTC 2026-07-26 (streak started 2026-07-24)",
    "kelly_window_sane": "OK — sentinel confirmed kelly_seed_sanity ok",
    "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled"
   }
