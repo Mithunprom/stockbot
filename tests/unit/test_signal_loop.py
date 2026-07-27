@@ -128,7 +128,7 @@ def test_position_size_respects_cap():
 # ─── Swing-mode exit geometry ──────────────────────────────────────────────────
 
 def test_atr_exits_geometry():
-    """Stops/targets scale with daily vol, respect floors/caps, and TP ≈ 2× stop."""
+    """Stops/targets scale with daily vol, respect floors/caps, and reward > risk."""
     from src.agents.signal_loop import (
         _atr_exits,
         SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP,
@@ -143,9 +143,62 @@ def test_atr_exits_geometry():
     sl_hi, ts_hi, tp_hi = _atr_exits(0.12)
     assert sl_hi <= SIZING_STOP_LOSS_CAP
     assert tp_hi <= SIZING_TAKE_PROFIT_CAP
-    # Monotonic in volatility, and reward ≥ risk
+    # Monotonic in volatility, and reward > risk
     assert sl_hi >= sl_lo and tp_hi >= tp_lo
-    assert tp_lo >= 1.8 * sl_lo
+    # 2026-07-24: was `tp_lo >= 1.8 * sl_lo`, which encoded the old 3.0σ target.
+    # That ratio was only satisfiable by a TP so far away it was unreachable
+    # inside the 1-day hold window (see SIZING_TAKE_PROFIT_DVOL_MULT). Reward
+    # must still exceed risk, but the binding constraint is reachability, not
+    # ratio — a 2.7:1 target that never fills pays 0.
+    assert tp_lo > sl_lo
+    assert tp_lo >= 1.3 * sl_lo
+
+
+def test_take_profit_is_reachable_within_hold_window():
+    """TP must sit inside the move the hold window can plausibly produce.
+
+    Regression guard for the 2026-07-24 finding: TP was pinned at 3× daily
+    sigma while SIZING_MAX_HOLD_BARS caps the trade at ~1 trading day — i.e.
+    one sigma of time. A 3σ excursion inside 1σ of time is a ~0.1% event, so
+    take_profit fired on 2 of 108 trades and 51% of trades exited on the timer
+    at ~zero expectancy. Any future retune must keep the target within ~2σ of
+    daily vol, or the profit path is closed by construction.
+    """
+    from src.agents.signal_loop import (
+        SIZING_TAKE_PROFIT_DVOL_MULT,
+        SIZING_STOP_LOSS_DVOL_MULT,
+        SIZING_MAX_HOLD_BARS,
+    )
+    # The hold window is ~1 trading day → ~1 daily sigma of realised movement.
+    sigmas_of_time = (SIZING_MAX_HOLD_BARS / 390.0) ** 0.5
+    assert SIZING_TAKE_PROFIT_DVOL_MULT <= 2.0 * sigmas_of_time, (
+        "take-profit target is unreachable within the max-hold window"
+    )
+    # …but must still pay more than the stop risks.
+    assert SIZING_TAKE_PROFIT_DVOL_MULT > SIZING_STOP_LOSS_DVOL_MULT
+
+
+def test_reward_exceeds_risk_across_the_whole_vol_range():
+    """R:R must stay > 1 at every vol, including where the clamps bind.
+
+    The floors and caps are independent constants, so it is possible to pick a
+    sane multiplier and still invert the geometry at an extreme. Concretely: if
+    SIZING_TAKE_PROFIT_CAP is set equal to SIZING_STOP_LOSS_CAP, a high-vol name
+    (SNDK ~12% daily) ends up risking exactly what it stands to make — a losing
+    trade at any win rate below 50%. Sweep the range and assert reward wins.
+    """
+    from src.agents.signal_loop import (
+        _atr_exits, DAILY_VOL_FLOOR, DAILY_VOL_CEIL,
+        SIZING_TAKE_PROFIT_CAP, SIZING_STOP_LOSS_CAP,
+    )
+    assert SIZING_TAKE_PROFIT_CAP > SIZING_STOP_LOSS_CAP
+
+    steps = 40
+    for i in range(steps + 1):
+        dv = DAILY_VOL_FLOOR + (DAILY_VOL_CEIL - DAILY_VOL_FLOOR) * i / steps
+        sl, _ts, tp = _atr_exits(dv)
+        assert tp > sl, f"reward <= risk at daily_vol={dv:.4f}: tp={tp} sl={sl}"
+        assert tp / sl >= 1.3, f"R:R below 1.3 at daily_vol={dv:.4f}: {tp / sl:.2f}"
 
 
 # ─── Kelly governor (window + probation, no deadlock) ─────────────────────────
