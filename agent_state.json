@@ -1,20 +1,21 @@
 {
- "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery",
- "last_iteration_date": "2026-07-24",
- "active_hypothesis": "INTEGRITY CLEAN \u2014 Sentinel 09:25 UTC 2026-07-27 ALL GREEN. DAY 4/5 toward CODE RED exit. v0.5.3 clean (TP + heat cap fix, no integrity issues). ONE MORE DAY to exit CODE RED on integrity criterion.",
+ "current_phase": "CODE RED \u2014 Ledger Integrity & Validation Recovery (Day 4/5 \u2014 one day from integrity criterion)",
+ "last_iteration_date": "2026-07-27",
+ "active_hypothesis": "W31 PROGRAM REVIEW complete. CODE RED Day 4/5 \u2014 Sentinel clean 09:25 UTC Jul 27. Jul 28 = Day 5 exits integrity criterion if clean. Railway worker still unblocked (data_run criterion cannot be met). M2 frozen-config: n=32, PF=0.741 (OFF TRACK \u2014 need 1.2@100). W31 PF=1.42 (n=13) is encouraging but noise. v0.5.0 LGBM retrain classification pending owner decision (freeze integrity flag). Three owner decisions outstanding.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-24",
+  "snapshot_date": "2026-07-27",
   "integrity_clean_streak": 4,
   "integrity_clean_streak_started": "2026-07-24",
   "integrity_sentinel_last_run": "2026-07-27T09:25:00Z",
   "integrity_sentinel_status": "ok",
   "deployed_version": "0.5.3",
   "v053_note": "TP mult 3.0→1.5 (reachable within 1-day hold), TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling, fixing 6×15%=90% overshoot). 206 tests pass. Owner judgment: bug-fix class (TP unreachable by construction; heat cap derived from obsolete 4-slot config). Conservative direction; paper mode only.",
+  "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Staleness fix = freeze-exempt. Model promotion classification (bug-fix vs strategy-change) pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy.",
   "all_time_n_closed": 96,
   "all_time_win_rate": 0.458,
   "all_time_pf_stored": 0.77,
@@ -22,9 +23,22 @@
   "trailing_30_pf_stored": 0.60,
   "trailing_30_pf_fill_corrected": 0.864,
   "trailing_30_win_rate": 0.433,
+  "frozen_config_n": 32,
+  "frozen_config_win_rate": 0.406,
+  "frozen_config_pf": 0.741,
+  "frozen_config_net_pnl": -1082,
+  "frozen_config_max_drawdown_usd": 1856,
+  "frozen_config_max_drawdown_pct": 0.019,
+  "w31_n_closed": 13,
+  "w31_win_rate": 0.462,
+  "w31_pf": 1.42,
+  "w31_net_pnl": 621,
+  "open_positions_jul27": 6,
+  "open_positions_note": "IDs 112-117 opened Jul 24; survived weekend; will process at Jul 27 market open. Pre-v0.5.3 sizing. Heat 87.45% clears once these exit.",
   "kelly_mode": "probation",
   "suspected_corrupt_rows": [],
-  "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure."
+  "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure.",
+  "m2_trajectory": "OFF TRACK — PF=0.741 at n=32; target PF>=1.2 at n>=100. n=100 ~mid-August on current pace. W31 sub-window PF=1.42 (n=13, noise). Owner decision needed before gate closes."
  },
  "live_data_status": {
   "date": "2026-07-22",
@@ -182,6 +196,16 @@
  ],
  "completed_iterations": [
   {
+   "date": "2026-07-27",
+   "hypothesis_id": "W31_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW — W31 weekly review completed. Live data via live-snapshot relay (Railway 403 still affects cloud IPs; snapshot read OK). CODE RED Day 4/5 — Sentinel clean 09:25 UTC Jul 27; one more day (Jul 28) exits integrity criterion. M2 frozen-config: n=32 @ PF=0.741 (OFF TRACK). W31 sub-window PF=1.42 (n=13). Three owner decisions escalated: Railway worker (week 3), v0.5.0 LGBM classification, M2 trajectory. ROADMAP + agent_state updated. Report at reports/program/2026-W31.md.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W31.md",
+    "agent_state.json"
+   ]
+  },
+  {
    "date": "2026-07-24",
    "hypothesis_id": "INTEGRITY_FILL_PNL_REPAIR",
    "result": "DEPLOYED — PR #20 (fix(integrity): heal residual fill-price pnl corruption v0.5.1) merged by owner at 05:36 UTC. Extends _repair() to rewrite pnl + pnl_pct to fill-implied values for rows with action=rewrite_pnl. 5 known corrupt rows: V#54 ($37.63→$2.56), XOM#68 (-$169.33→-$42.90), MSFT#82 (-$363.73→-$63.70), MU#93 (-$512.48→-$113.64), SMCI#83 (-$638.06→-$138.96). Fill-corrected trailing-30 PF=0.864 (stored 0.60). Our parallel PR #19 (same objective, different function name corrected_fill_pnl vs fill_price_implied_pnl) closed as superseded. Repair will activate on next hourly Sentinel run once INTEGRITY_AUTO_REPAIR=true is set. Two repair backups in reports/integrity/ (05:32+05:33 UTC) predate the merge and show empty corruption — they are from pre-v0.5.1 sentinel. H10 (short max-hold, owner preliminary data) and H11 (IC-block gate deadlock fix) queued on main.",
@@ -266,22 +290,23 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 2] Enable Railway worker service: AGENT_WORKER_ENABLE=true + Alpaca paper API keys in Railway dashboard (~10 min). Unblocks all 7 hypothesis validations (H1\u2013H5 deployed, H6/H7 in draft).",
-  "[OWNER ACTION \u2014 CRITICAL, DAY 8] Investigate Railway endpoint HTTP 403. Confirm if reachable outside Claude sandbox. Add external uptime monitor (UptimeRobot/Pingdom) for M1/M2 continuity.",
-  "[OWNER ACTION \u2014 SCOPE DECISION] Should R&D desk pause new hypothesis implementation (H6/H7 in draft, H1\u2013H5 unvalidated) until Railway runs at least one backtest? PM recommendation: yes, pause.",
-  "[OWNER ACTION \u2014 CARRIED] Confirm compound M2 baseline (H4+H2+H5+H3 all in v0.4.4). Individual attribution impossible without isolated backtests.",
-  "[Railway worker] Run H5 backtest (priority 1): --phase holdext \u2014 baseline 1-day vs signal-reconfirmed extension",
-  "[Railway worker] Run H2 backtest (priority 2): --phase spy_ma \u2014 Sharpe/PF/WR/DD/n with/without MA overlay",
-  "[Railway worker] Run H1 backtest (priority 3): --phase topk \u2014 4 variants (k\u2208{3,4} \u00d7 snapshot\u2208{13:00,14:00})",
-  "[Railway worker] Run H3 backtest (priority 4): blackout vs no-blackout + lost-opportunity cost",
-  "[Railway worker] Run H6 backtest (priority 5): --phase persistence \u2014 N\u2208{0,1,2,3}",
-  "[Railway worker] Run H7 backtest (priority 6): --phase stagnation \u2014 prod_baseline + stag_bars variants",
-  "[Railway worker] Run H4 IC comparison (priority 7): confirm calibration improvement"
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 3] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 7+ hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 NEW, HIGH] Classify v0.5.0 LGBM retrain (commit dff72eb): bug-fix (staleness trap, freeze-exempt) or strategy change (M2 clock resets)? Reply needed to confirm freeze integrity.",
+  "[OWNER ACTION \u2014 NEW, HIGH] M2 trajectory decision: PF=0.741@n=32, target PF>=1.2@n=100, ~13 trading days to measurement gate. Decide: (a) run clock out, (b) unlock Railway now to get H0/H5/H2 in window, or (c) declare M2 missed and pivot to validated-backtest route.",
+  "[CODE RED \u2014 Day 4/5] Confirm Sentinel clean on Jul 28 (Day 5). If clean, exit integrity criterion. Railway worker still needed for data_run criterion.",
+  "[Railway worker] Run H0 baseline (priority 0): python scripts/research_backtest.py --phase all",
+  "[Railway worker] Run H5 backtest (priority 1): --phase holdext",
+  "[Railway worker] Run H2 backtest (priority 2): --phase spy_ma",
+  "[Railway worker] Run H1 backtest (priority 3): --phase topk",
+  "[Railway worker] Run H3 backtest (priority 4): blackout + opportunity cost",
+  "[Railway worker] Run H6 backtest (priority 5): --phase persistence",
+  "[Railway worker] Run H7 backtest (priority 6): --phase stagnation",
+  "[Railway worker] Run H4 IC comparison (priority 7)"
  ],
  "blocked_by_token_limit": false,
  "governance": {
   "deploy_mode": "PR_REVIEW_REQUIRED",
-  "freeze_status": "FROZEN at v0.4.4 since 2026-07-13. Intact through W30 (2026-07-20). No strategy merges until M2 matures (n>=100) or validated backtest justifies exception. Bug fixes, infra, and docs always exempt.",
+  "freeze_status": "FROZEN at v0.4.4 since 2026-07-13. Intact through W31 (2026-07-27). No strategy merges until M2 matures (n>=100) or validated backtest justifies exception. Bug fixes, infra, and docs always exempt. v0.5.0 LGBM retrain classification PENDING owner confirmation.",
   "note": "Per CLAUDE.md: no autonomous changes to live strategy/config. Agents research, implement, backtest, and open PRs; a human merges. Config staging: config/staging/."
  },
  "code_red": {
@@ -297,9 +322,9 @@
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "DAY 4/5 — Sentinel clean at 09:25 UTC 2026-07-27 (streak started 2026-07-24). ONE MORE DAY.",
+   "integrity_clean_5_days": "DAY 4/5 — Sentinel clean at 09:25 UTC 2026-07-27 (streak started 2026-07-24). ONE MORE DAY (Jul 28). Exit criteria met if Sentinel runs clean on Jul 28.",
    "kelly_window_sane": "OK — sentinel confirmed kelly_seed_sanity ok",
-   "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled"
+   "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled (3 weeks outstanding)"
   }
  }
 }

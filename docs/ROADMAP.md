@@ -1,83 +1,90 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-07-20 (W30 weekly review + CODE RED declared).
+Last updated: 2026-07-27 (W31 weekly review).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
 **Trigger:** trailing-7d PF 0.30 (n=17) AND a confirmed ledger defect: partial-fill
-exits wrote corrupted `pnl_pct` (e.g. −15.7% stored on a −4.0% trade, one row at
-+993%), and `_seed_kelly_from_db()` re-injected those rows into position sizing
-after every redeploy. Two zombie open rows (MU/WDC, 2026-06-12) sat unclosable
-by orphan recovery. Full declaration: `reports/program/CODE-RED-2026-07-20.md`.
+exits wrote corrupted `pnl_pct`, and `_seed_kelly_from_db()` re-injected those rows into
+position sizing after every redeploy. Full declaration: `reports/program/CODE-RED-2026-07-20.md`.
 
 **Posture (manifesto governance rule F):** integrity first, validation throughput
-second, new alpha queued. Personas 10 (Integrity Sentinel) + 11 (Principal
-Skeptic) onboarded; `src/agents/integrity_agent.py` audits the ledger hourly.
+second, new alpha queued.
 
-**Exit criteria:** integrity report clean 5 consecutive trading days + Kelly
-window verified sane + ≥1 hypothesis reaches data_run. Exit is logged here.
+**Exit criteria (all three required):**
 
-**403 note (revises W30):** the production endpoints are reachable from the
-owner's network (verified 2026-07-20 via curl — /health, /trades, /diagnostics
-all 200). The 403 affects the Claude sandbox proxy and GitHub Actions runners
-(external watchdog failing since ≥07-17) — i.e. datacenter IPs, not the service.
-M1/M2 are measurable again from the owner's side; an external uptime monitor is
-still recommended for automation-side visibility.
+| Criterion | Status |
+|-----------|--------|
+| Integrity Sentinel clean 5 consecutive trading days | **DAY 4/5** — clean at 09:25 UTC Jul 27. One more day (Jul 28). |
+| Kelly window verified sane | ✅ Sentinel confirmed ok |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled |
 
-## North star
+**Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
+Fill-corrected T30 PF = 0.864 (was 0.60 stored). Sentinel-verified clean 4 consecutive days.
+Code RED cannot exit until Railway worker unblocks the `data_run` criterion.
+
+## North Star
+
 Stable ops → measured edge → paper-trading gate → client product.
 No stage skips a gate. PnL is never reported without Sharpe/PF/WR/DD/n.
+
+**M2 WARNING:** n=32 frozen-config trades closed at PF=0.741. At current trajectory
+(~5 trades/day), n=100 arrives ~mid-August. PF≥1.2 is not on track. Owner decision
+needed before that gate closes (see W31 report Decision #3).
 
 ## Milestones
 
 | ID | Milestone | Gate | Status |
 |----|-----------|------|--------|
-| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — streak est. ~10 days (Jul 10–20). **⚠️ UNVERIFIABLE** — endpoints 403 since Jul 12 (day 8); watchdog unreadable second week |
-| M2 | Measured edge on frozen config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.4.4 | 🟡 IN PROGRESS — n ≈ 23 est.; endpoints 403 prevent confirmation. **CONFIG FROZEN** |
-| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — needs Railway worker service (owner action). H1 draft PR #7 ready. H5-phase PR #9 also queued. |
-| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — same bottleneck as M3. H4 at 10 days (2× flag), H2 at 9 days, H5/H3 at 6 days. |
+| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~17 days (Jul 10–27 est.); live-snapshot relay restored cloud visibility (PR #16) |
+| M2 | Measured edge on frozen config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.4.4 | 🔴 OFF TRACK — n=32 @ PF=0.741 (Jul 13–23). W31 sub-window PF=1.42 (n=13, noise). **n=100 ~mid-August on current pace.** |
+| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. |
+| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — H4 at 17 days (3.4× flag), all others also flagged. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M2 |
-| M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED — /track page live as groundwork |
+| M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
-## Current single bottleneck (TPM)
+## Current Single Bottleneck (TPM)
+
 **Railway worker service** (`python agent_worker.py`, env `AGENT_WORKER_ENABLE=true`
-+ Alpaca keys). Blocks M3 and M4 — all 7 pending hypothesis validations (H1–H5 deployed,
-H6/H7 in draft). Owner action, ~10 minutes in the Railway dashboard.
-Outstanding since W29 (Jul 15) — two weeks with no resolution.
++ Alpaca paper keys). Blocks M3, M4, and CODE RED exit (data_run criterion).
+Outstanding **3 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
 
-**Secondary blocker (now CRITICAL — monitoring):** Railway endpoints return HTTP 403 from
-the Claude sandbox proxy for **8 consecutive days** (Jul 12–20). M1 and M2 measurement is
-blind. Independent of the worker issue — both need resolution. Recommend external uptime
-monitor (UptimeRobot/Pingdom) to restore M1/M2 visibility independent of the sandbox.
+All 7+ hypothesis validations blocked behind this single action.
 
-## Freeze status (TPM-enforced)
-- **FROZEN at v0.4.4** since 2026-07-13. Strategy merges paused until M2
-  matures or a validated backtest justifies an exception.
-- Always exempt: bug fixes, infra, monitoring, docs.
-- Draft PRs queue freely (currently: PR #7 / H1 — correctly held in draft
-  pending its data run).
+## Freeze Status (TPM-enforced)
 
-## Risk register
+- **Strategy FROZEN at v0.4.4** since 2026-07-13. Intact through W31 (2026-07-27).
+  No strategy merges. No risk control changes.
+- Bug fixes, infra, monitoring always exempt.
+- Deployed since freeze: v0.4.5–v0.4.17 (monitoring, bug fixes), v0.5.0–v0.5.3 (CODE RED
+  repairs, TP fix, heat cap fix).
+- **⚠️ v0.5.0 CLASSIFICATION PENDING (owner decision):** `dff72eb` promoted a retrained
+  LGBM model alongside a staleness-trap bug fix. Staleness fix = exempt. Model promotion =
+  ambiguous (bug fix or strategy change?). If strategy change, M2 clock resets to v0.5.0
+  deploy. Owner must confirm classification.
+- Draft PRs queued (freeze intact): #7 (H1), #9 (H5 phase), #10 (H2+H6 phases), #11 (H7)
+
+## Risk Register
+
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| Railway endpoint 403 — monitoring blind | **CRITICAL** (↑ 07-20) | Day 8; north star unmeasurable. External uptime monitor needed. Owner action |
-| Railway worker not running — zero validations | **CRITICAL** (↑ 07-20) | H4 at 10 days (2× flag), 0/5 deployed hypotheses validated. Owner action, ~10 min |
-| Hypothesis accumulation without validation | HIGH (NEW 07-20) | 7 in queue, building on unvalidated layers. PM recommends pausing new implementation |
-| Attribution blur — 5 hypotheses merged w/o individual data runs | HIGH | v0.4.4 is a compound treatment. Cleared only when Railway isolates each hypothesis |
-| H4 stuck in needs_data_run 10 days | MED | Double the 5-day flag threshold; Railway worker is the only path |
-| Mid-sample config churn resets M2 clock | MED (was HIGH) | ✅ mitigated 07-13: hard freeze at v0.4.4; held through W30 |
-| Single-operator deploys | MED | ✅ closed 07-13: auto-deploy on merge |
-| Long-only assumption landmines | MED | v0.3.7 exit-side fix + regression tests; audit remaining paths during M2 |
-| Alpaca paper account external resets | MED | /track + history now read broker directly; keep baseline notes in agent_state |
+| Railway worker not running — all validation + CODE RED exit blocked | **CRITICAL** | Week 3; ~10 min owner action in Railway dashboard |
+| v0.5.0 LGBM retrain classification | **HIGH (NEW)** | Owner must confirm bug-fix vs strategy-change; affects M2 clock |
+| M2 trajectory: PF 0.741 @ n=32, gate at n≥100 | **HIGH** | ~13 more trading days to n=100; PF<1.2 on current path; owner decision needed |
+| Hypothesis accumulation without validation | **HIGH** | 8 hypotheses queued, 0 data runs in 3 weeks |
+| H4 at 17 days in needs_data_run | **MED** | 3.4× flag threshold; Railway is only fix |
+| Attribution blur — compound v0.4.4 | **MED** | Need Railway isolated backtests |
+| Long-only assumption landmines | **LOW** | v0.5.x fixes addressed TP and heat; audit remaining paths |
 
-## Decision log
-- 2026-07-20: CODE RED declared (ledger defect + PF 0.30/7d); Integrity Sentinel
-  + Principal Skeptic personas onboarded; v0.4.5 fix + repair (freeze-exempt: bug/monitoring)
+## Decision Log
+
+- 2026-07-27: W31 review — M2 off-track (PF 0.741@n=32); v0.5.0 LGBM classification
+  flagged; M2 owner decision needed before n=100 (~mid-August); CODE RED Day 4/5
+- 2026-07-20: CODE RED declared; Integrity Sentinel + Principal Skeptic onboarded
+- 2026-07-13: Hard freeze at v0.4.4; TPM+PM personas onboarded
+- 2026-07-15: W29 weekly review — freeze confirmed; 3 owner decisions escalated
+- 2026-07-20: W30 weekly review — 403 CRITICAL (day 8); Railway worker CRITICAL (week 2)
 - 2026-07-10: PR-only governance; risk controls never weakened (manifesto)
 - 2026-07-11: H5 must be signal-conditional (unconditional 3-day holds = −493bps, June backtest)
-- 2026-07-13: owner approved H5+H3 deploy ahead of data runs (paper = lab)
-- 2026-07-14: hard freeze at v0.4.4; TPM+PM personas onboarded
-- 2026-07-15: W29 weekly review — freeze confirmed intact; 3 decisions escalated to owner (Railway worker, endpoint 403, compound baseline acceptance)
-- 2026-07-16–18: R&D desk added H6 (signal persistence, PR #10) and H7 (stagnation exit + PROD_PARAMS, PR #11) in DRAFT while Railway still offline — all correctly held pending backtest; freeze intact
-- 2026-07-20: W30 weekly review — Railway endpoint 403 escalated to CRITICAL (day 8); Railway worker escalated to CRITICAL (day 10+ for H4); PM recommends pausing new hypothesis work pending first data run; freeze confirmed intact second consecutive week
+- 2026-07-13: Owner approved H5+H3 deploy ahead of data runs (paper = lab)
