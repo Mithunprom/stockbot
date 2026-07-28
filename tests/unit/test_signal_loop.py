@@ -601,6 +601,97 @@ def test_h5_existing_pdt_test_unchanged():
     assert loop._check_sizing_exit("AAPL", 100.0, sig) is None
 
 
+# ─── H11: IC-block gate fix (redeploy-reset deadlock) ─────────────────────────
+# Root cause: _maybe_refresh_ticker_ic passed since=loop_started_at to the IC
+# tracker. Each Railway redeploy reset loop_started_at, keeping the effective
+# accumulation window so narrow that n never reached TICKER_IC_MIN_N=300 →
+# gate perpetually disabled (confirmed: ticker_ic_tracked=0 on 2026-07-27 even
+# though MU had IC=−0.27 over 30d and hit −8.12% stop-loss). Fix: remove the
+# `since` filter so the 7d window accumulates across redeploys.
+
+def test_h11_ticker_ic_blocked_mu_case():
+    """MU-like ticker (ic=−0.27, n=350) is blocked by the IC gate."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._ticker_ic = {"MU": (-0.27, TICKER_IC_MIN_N + 50)}
+    assert loop._ticker_ic_blocked("MU") is True
+
+
+def test_h11_ticker_ic_gate_open_below_min_n():
+    """Gate stays open when n < TICKER_IC_MIN_N — insufficient sample, fail open."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._ticker_ic = {"MU": (-0.27, TICKER_IC_MIN_N - 1)}
+    assert loop._ticker_ic_blocked("MU") is False
+
+
+def test_h11_ticker_ic_gate_open_for_positive_ic():
+    """Ticker with positive live IC is not blocked."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._ticker_ic = {"AAPL": (0.12, TICKER_IC_MIN_N + 100)}
+    assert loop._ticker_ic_blocked("AAPL") is False
+
+
+def test_h11_ticker_ic_blocks_zero_ic():
+    """Exactly-zero IC with adequate sample is treated as non-positive → blocked.
+
+    TICKER_IC_MIN_ENTRY=0.0 means the live IC must EXCEED 0 to trade. An IC of
+    exactly 0.0 means the model is adding no edge — skip it.
+    """
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._ticker_ic = {"TSLA": (0.0, TICKER_IC_MIN_N + 10)}
+    assert loop._ticker_ic_blocked("TSLA") is True
+
+
+def test_h11_sizing_gate_blocks_negative_ic_ticker():
+    """Entry gate closes for a ticker with demonstrated negative IC (MU scenario)."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._ticker_ic = {"MU": (-0.27, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="MU", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.65
+    assert not loop._sizing_entry_gate_open(sig)
+
+    # Same negative IC is irrelevant when n is below the minimum — fail open
+    loop._ticker_ic = {"MU": (-0.27, TICKER_IC_MIN_N - 150)}
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h11_refresh_calls_tracker_without_since():
+    """_maybe_refresh_ticker_ic must NOT pass `since` to the IC tracker.
+
+    The H11 bug: since=loop_started_at was forwarded on every call. Each Railway
+    redeploy reset loop_started_at → effective window ≈ 0 → n never reached
+    TICKER_IC_MIN_N → gate disabled. Fix: call with window_days only.
+    """
+    import asyncio
+    loop = _make_loop()
+    mock_tracker = MagicMock()
+    mock_tracker._compute_per_ticker_ic = AsyncMock(
+        return_value={"MU": {"ic": -0.27, "n": 350}}
+    )
+    loop._ic_tracker = mock_tracker
+    # countdown 1 → decrements to 0 → 0 > 0 is False → refresh fires
+    loop._ic_refresh_countdown = 1
+
+    asyncio.run(loop._maybe_refresh_ticker_ic())
+
+    mock_tracker._compute_per_ticker_ic.assert_called_once()
+    call_kwargs = mock_tracker._compute_per_ticker_ic.call_args.kwargs
+    assert "since" not in call_kwargs, (
+        "H11 regression: `since` kwarg must not be passed — redeploy resets it "
+        "and makes n unreachable, silently disabling the IC gate"
+    )
+    # Verify the result populates the cache
+    assert loop._ticker_ic.get("MU") == (-0.27, 350)
+
+
 # ─── H3: Earnings-calendar blackout ───────────────────────────────────────────
 
 def _et_today():
