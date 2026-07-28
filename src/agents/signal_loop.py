@@ -596,15 +596,43 @@ class SignalLoop:
         from src.risk.risk_state_store import et_today_iso, load_risk_state
 
         snap = await load_risk_state(self._pipeline_id)
+        current = self._pm.portfolio_value
+
+        # Peak is reconciled against the BROKER's equity curve on every start,
+        # not just when the store is empty. Reasons:
+        #   - first run: anchoring to today's equity would discard the real
+        #     high-water mark and reset drawdown to 0 — the exact bug this
+        #     module exists to fix, happening one last time;
+        #   - self-healing: v0.5.4's own first boot persisted a peak of
+        #     $97,482 while the true peak was $104,278.55. A stored-only path
+        #     would carry that understatement forever.
+        # max() over (stored, broker, current) means the high-water mark can
+        # only ever be corrected upward — never silently lowered.
+        broker_peak = await self._peak_from_broker_history()
+        peak_candidates = [current, broker_peak]
+        if snap is not None:
+            peak_candidates.append(snap.peak_value)
+        self._pm._peak_value = max(peak_candidates)
+
         if snap is None:
-            logger.info("risk_state_none_persisted", pipeline=self._pipeline_id,
-                        note="first run or empty store — anchoring to current equity")
+            logger.info(
+                "risk_state_bootstrapped",
+                pipeline=self._pipeline_id,
+                peak=round(self._pm._peak_value, 2),
+                current=round(current, 2),
+                source="broker_history" if broker_peak > current else "current_equity",
+            )
+            await self._persist_risk_state()
             return
 
-        current = self._pm.portfolio_value
-        # Peak only ever ratchets UP. Guard against a stale snapshot dragging a
-        # grown account's peak backwards, which would understate drawdown.
-        self._pm._peak_value = max(snap.peak_value, current)
+        if self._pm._peak_value > snap.peak_value:
+            logger.warning(
+                "risk_peak_corrected_upward",
+                pipeline=self._pipeline_id,
+                stored=round(snap.peak_value, 2),
+                corrected=round(self._pm._peak_value, 2),
+                note="stored peak understated the true high-water mark",
+            )
 
         # The daily baseline is only meaningful for the day it was taken. On a
         # new session leave it at current; the 09:30 reset owns that handoff.
@@ -643,6 +671,36 @@ class SignalLoop:
             consecutive_losses=self._consecutive_losses,
             halted=self._cb.is_halted,
         )
+
+    async def _peak_from_broker_history(self, period: str = "3M") -> float:
+        """Highest completed-session equity from Alpaca. 0.0 if unavailable.
+
+        Used only to bootstrap the peak when no snapshot exists, so a first
+        deploy of the persistence layer doesn't inherit a reset drawdown.
+        """
+        import httpx
+
+        from src.config import get_settings
+
+        try:
+            s = get_settings()
+            base = (s.alpaca_paper_base_url if s.alpaca_mode == "paper"
+                    else s.alpaca_live_base_url)
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{base}/v2/account/portfolio/history",
+                    params={"period": period, "timeframe": "1D"},
+                    headers={
+                        "APCA-API-KEY-ID": s.alpaca_api_key,
+                        "APCA-API-SECRET-KEY": s.alpaca_secret_key,
+                    },
+                )
+                resp.raise_for_status()
+                equity = [e for e in resp.json().get("equity", []) if e]
+            return float(max(equity)) if equity else 0.0
+        except Exception as exc:
+            logger.warning("peak_from_broker_history_failed", error=str(exc))
+            return 0.0
 
     async def _persist_risk_state(self) -> None:
         """Snapshot risk counters. Fails open — never breaks a tick."""

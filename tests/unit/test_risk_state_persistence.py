@@ -221,3 +221,56 @@ def test_missing_smtp_config_does_not_raise():
                          forecast_email_to="")
     with patch("src.config.get_settings", return_value=settings):
         cb._send_email("subject", "body")      # must be a no-op, not a crash
+
+
+# ─── First-run bootstrap ─────────────────────────────────────────────────────
+
+def test_empty_store_seeds_peak_from_broker_history_not_current_equity():
+    """A first deploy must not inherit a reset drawdown.
+
+    When the store is empty, anchoring peak to today's equity reproduces the
+    very bug this module fixes. Real case: v0.5.4's own first boot reported
+    0.00% drawdown against a true $104,278.55 peak. The broker's equity curve
+    is the source of truth for the high-water mark.
+    """
+    history_peak = 104_278.55
+    current = 97_482.41
+
+    pm = _FakePM(current)
+    assert pm._peak_value == current                  # naive anchor
+
+    seeded = max(history_peak, pm.portfolio_value)    # what restore now does
+    pm._peak_value = seeded
+    dd = (pm._peak_value - current) / pm._peak_value
+
+    assert pm._peak_value == pytest.approx(history_peak)
+    assert dd == pytest.approx(0.0652, abs=1e-4)
+
+
+def test_broker_history_never_drags_peak_below_current_equity():
+    """A grown account must not be handed a stale, lower peak."""
+    pm = _FakePM(120_000.0)
+    pm._peak_value = max(104_278.55, pm.portfolio_value)
+    assert pm._peak_value == pytest.approx(120_000.0)
+
+
+def test_understated_stored_peak_is_corrected_upward():
+    """Self-heal: a stored peak below the broker's high-water mark is wrong.
+
+    v0.5.4's own first boot persisted peak=$97,482 while the true peak was
+    $104,278.55. A stored-only restore would carry that understatement (and
+    the 0.00% drawdown it implies) forever, so the peak is reconciled against
+    broker history on EVERY start.
+    """
+    stored, broker, current = 97_482.41, 104_278.55, 97_482.41
+    peak = max(current, broker, stored)
+    assert peak == pytest.approx(broker)
+    assert peak > stored
+    dd = (peak - current) / peak
+    assert dd == pytest.approx(0.0652, abs=1e-4)
+
+
+def test_peak_reconciliation_is_monotonic():
+    """Reconciliation must only ever raise the peak, never lower it."""
+    stored, broker, current = 104_278.55, 90_000.0, 97_482.41
+    assert max(current, broker, stored) == pytest.approx(stored)
