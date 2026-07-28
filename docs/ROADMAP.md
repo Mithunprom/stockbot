@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-07-27 (W31 weekly review).
+Last updated: 2026-07-28 (Day 5/5 integrity clean-streak confirmation).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -16,13 +16,13 @@ second, new alpha queued.
 
 | Criterion | Status |
 |-----------|--------|
-| Integrity Sentinel clean 5 consecutive trading days | **DAY 4/5** — clean at 09:25 UTC Jul 27. One more day (Jul 28). |
+| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. 5 consecutive clean days (Jul 24–28). |
 | Kelly window verified sane | ✅ Sentinel confirmed ok |
-| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (4 weeks) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
-Fill-corrected T30 PF = 0.864 (was 0.60 stored). Sentinel-verified clean 4 consecutive days.
-Code RED cannot exit until Railway worker unblocks the `data_run` criterion.
+Fill-corrected T30 PF = 0.864 (was 0.60 stored). Integrity criterion **MET** as of Jul 28.
+CODE RED cannot exit until Railway worker unblocks the `data_run` criterion.
 
 ## North Star
 
@@ -58,7 +58,8 @@ All 7+ hypothesis validations blocked behind this single action.
   No strategy merges. No risk control changes.
 - Bug fixes, infra, monitoring always exempt.
 - Deployed since freeze: v0.4.5–v0.4.17 (monitoring, bug fixes), v0.5.0–v0.5.3 (CODE RED
-  repairs, TP fix, heat cap fix).
+  repairs, TP fix, heat cap fix), v0.5.4 (durable risk state + halt alerting, PR #24),
+  v0.5.5 (peak equity reconciliation fix — `max(stored, broker, current)` on every start).
 - **⚠️ v0.5.0 CLASSIFICATION PENDING (owner decision):** `dff72eb` promoted a retrained
   LGBM model alongside a staleness-trap bug fix. Staleness fix = exempt. Model promotion =
   ambiguous (bug fix or strategy change?). If strategy change, M2 clock resets to v0.5.0
@@ -79,6 +80,9 @@ All 7+ hypothesis validations blocked behind this single action.
 
 ## Decision Log
 
+- 2026-07-28: Integrity exit criterion MET (Day 5/5 clean). v0.5.4 durable risk state
+  deployed (max_drawdown was 0.00% anchored; true DD 6.66%). v0.5.5 peak equity fix deployed.
+  CODE RED still active — Railway worker (data_run criterion) outstanding 4 weeks.
 - 2026-07-27: W31 review — M2 off-track (PF 0.741@n=32); v0.5.0 LGBM classification
   flagged; M2 owner decision needed before n=100 (~mid-August); CODE RED Day 4/5
 - 2026-07-20: CODE RED declared; Integrity Sentinel + Principal Skeptic onboarded
