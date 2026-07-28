@@ -439,15 +439,18 @@ class SignalLoop:
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
 
         # Per-ticker live IC cache: ticker → (ic, n_predictions)
-        # _ticker_ic: 7d window + since=loop_start, feeds the IC-BLOCK gate.
-        # _ticker_ic_probe: 30d window, no `since`, feeds the Kelly-probation
-        # probe only (must stay reachable across redeploys — see
-        # KELLY_PROBE_IC_WINDOW_DAYS).
+        # _ticker_ic: 7d rolling window, NO `since` filter — feeds the IC-BLOCK gate.
+        #   The original `since=loop_started_at` caused a redeploy-reset deadlock:
+        #   frequent Railway restarts kept the accumulation window so narrow that n
+        #   never reached TICKER_IC_MIN_N=300, so the gate NEVER fired (confirmed:
+        #   ticker_ic_tracked=0 in diagnostics 2026-07-27 despite MU IC=-0.27 over
+        #   30d). Same root cause as the Kelly-probe deadlock; same fix — remove
+        #   `since` so redeploys cannot reset the sample count below the gate bar.
+        # _ticker_ic_probe: 30d window, no `since`, feeds the Kelly-probation probe.
         self._ticker_ic: dict[str, tuple[float, int]] = {}
         self._ticker_ic_probe: dict[str, tuple[float, int]] = {}
         self._ic_refresh_countdown: int = 0
-        # Set when the loop starts — the IC gate only judges predictions made
-        # by THIS loop incarnation (not a previous pipeline's record)
+        # Set when the loop starts — used for diagnostics / latency logging
         self._loop_started_at: datetime | None = None
 
         # Rolling |pred_return| sample for the self-calibrating entry threshold
@@ -1291,8 +1294,12 @@ class SignalLoop:
             return
         self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
         try:
+            # No `since` filter — the 7d window must accumulate across redeploys.
+            # A `since=loop_started_at` filter reset the sample on every Railway
+            # restart, keeping n perpetually below TICKER_IC_MIN_N and silently
+            # disabling the gate (same deadlock class as the Kelly-probe fix).
             by_ticker = await self._ic_tracker._compute_per_ticker_ic(
-                window_days=7, since=self._loop_started_at,
+                window_days=7,
             )
             self._ticker_ic = {
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
