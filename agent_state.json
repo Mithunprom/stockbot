@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Day 5/5 (Jul 28 sentinel pending). H11 bug fix implemented: IC-block gate redeploy-reset deadlock fixed. PR open for human review.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). H11 IC-block gate fix PR open for human review (feat/rnd-H11-ic-block-gate-fix).",
  "last_iteration_date": "2026-07-28",
- "active_hypothesis": "H11 IMPLEMENTED (2026-07-28). Bug fix: _maybe_refresh_ticker_ic() was passing since=loop_started_at to the IC tracker. Each Railway redeploy reset loop_started_at, keeping the effective accumulation window so narrow that n never reached TICKER_IC_MIN_N=300 \u2014 gate silently disabled (confirmed: ticker_ic_tracked=0 in diagnostics 2026-07-27 despite MU IC=-0.27 over 30d). MU hit -8.12% stop-loss Jul 27 (id=115) then was re-entered Jul 27 (id=123) with ensemble=0.41 \u2014 exact pattern the IC gate was designed to block. Fix: removed since=loop_started_at. Same deadlock class as the Kelly-probe fix (July 2026). 6 new unit tests, 212/212 green. PR open feat/rnd-H11-ic-block-gate-fix.",
+ "active_hypothesis": "INTEGRITY EXIT CRITERION MET (Day 5/5). Sentinel ALL GREEN 08:25 UTC Jul 28. v0.5.4 (durable risk state + halt alerting) + v0.5.5 (peak equity reconciliation) deployed by owner today. CODE RED has 1 of 3 criteria remaining: >=1 hypothesis at data_run (Railway worker AGENT_WORKER_ENABLE=true still not set \u2014 4 consecutive weeks outstanding). M2 frozen-config: n=32, PF=0.741 (OFF TRACK). H11 bug fix (IC-block gate redeploy-reset deadlock) implemented 2026-07-28 \u2014 PR open feat/rnd-H11-ic-block-gate-fix: removed since=loop_started_at from _maybe_refresh_ticker_ic(), same deadlock class as Kelly-probe fix. 6 new unit tests, 212/212 green.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -9,12 +9,17 @@
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
   "snapshot_date": "2026-07-27",
-  "integrity_clean_streak": 4,
+  "integrity_clean_streak": 5,
   "integrity_clean_streak_started": "2026-07-24",
-  "integrity_sentinel_last_run": "2026-07-27T09:25:00Z",
+  "integrity_clean_streak_ended": "2026-07-28",
+  "integrity_criterion_met": true,
+  "integrity_criterion_met_date": "2026-07-28",
+  "integrity_sentinel_last_run": "2026-07-28T08:25:00Z",
   "integrity_sentinel_status": "ok",
-  "deployed_version": "0.5.3",
+  "deployed_version": "0.5.5",
   "v053_note": "TP mult 3.0→1.5 (reachable within 1-day hold), TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling, fixing 6×15%=90% overshoot). 206 tests pass. Owner judgment: bug-fix class (TP unreachable by construction; heat cap derived from obsolete 4-slot config). Conservative direction; paper mode only.",
+  "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD. halt_state lost on every redeploy (CLAUDE.md violation — deploy must not re-enable trading after halt). Tests: test_risk_state_persistence.py added (276 lines).",
+  "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start. Self-heals understated peak from prior restarts. Prevents drawdown baseline from resetting to 0 after any deploy.",
   "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Staleness fix = freeze-exempt. Model promotion classification (bug-fix vs strategy-change) pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy.",
   "all_time_n_closed": 96,
   "all_time_win_rate": 0.458,
@@ -312,7 +317,7 @@
   "[OWNER ACTION \u2014 CRITICAL, WEEK 3] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 7+ hypothesis validations and CODE RED data_run exit criterion.",
   "[OWNER ACTION \u2014 NEW, HIGH] Classify v0.5.0 LGBM retrain (commit dff72eb): bug-fix (staleness trap, freeze-exempt) or strategy change (M2 clock resets)? Reply needed to confirm freeze integrity.",
   "[OWNER ACTION \u2014 NEW, HIGH] M2 trajectory decision: PF=0.741@n=32, target PF>=1.2@n=100, ~13 trading days to measurement gate. Decide: (a) run clock out, (b) unlock Railway now to get H0/H5/H2 in window, or (c) declare M2 missed and pivot to validated-backtest route.",
-  "[CODE RED \u2014 Day 4/5] Confirm Sentinel clean on Jul 28 (Day 5). If clean, exit integrity criterion. Railway worker still needed for data_run criterion.",
+  "[CODE RED \u2014 INTEGRITY MET \u2705] Integrity criterion satisfied (Day 5/5, Jul 28). Remaining: hypothesis_at_data_run (Railway worker). Owner must set AGENT_WORKER_ENABLE=true to exit CODE RED.",
   "[Railway worker] Run H0 baseline (priority 0): python scripts/research_backtest.py --phase all",
   "[Railway worker] Run H5 backtest (priority 1): --phase holdext",
   "[Railway worker] Run H2 backtest (priority 2): --phase spy_ma",
@@ -341,9 +346,9 @@
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "DAY 5/5 — Streak started 2026-07-24. Last confirmed clean at 09:25 UTC 2026-07-27 (Day 4). Jul 28 sentinel result pending (run nightly). If clean today, this criterion is MET. Owner should confirm via integrity snapshot.",
-   "kelly_window_sane": "OK — sentinel confirmed kelly_seed_sanity ok",
-   "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled (3 weeks outstanding)"
+   "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (6 positions reconcile). Criterion 1 of 3 satisfied.",
+   "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok",
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (4 consecutive weeks outstanding). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H11 validations."
   }
  }
 }

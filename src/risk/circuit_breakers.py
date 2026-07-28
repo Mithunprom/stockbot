@@ -17,14 +17,19 @@ from __future__ import annotations
 
 import json
 import logging
+import smtplib
+import ssl
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+DASHBOARD_URL = "https://stockbot-production-cbde.up.railway.app/dashboard"
 
 LIVE_RISK_REPORT = Path("reports/risk/live.json")
 
@@ -269,6 +274,69 @@ class CircuitBreakers:
             f"Action taken: Trading halted automatically.\n"
             f"Required from human: Manual restart required after review.\n"
         )
+        # Page the human directly. Until now a halt only logged and wrote
+        # reports/risk/live.json — on Railway that file dies with the container,
+        # and the Watchdog only escalates a halt it happens to observe on its
+        # next 15-minute pass. A halt is the single most important event this
+        # system produces; it must not depend on another agent noticing it.
+        self._notify_halt(reason, message)
+
+    def _notify_halt(self, reason: str, message: str) -> None:
+        """Email the halt. Best-effort — a mail failure must never mask a halt."""
+        pipeline_label = f" [{self._pipeline_id}]" if self._pipeline_id else ""
+        stamp = self._halt_time.isoformat() if self._halt_time else ""
+        body = "\n".join([
+            f"🚨 ESCALATION — Risk Agent{pipeline_label} — {stamp}",
+            "",
+            f"Issue: {message}",
+            f"Breaker: {reason}",
+            "",
+            "Action taken: TRADING HALTED automatically. No new entries will open.",
+            "",
+            "Required from human: review, then call",
+            f"    circuit_breakers.resume_trading(authorized_by='<your name>')",
+            "Trading stays halted until you do — a redeploy will NOT clear it.",
+            "",
+            f"Dashboard: {DASHBOARD_URL}",
+        ])
+        try:
+            self._send_email(
+                subject=f"[StockBot] 🚨 TRADING HALTED — {reason}",
+                body=body,
+            )
+        except Exception:
+            # Never raise: the halt itself is the safety action and has already
+            # been applied. Losing the email is bad; losing the halt is worse.
+            logger.exception("halt_email_failed", reason=reason)
+
+    def _send_email(self, subject: str, body: str) -> None:
+        """Same SMTP path as the watchdog/forecast agents (proven in prod)."""
+        from src.config import get_settings
+
+        s = get_settings()
+        if not s.smtp_host or not s.smtp_user or not s.smtp_password:
+            logger.warning("halt_smtp_not_configured", note="halt not emailed")
+            return
+        recipients = [r.strip() for r in s.forecast_email_to.split(",") if r.strip()]
+        if not recipients:
+            logger.warning("halt_no_recipients", note="halt not emailed")
+            return
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = s.forecast_email_from or s.smtp_user
+        msg["To"] = ", ".join(recipients)
+        msg.set_content(body)
+        context = ssl.create_default_context()
+        if s.smtp_port == 465:
+            with smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, context=context, timeout=30) as srv:
+                srv.login(s.smtp_user, s.smtp_password)
+                srv.send_message(msg)
+        else:
+            with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=30) as srv:
+                srv.starttls(context=context)
+                srv.login(s.smtp_user, s.smtp_password)
+                srv.send_message(msg)
+        logger.info("halt_email_sent", recipients=len(recipients))
 
     def try_daily_reset(self) -> bool:
         """Auto-clear daily_loss halts at market open.

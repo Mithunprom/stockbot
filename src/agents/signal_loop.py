@@ -479,6 +479,13 @@ class SignalLoop:
     async def start(self) -> None:
         """Run signal loop until stop() is called."""
         self._loop_started_at = datetime.now(timezone.utc)
+        # Restore durable risk counters BEFORE Kelly/trading. Must come first:
+        # a restored max_drawdown halt has to be in force before the first tick
+        # can open anything.
+        try:
+            await self._restore_risk_state()
+        except Exception:
+            logger.exception("risk_state_restore_failed_continuing")
         # Seed Kelly gate from DB history so it activates immediately
         try:
             await self._seed_kelly_from_db()
@@ -579,6 +586,141 @@ class SignalLoop:
                 )
         except Exception as exc:
             logger.warning("kelly_seed_failed", error=str(exc))
+
+    # ── Durable risk counters ────────────────────────────────────────────────
+    #
+    # Peak equity, the daily baseline, the loss streak and the halt flag were
+    # all in-memory only, so every redeploy re-anchored them to "right now".
+    # That silently disarmed max_drawdown, daily_loss and consecutive_losses,
+    # and re-enabled trading after a halt. See src/risk/risk_state_store.py.
+
+    async def _restore_risk_state(self) -> None:
+        """Re-arm risk counters from the DB after a restart."""
+        from src.risk.risk_state_store import et_today_iso, load_risk_state
+
+        snap = await load_risk_state(self._pipeline_id)
+        current = self._pm.portfolio_value
+
+        # Peak is reconciled against the BROKER's equity curve on every start,
+        # not just when the store is empty. Reasons:
+        #   - first run: anchoring to today's equity would discard the real
+        #     high-water mark and reset drawdown to 0 — the exact bug this
+        #     module exists to fix, happening one last time;
+        #   - self-healing: v0.5.4's own first boot persisted a peak of
+        #     $97,482 while the true peak was $104,278.55. A stored-only path
+        #     would carry that understatement forever.
+        # max() over (stored, broker, current) means the high-water mark can
+        # only ever be corrected upward — never silently lowered.
+        broker_peak = await self._peak_from_broker_history()
+        peak_candidates = [current, broker_peak]
+        if snap is not None:
+            peak_candidates.append(snap.peak_value)
+        self._pm._peak_value = max(peak_candidates)
+
+        if snap is None:
+            logger.info(
+                "risk_state_bootstrapped",
+                pipeline=self._pipeline_id,
+                peak=round(self._pm._peak_value, 2),
+                current=round(current, 2),
+                source="broker_history" if broker_peak > current else "current_equity",
+            )
+            await self._persist_risk_state()
+            return
+
+        if self._pm._peak_value > snap.peak_value:
+            logger.warning(
+                "risk_peak_corrected_upward",
+                pipeline=self._pipeline_id,
+                stored=round(snap.peak_value, 2),
+                corrected=round(self._pm._peak_value, 2),
+                note="stored peak understated the true high-water mark",
+            )
+
+        # The daily baseline is only meaningful for the day it was taken. On a
+        # new session leave it at current; the 09:30 reset owns that handoff.
+        same_day = snap.daily_start_date == et_today_iso()
+        if same_day:
+            self._daily_start_value = snap.daily_start_value
+            self._last_reset_date = date.fromisoformat(snap.daily_start_date)
+
+        self._consecutive_losses = snap.consecutive_losses
+
+        # Restore the halt LAST and only ever in the safe direction: a
+        # persisted halt is re-applied, but a persisted "not halted" never
+        # clears a halt this process already decided on. CLAUDE.md: resuming
+        # after a halt requires a human, and a deploy is not a human.
+        if snap.halted and not self._cb.is_halted:
+            self._cb._halted = True
+            self._cb._halt_reason = snap.halt_reason
+            if snap.halt_time:
+                self._cb._halt_time = datetime.fromisoformat(snap.halt_time)
+            logger.critical(
+                "risk_halt_restored_after_restart",
+                pipeline=self._pipeline_id,
+                reason=snap.halt_reason,
+                note="trading remains halted — human must call resume_trading()",
+            )
+
+        drawdown = (self._pm._peak_value - current) / max(self._pm._peak_value, 1.0)
+        logger.info(
+            "risk_state_restored",
+            pipeline=self._pipeline_id,
+            peak=round(self._pm._peak_value, 2),
+            current=round(current, 2),
+            drawdown_pct=round(drawdown * 100, 2),
+            daily_start=round(self._daily_start_value, 2),
+            daily_baseline_carried=same_day,
+            consecutive_losses=self._consecutive_losses,
+            halted=self._cb.is_halted,
+        )
+
+    async def _peak_from_broker_history(self, period: str = "3M") -> float:
+        """Highest completed-session equity from Alpaca. 0.0 if unavailable.
+
+        Used only to bootstrap the peak when no snapshot exists, so a first
+        deploy of the persistence layer doesn't inherit a reset drawdown.
+        """
+        import httpx
+
+        from src.config import get_settings
+
+        try:
+            s = get_settings()
+            base = (s.alpaca_paper_base_url if s.alpaca_mode == "paper"
+                    else s.alpaca_live_base_url)
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{base}/v2/account/portfolio/history",
+                    params={"period": period, "timeframe": "1D"},
+                    headers={
+                        "APCA-API-KEY-ID": s.alpaca_api_key,
+                        "APCA-API-SECRET-KEY": s.alpaca_secret_key,
+                    },
+                )
+                resp.raise_for_status()
+                equity = [e for e in resp.json().get("equity", []) if e]
+            return float(max(equity)) if equity else 0.0
+        except Exception as exc:
+            logger.warning("peak_from_broker_history_failed", error=str(exc))
+            return 0.0
+
+    async def _persist_risk_state(self) -> None:
+        """Snapshot risk counters. Fails open — never breaks a tick."""
+        from src.risk.risk_state_store import (
+            RiskStateSnapshot, et_today_iso, save_risk_state,
+        )
+
+        halt_time = getattr(self._cb, "_halt_time", None)
+        await save_risk_state(self._pipeline_id, RiskStateSnapshot(
+            peak_value=self._pm._peak_value,
+            daily_start_value=self._daily_start_value,
+            daily_start_date=et_today_iso(),
+            consecutive_losses=self._consecutive_losses,
+            halted=self._cb.is_halted,
+            halt_reason=self._cb.halt_reason,
+            halt_time=halt_time.isoformat() if halt_time else None,
+        ))
 
     def get_latest_signals(self) -> list[dict[str, Any]]:
         """Return latest ensemble signals for API response."""
@@ -929,7 +1071,9 @@ class SignalLoop:
         except Exception as exc:
             logger.warning("position_sync_failed", error=str(exc))
 
-        # 6. Check circuit breakers
+        # 6. Check circuit breakers (ratchet peak first — the breaker reads
+        #    _peak_value directly and must see the current high-water mark)
+        self._pm.update_peak()
         state = RiskState(
             portfolio_value=self._pm.portfolio_value,
             peak_portfolio=self._pm._peak_value,
@@ -942,6 +1086,11 @@ class SignalLoop:
 
         # 7. Reset daily start value at market open (09:30 ET)
         self._maybe_reset_daily_value()
+
+        # 7b. Persist risk counters so a redeploy can't re-anchor them to
+        #     "right now". Runs AFTER the daily reset so the stored baseline
+        #     matches the day it belongs to.
+        await self._persist_risk_state()
 
         # 8. Broadcast to dashboard
         if self._broadcast:
