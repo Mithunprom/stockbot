@@ -476,6 +476,13 @@ class SignalLoop:
     async def start(self) -> None:
         """Run signal loop until stop() is called."""
         self._loop_started_at = datetime.now(timezone.utc)
+        # Restore durable risk counters BEFORE Kelly/trading. Must come first:
+        # a restored max_drawdown halt has to be in force before the first tick
+        # can open anything.
+        try:
+            await self._restore_risk_state()
+        except Exception:
+            logger.exception("risk_state_restore_failed_continuing")
         # Seed Kelly gate from DB history so it activates immediately
         try:
             await self._seed_kelly_from_db()
@@ -576,6 +583,83 @@ class SignalLoop:
                 )
         except Exception as exc:
             logger.warning("kelly_seed_failed", error=str(exc))
+
+    # ── Durable risk counters ────────────────────────────────────────────────
+    #
+    # Peak equity, the daily baseline, the loss streak and the halt flag were
+    # all in-memory only, so every redeploy re-anchored them to "right now".
+    # That silently disarmed max_drawdown, daily_loss and consecutive_losses,
+    # and re-enabled trading after a halt. See src/risk/risk_state_store.py.
+
+    async def _restore_risk_state(self) -> None:
+        """Re-arm risk counters from the DB after a restart."""
+        from src.risk.risk_state_store import et_today_iso, load_risk_state
+
+        snap = await load_risk_state(self._pipeline_id)
+        if snap is None:
+            logger.info("risk_state_none_persisted", pipeline=self._pipeline_id,
+                        note="first run or empty store — anchoring to current equity")
+            return
+
+        current = self._pm.portfolio_value
+        # Peak only ever ratchets UP. Guard against a stale snapshot dragging a
+        # grown account's peak backwards, which would understate drawdown.
+        self._pm._peak_value = max(snap.peak_value, current)
+
+        # The daily baseline is only meaningful for the day it was taken. On a
+        # new session leave it at current; the 09:30 reset owns that handoff.
+        same_day = snap.daily_start_date == et_today_iso()
+        if same_day:
+            self._daily_start_value = snap.daily_start_value
+            self._last_reset_date = date.fromisoformat(snap.daily_start_date)
+
+        self._consecutive_losses = snap.consecutive_losses
+
+        # Restore the halt LAST and only ever in the safe direction: a
+        # persisted halt is re-applied, but a persisted "not halted" never
+        # clears a halt this process already decided on. CLAUDE.md: resuming
+        # after a halt requires a human, and a deploy is not a human.
+        if snap.halted and not self._cb.is_halted:
+            self._cb._halted = True
+            self._cb._halt_reason = snap.halt_reason
+            if snap.halt_time:
+                self._cb._halt_time = datetime.fromisoformat(snap.halt_time)
+            logger.critical(
+                "risk_halt_restored_after_restart",
+                pipeline=self._pipeline_id,
+                reason=snap.halt_reason,
+                note="trading remains halted — human must call resume_trading()",
+            )
+
+        drawdown = (self._pm._peak_value - current) / max(self._pm._peak_value, 1.0)
+        logger.info(
+            "risk_state_restored",
+            pipeline=self._pipeline_id,
+            peak=round(self._pm._peak_value, 2),
+            current=round(current, 2),
+            drawdown_pct=round(drawdown * 100, 2),
+            daily_start=round(self._daily_start_value, 2),
+            daily_baseline_carried=same_day,
+            consecutive_losses=self._consecutive_losses,
+            halted=self._cb.is_halted,
+        )
+
+    async def _persist_risk_state(self) -> None:
+        """Snapshot risk counters. Fails open — never breaks a tick."""
+        from src.risk.risk_state_store import (
+            RiskStateSnapshot, et_today_iso, save_risk_state,
+        )
+
+        halt_time = getattr(self._cb, "_halt_time", None)
+        await save_risk_state(self._pipeline_id, RiskStateSnapshot(
+            peak_value=self._pm._peak_value,
+            daily_start_value=self._daily_start_value,
+            daily_start_date=et_today_iso(),
+            consecutive_losses=self._consecutive_losses,
+            halted=self._cb.is_halted,
+            halt_reason=self._cb.halt_reason,
+            halt_time=halt_time.isoformat() if halt_time else None,
+        ))
 
     def get_latest_signals(self) -> list[dict[str, Any]]:
         """Return latest ensemble signals for API response."""
@@ -926,7 +1010,9 @@ class SignalLoop:
         except Exception as exc:
             logger.warning("position_sync_failed", error=str(exc))
 
-        # 6. Check circuit breakers
+        # 6. Check circuit breakers (ratchet peak first — the breaker reads
+        #    _peak_value directly and must see the current high-water mark)
+        self._pm.update_peak()
         state = RiskState(
             portfolio_value=self._pm.portfolio_value,
             peak_portfolio=self._pm._peak_value,
@@ -939,6 +1025,11 @@ class SignalLoop:
 
         # 7. Reset daily start value at market open (09:30 ET)
         self._maybe_reset_daily_value()
+
+        # 7b. Persist risk counters so a redeploy can't re-anchor them to
+        #     "right now". Runs AFTER the daily reset so the stored baseline
+        #     matches the day it belongs to.
+        await self._persist_risk_state()
 
         # 8. Broadcast to dashboard
         if self._broadcast:

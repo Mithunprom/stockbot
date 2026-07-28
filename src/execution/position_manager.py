@@ -168,10 +168,22 @@ class PositionManager:
         available = self.portfolio_value - invested - min_cash
         return max(available, 0.0)
 
+    def update_peak(self) -> float:
+        """Ratchet peak equity to the high-water mark. Returns the new peak.
+
+        Split out of the `drawdown` property so the ratchet is an explicit step
+        in the tick rather than a side effect of reading a getter. The circuit
+        breaker consumes `_peak_value` directly (RiskState.peak_portfolio), so
+        if nothing happened to read `drawdown` first, peak went stale and
+        max_drawdown was measured against an out-of-date high.
+        """
+        self._peak_value = max(self._peak_value, self.portfolio_value)
+        return self._peak_value
+
     @property
     def drawdown(self) -> float:
         """Current drawdown from peak."""
-        self._peak_value = max(self._peak_value, self.portfolio_value)
+        self.update_peak()
         return (self._peak_value - self.portfolio_value) / self._peak_value
 
     def get_positions(self) -> dict[str, dict[str, Any]]:
