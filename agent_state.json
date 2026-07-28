@@ -8,14 +8,14 @@
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-25",
-  "integrity_clean_streak": 2,
-  "integrity_clean_streak_note": "Day 1 = Fri 2026-07-24 ✓. Day 2 = Mon 2026-07-27 ✓ (sentinel 20:25 UTC, ALL GREEN). Day 3 = Tue 2026-07-28 (pending). 3 more trading days required for CODE RED exit criterion 1.",
+  "snapshot_date": "2026-07-28",
+  "integrity_clean_streak": 3,
+  "integrity_clean_streak_note": "Day 1 = Fri 2026-07-24 ✓. Day 2 = Mon 2026-07-27 ✓. Day 3 = Tue 2026-07-28 ✓ (sentinel 19:25 UTC, ALL GREEN). 2 more trading days required: Wed 2026-07-29, Thu 2026-07-30.",
   "integrity_clean_streak_started": "2026-07-24",
-  "integrity_sentinel_last_run": "2026-07-27T20:25:00Z",
+  "integrity_sentinel_last_run": "2026-07-28T19:25:00Z",
   "integrity_sentinel_status": "ok",
   "integrity_sentinel_weekend_runs_clean": true,
-  "integrity_sentinel_next_trading_day": "2026-07-28",
+  "integrity_sentinel_next_trading_day": "2026-07-29",
   "all_time_n_closed": 91,
   "all_time_n_closed_note": "91 from 2026-07-25 live-snapshot pull; prior state showed 96 (likely snapshot lag or open-trade count difference)",
   "all_time_win_rate": 0.429,
@@ -26,12 +26,21 @@
   "trailing_30_win_rate": 0.429,
   "total_pnl_usd": -757,
   "kelly_mode": "normal",
-  "kelly_fraction_live": 0.037,
-  "kelly_fraction_note": "Dropped from 0.0916 (Fri) to 0.037 (Mon) — still positive/normal, but trending toward probation threshold (0). kelly_n_trades fell 26→21 as older trades rolled off the 10d window. 2 new trades today. Watch: if fraction dips below 0, bot enters probation and H9 probe-floor guard activates.",
-  "n_open_positions": 6,
-  "portfolio_heat_live": 0.6678,
-  "portfolio_heat_note": "66.78% as of Mon 2026-07-27 market close — below heat_ceiling=0.75 ✅ (was 87.21% Friday). managed_heat=0.1657 confirms Risk Agent actively reduced exposure during today's session.",
-  "take_profit_dvol_flag": "⚠️ GOVERNANCE QUESTION: take_profit_dvol changed 3.0→1.5 between Fri close and Mon close. This halves the take-profit ATR target on all positions. Source unclear — owner action or autonomous Risk Agent? Per CLAUDE.md, live config changes require human review. Owner should confirm this was intentional.",
+  "kelly_fraction_live": -0.0464,
+  "kelly_mode_live": "probation",
+  "kelly_fraction_note": "NEGATIVE as of Tue 2026-07-28 close (was +0.037 Mon, +0.0916 Fri). Bot entered Kelly probation. kelly_n_trades=24 (3 new trades today added; losses pushed fraction negative). H9 probe quality floor is now ACTIVE CONTEXT — but PR #22 is still DRAFT and not in production. Owner should consider fast-tracking merge so the floor is live before the first probe entry after circuit breaker clears.",
+  "circuit_breaker": {
+   "halted": true,
+   "halt_reason": "max_drawdown",
+   "halted_as_of": "2026-07-28",
+   "autonomous_halt": true,
+   "re_enable_requires": "HUMAN CONFIRMATION — per CLAUDE.md Risk Agent scope: 'Must NOT re-enable trading after a halt without human confirmation.'",
+   "governance_note": "Risk Agent correctly triggered this halt autonomously (max_drawdown breach is within its scope). Re-enabling is an owner decision only."
+  },
+  "n_open_positions": 5,
+  "portfolio_heat_live": 0.5845,
+  "portfolio_heat_note": "58.45% as of Tue 2026-07-28 market close (was 66.78% Mon). managed_heat=0.3777 — Risk Agent aggressively reducing exposure. 1 position exited vs Monday (6→5).",
+  "take_profit_dvol_flag": "⚠️ GOVERNANCE QUESTION (OPEN): take_profit_dvol changed 3.0→1.5 between Fri and Mon close. Now stable at 1.5 on Tue. Source still unclear — owner confirmation pending.",
   "nvda_orphan_reconciled": "NVDA id=111 broker orphan (flagged in 02:12 UTC repair backups) now shows reconciled in 21:59 UTC integrity sentinel: db_vs_broker OK, 6 positions reconcile, orphans=[].",
   "suspected_corrupt_rows": [],
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 21:59 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure."
@@ -244,6 +253,16 @@
     "pr_22_status": "DRAFT, open, 0 review comments, mergeable_state=unknown (transient)",
     "signals_passing": "1/10 (SMCI bearish, pred=-0.61%). Signal quality weak post-market Monday.",
     "action_taken": "agent_state.json updated. Owner notification sent re: take_profit_dvol change and Kelly fraction trend."
+   },
+   "checkin_21h00_utc_2026-07-28": {
+    "integrity_snapshot": "2026-07-28T19:25 UTC — ALL GREEN, 5/5 checks ok. DAY 3/5 TRADING-DAY STREAK CONFIRMED.",
+    "circuit_breaker": "HALTED — halt_reason=max_drawdown. Triggered autonomously by Risk Agent (within scope). Re-enable requires owner confirmation.",
+    "kelly_fraction": "-0.0464 — NEGATIVE. kelly_mode=probation. Bot will attempt 1 probe/day once circuit breaker cleared (if owner re-enables). H9 floor NOT YET LIVE (PR #22 still DRAFT).",
+    "portfolio_heat": "58.45% (was 66.78% Mon). managed_heat=0.3777. 5 open positions (was 6). 3 trades today.",
+    "take_profit_dvol": "1.5 — stable (no further change from Monday). Governance question still open.",
+    "signals_passing": "0/10 — all blocked by pred_return_too_small + kelly_probation.",
+    "pr_22_status": "DRAFT, open, 0 review comments. NEWLY URGENT: bot entering probation makes H9 immediately relevant.",
+    "action_taken": "agent_state.json updated. ESCALATION notification sent to owner."
    }
   },
   {
@@ -363,7 +382,7 @@
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "DAY 2/5 — Fri 2026-07-24 ✓, Mon 2026-07-27 ✓ (sentinel 20:25 UTC ALL GREEN). 3 more trading days required: Tue 2026-07-28, Wed 2026-07-29, Thu 2026-07-30.",
+   "integrity_clean_5_days": "DAY 3/5 — Fri 2026-07-24 ✓, Mon 2026-07-27 ✓, Tue 2026-07-28 ✓ (sentinel 19:25 UTC ALL GREEN). 2 more trading days required: Wed 2026-07-29, Thu 2026-07-30.",
    "kelly_window_sane": "OK — sentinel confirmed kelly_seed_sanity ok. Live diagnostics show kelly_fraction=0.0916 (normal, not probation) though agent_state still reads probation — reconcile on next live data pull.",
    "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled (AGENT_WORKER_ENABLE=true required)"
   }
