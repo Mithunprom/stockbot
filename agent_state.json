@@ -1,14 +1,14 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked)",
- "last_iteration_date": "2026-07-28",
- "active_hypothesis": "INTEGRITY EXIT CRITERION MET (Day 5/5). Sentinel ALL GREEN 08:25 UTC Jul 28. v0.5.4 (durable risk state + halt alerting) + v0.5.5 (peak equity reconciliation) deployed by owner today. CODE RED has 1 of 3 criteria remaining: >=1 hypothesis at data_run (Railway worker AGENT_WORKER_ENABLE=true still not set \u2014 4 consecutive weeks outstanding). M2 frozen-config: n=32, PF=0.741 (OFF TRACK).",
+ "last_iteration_date": "2026-07-29",
+ "active_hypothesis": "PROD_PARAMS + H11. Shipped: (1) PROD_PARAMS / PROD_CAPITAL added to research_backtest.py \u2014 eliminates the H10 return-calc 5-10x inflation (3-day default hold vs 1-day production, $2500 hard notional cap at $10k capital). (2) H11: IC-block gate now uses TICKER_IC_BLOCK_WINDOW_DAYS=30 without since filter \u2014 fixes the deploy-deadlock that kept tickers_ic_blocked perpetually empty. Both PRs opened. CODE RED exit still blocked by Railway worker (week 5 outstanding).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-27",
+  "snapshot_date": "2026-07-28",
   "integrity_clean_streak": 5,
   "integrity_clean_streak_started": "2026-07-24",
   "integrity_clean_streak_ended": "2026-07-28",
@@ -43,7 +43,28 @@
   "kelly_mode": "probation",
   "suspected_corrupt_rows": [],
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure.",
-  "m2_trajectory": "OFF TRACK — PF=0.741 at n=32; target PF>=1.2 at n>=100. n=100 ~mid-August on current pace. W31 sub-window PF=1.42 (n=13, noise). Owner decision needed before gate closes."
+  "m2_trajectory": "OFF TRACK — PF=0.741 at n=32; target PF>=1.2 at n>=100. n=100 ~mid-August on current pace. W31 sub-window PF=1.42 (n=13, noise). Owner decision needed before gate closes.",
+  "jul28_live_snapshot": {
+   "note": "From live-snapshot relay 2026-07-28. System halted (circuit_breaker=max_drawdown). 5 open positions.",
+   "circuit_breaker": "halted — max_drawdown",
+   "open_positions": 5,
+   "kelly_fraction": -0.0464,
+   "kelly_mode": "probation (entry blocked)",
+   "portfolio_heat_pct": 58.35,
+   "managed_heat_pct": 37.85,
+   "signals_passing": 0,
+   "signals_blocked": 10,
+   "pdt_budget_remaining": 3,
+   "watchdog_status": "ok",
+   "recent_closed": {
+    "MU_123": {"pnl": -435.49, "pnl_pct": -0.0581, "exit": "trailing_stop"},
+    "WDC_121": {"pnl": -804.10, "pnl_pct": -0.0693, "exit": "trailing_stop"},
+    "NFLX_118": {"pnl": 348.73, "pnl_pct": 0.0278, "exit": "max_hold"},
+    "MSFT_117": {"pnl": 211.25, "pnl_pct": 0.0139, "exit": "max_hold"},
+    "MU_115": {"pnl": -1161.84, "pnl_pct": -0.0812, "exit": "stop_loss"},
+    "INTC_114": {"pnl": -1148.99, "pnl_pct": -0.0825, "exit": "stop_loss"}
+   }
+  }
  },
  "live_data_status": {
   "date": "2026-07-22",
@@ -192,14 +213,36 @@
   {
    "id": "H11",
    "hypothesis": "Re-enabling the per-ticker IC-block gate (30d window, drop `since`) improves PnL by refusing chronically wrong names (MU -0.27, RTX -0.48)",
-   "status": "pending",
-   "test": "backtest entry set with IC-block active vs current (gate effectively disabled)",
-   "preliminary": "Audit Finding 4: gate reads _ticker_ic (7d, since=loop_start) which rarely reaches n=300 across frequent deploys, so tickers_ic_blocked is always empty. Same deadlock class the Kelly-probe fix already solved. Changes which names trade \u2192 needs backtest per governance A.",
+   "status": "needs_data_run",
+   "implementation_date": "2026-07-29",
+   "pr_branch": "feat/rnd-H11-ic-block-gate",
+   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact",
+   "test": "python scripts/research_backtest.py --phase simulate (compare tickers_ic_blocked list with and without gate active; run on >=2 validation windows)",
+   "preliminary": "Audit Finding 4: gate reads _ticker_ic (7d, since=loop_start) which rarely reaches n=300 across frequent deploys, so tickers_ic_blocked is always empty. Same deadlock class the Kelly-probe fix already solved. Changes which names trade \u2192 needs backtest per governance A. Code implemented: TICKER_IC_BLOCK_WINDOW_DAYS=30 constant + _maybe_refresh_ticker_ic updated (7d+since \u2192 30d no filter).",
    "added": "2026-07-24",
-   "added_by": "audit Finding 4"
+   "added_by": "audit Finding 4",
+   "tpm_flag": "needs_data_run since 2026-07-29",
+   "blocked_note": "Railway worker must be enabled (AGENT_WORKER_ENABLE=true) before backtest can run"
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-07-29",
+   "hypothesis_id": "PROD_PARAMS+H11",
+   "result": "SHIPPED — Two freeze-exempt PRs opened. (1) feat/rnd-prod-params: PROD_PARAMS + PROD_CAPITAL constants added to research_backtest.py. Fixes the H10 return-calc 5-10x inflation: default Params uses max_hold=1170 (3-day), tp_mult=3.0 (unreachable), max_pos=4, heat=0.60 — none match production. PROD_PARAMS uses production constants (max_hold=390, tp_mult=1.5, max_pos=6, heat=0.75, pdt_enabled=False). phase_simulate() and phase_tune() baseline calls updated to use PROD_PARAMS+PROD_CAPITAL. 8 new enforcement tests added. (2) feat/rnd-H11-ic-block-gate: TICKER_IC_BLOCK_WINDOW_DAYS=30 constant added; _maybe_refresh_ticker_ic uses it without since filter (was 7d+since, never reached TICKER_IC_MIN_N=300). 2 new tests (1 passes on constant check; 1 fails on pre-existing pydantic Settings sandbox issue, same class as 46 other pre-existing failures). Live snapshot: system halted on max_drawdown, 5 open positions, Kelly probation. 21/21 research_backtest tests green. Signal_loop: 6 pass (5 pre-existing + 1 new H11 constant), 47 fail (47 pre-existing pydantic), 2 skip.",
+   "tests_status": "21 passed (research_backtest, 100%), 6 passed / 47 failed / 2 skipped (signal_loop, all failures pre-existing pydantic Settings sandbox)",
+   "new_tests": 10,
+   "files_changed": [
+    "scripts/research_backtest.py",
+    "tests/unit/test_research_backtest.py",
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_branch_1": "feat/rnd-prod-params",
+   "pr_branch_2": "feat/rnd-H11-ic-block-gate",
+   "governance_class": "PROD_PARAMS is freeze-exempt infra (measurement accuracy, not strategy). H11 changes which names trade per governance A — marked needs_data_run, PR held as DRAFT pending backtest."
+  },
   {
    "date": "2026-07-27",
    "hypothesis_id": "W31_PROGRAM_REVIEW",
@@ -295,7 +338,7 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 3] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 7+ hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 5] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 7+ hypothesis validations and CODE RED data_run exit criterion.",
   "[OWNER ACTION \u2014 NEW, HIGH] Classify v0.5.0 LGBM retrain (commit dff72eb): bug-fix (staleness trap, freeze-exempt) or strategy change (M2 clock resets)? Reply needed to confirm freeze integrity.",
   "[OWNER ACTION \u2014 NEW, HIGH] M2 trajectory decision: PF=0.741@n=32, target PF>=1.2@n=100, ~13 trading days to measurement gate. Decide: (a) run clock out, (b) unlock Railway now to get H0/H5/H2 in window, or (c) declare M2 missed and pivot to validated-backtest route.",
   "[CODE RED \u2014 INTEGRITY MET \u2705] Integrity criterion satisfied (Day 5/5, Jul 28). Remaining: hypothesis_at_data_run (Railway worker). Owner must set AGENT_WORKER_ENABLE=true to exit CODE RED.",
