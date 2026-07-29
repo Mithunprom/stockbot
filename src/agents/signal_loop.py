@@ -177,6 +177,14 @@ TICKER_IC_MIN_ENTRY = 0.0          # live IC must exceed this to enter (n≥MIN_
 # reset the sample count back below the bar and re-trigger the deadlock. The
 # block gate keeps the 7d + `since` behavior (judging only the live incarnation).
 KELLY_PROBE_IC_WINDOW_DAYS = 30
+# H11: IC-block gate window.  Was 7d + since=loop_started_at: a 7-day window
+# tops out at ~250 filled predictions/ticker which never reaches TICKER_IC_MIN_N
+# (300), and the `since` filter resets to zero on every deploy — same deploy-
+# deadlock class the Kelly-probe fix already solved.  Match the probe gate:
+# 30d without `since`, so n accumulates across deploys and the block can actually
+# fire on genuinely poor performers (MU −0.27, RTX −0.48 historically).
+# Per governance A this changes which names trade → needs_data_run backtest.
+TICKER_IC_BLOCK_WINDOW_DAYS = 30
 
 # PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades
 # per rolling 5 business days. A same-day round trip is a day trade, so the
@@ -1122,8 +1130,11 @@ class SignalLoop:
             return
         self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
         try:
+            # H11: use TICKER_IC_BLOCK_WINDOW_DAYS (30d) without `since` filter.
+            # The old 7d+since combination never accumulated enough predictions
+            # (7d ≈ 250/ticker < TICKER_IC_MIN_N=300) and reset on every deploy.
             by_ticker = await self._ic_tracker._compute_per_ticker_ic(
-                window_days=7, since=self._loop_started_at,
+                window_days=TICKER_IC_BLOCK_WINDOW_DAYS,
             )
             self._ticker_ic = {
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))

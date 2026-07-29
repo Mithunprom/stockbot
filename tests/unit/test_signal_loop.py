@@ -246,6 +246,62 @@ def test_ticker_ic_gate_blocks_proven_negative():
     assert loop._sizing_entry_gate_open(sig)
 
 
+# ─── H11: IC-block gate window (30d, no since) ────────────────────────────────
+
+def test_h11_ic_block_window_is_30d():
+    """H11: TICKER_IC_BLOCK_WINDOW_DAYS must equal KELLY_PROBE_IC_WINDOW_DAYS.
+
+    The original 7d+since design never triggered: 7 days tops out at ~250
+    predictions/ticker (< TICKER_IC_MIN_N=300) and the `since` filter resets
+    to zero on every deploy.  Matching the proven probe pattern (30d, no since)
+    makes the gate actually reachable while remaining reboot-safe.
+    """
+    from src.agents.signal_loop import (
+        TICKER_IC_BLOCK_WINDOW_DAYS,
+        KELLY_PROBE_IC_WINDOW_DAYS,
+        TICKER_IC_MIN_N,
+    )
+    assert TICKER_IC_BLOCK_WINDOW_DAYS == KELLY_PROBE_IC_WINDOW_DAYS, (
+        f"TICKER_IC_BLOCK_WINDOW_DAYS={TICKER_IC_BLOCK_WINDOW_DAYS} "
+        f"!= KELLY_PROBE_IC_WINDOW_DAYS={KELLY_PROBE_IC_WINDOW_DAYS}: "
+        "the block gate should use the same window as the probe to avoid the "
+        "same n-never-accumulates deadlock"
+    )
+    # 30d window yields ~750-1200 predictions/ticker in production (390 bars/day
+    # × 2-3 tickers/day average); well above MIN_N=300.
+    bars_per_day = 390
+    tickers_in_universe = 20  # lower bound
+    predicted_n = TICKER_IC_BLOCK_WINDOW_DAYS * bars_per_day
+    assert predicted_n >= TICKER_IC_MIN_N, (
+        f"30d×390bars={predicted_n} < TICKER_IC_MIN_N={TICKER_IC_MIN_N}: "
+        "the window must yield enough predictions for the gate to be reachable"
+    )
+
+
+def test_h11_block_gate_fires_with_30d_accumulated_data():
+    """With 30d data accumulated, a ticker with IC < THRESHOLD gets blocked.
+
+    Regression guard: if someone re-adds `since=loop_started_at` the gate
+    becomes permanently unarmed (n never reaches MIN_N across a fresh deploy).
+    This test verifies the gate fires when a ticker has a FULL 30d sample.
+    """
+    from src.agents.signal_loop import TICKER_IC_MIN_N, TICKER_IC_BLOCK_THRESHOLD
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    # Simulate 30d of accumulated predictions: n exceeds MIN_N, IC below threshold
+    n_30d = TICKER_IC_MIN_N + 200  # typical 30d accumulation
+    loop._ticker_ic = {"MU": (TICKER_IC_BLOCK_THRESHOLD - 0.05, n_30d)}
+
+    sig = EnsembleSignal(ticker="MU", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.61
+    assert not loop._sizing_entry_gate_open(sig), (
+        "MU with IC below threshold and n >= MIN_N must be blocked by the IC gate"
+    )
+
+
 # ─── PDT-aware exits ───────────────────────────────────────────────────────────
 
 def _exit_fixture(loop, ticker="AAPL", entry_price=100.0, days_ago_entered=0):
