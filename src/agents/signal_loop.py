@@ -170,6 +170,13 @@ KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
+# H9: per-bar signal quality floor for probation probes.
+# SNDK id=104 entered with ensemble=0.018, sentiment=-0.90 — pure noise.
+# Historical ticker IC (30d) can be positive while the current bar's signal is
+# junk. These floors prevent noise-level probe entries without blocking genuine
+# opportunities (a real opportunity has ensemble ≥ 0.10 by construction).
+KELLY_PROBE_MIN_ENSEMBLE = 0.10    # minimum ensemble_signal for probation probe
+KELLY_PROBE_MIN_SENTIMENT = -0.50  # sentiment floor for probation probe
 
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
@@ -1602,12 +1609,18 @@ class SignalLoop:
         # The probe uses the 30d IC cache (reachable across redeploys), NOT the
         # 7d block cache whose ~250-sample ceiling made n>=300 unsatisfiable and
         # deadlocked the governor (2026-06-26 → 06-30 halt).
+        # H9: additionally require the CURRENT BAR's signal to clear a minimum
+        # quality floor — historical ticker IC can be positive while the
+        # current-bar ensemble signal is noise (SNDK id=104: ensemble=0.018,
+        # sentiment=-0.90 entered under probation on pure noise).
         if self._kelly_mode() == "probation":
             ic, n = self._ticker_ic_probe.get(ticker, (0.0, 0))
             probe_ok = (
                 self._probation_entries_today < 1
                 and n >= TICKER_IC_MIN_N
                 and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                and sig.ensemble_signal >= KELLY_PROBE_MIN_ENSEMBLE
+                and sig.sentiment_index >= KELLY_PROBE_MIN_SENTIMENT
             )
             if not probe_ok:
                 logger.debug(
@@ -1616,6 +1629,8 @@ class SignalLoop:
                     kelly=round(self._kelly_fraction, 4),
                     probes_used=self._probation_entries_today,
                     ticker_ic=round(ic, 3),
+                    ensemble_signal=round(sig.ensemble_signal, 4),
+                    sentiment_index=round(sig.sentiment_index, 4),
                 )
                 return False
 

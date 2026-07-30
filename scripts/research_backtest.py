@@ -597,7 +597,11 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         # out-of-sample predictions exist). Report zeros — never crash the run.
         return {
             "label": p.label, "start": start, "end": end,
-            "total_return_pct": 0.0, "sharpe": 0.0, "max_dd_pct": 0.0,
+            "total_return_pct": 0.0,
+            "closed_return_pct": 0.0,
+            "open_marks_pct": 0.0,
+            "backtest_capital": capital,
+            "sharpe": 0.0, "max_dd_pct": 0.0,
             "profit_factor": 0.0, "win_rate": 0.0, "n_trades": 0,
             "open_at_end": len(positions), "avg_notional_pct": 0.0,
             "avg_win_pct": 0.0, "avg_loss_pct": 0.0, "avg_hold_bars": 0,
@@ -606,9 +610,17 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
         }
     wins = tdf[tdf.pnl > 0].pnl.sum()
     losses = -tdf[tdf.pnl < 0].pnl.sum()
+    # closed_return_pct: sum of closed-trade PnL / starting capital.
+    # total_return_pct includes open-position marks at simulation end and can
+    # diverge from closed_return_pct when open_at_end > 0. Use closed_return_pct
+    # to reconcile with trade logs (backtest capital={capital}).
+    closed_pnl = float(tdf.pnl.sum())
     return {
         "label": p.label, "start": start, "end": end,
         "total_return_pct": round((final_pv / capital - 1) * 100, 2),
+        "closed_return_pct": round(closed_pnl / capital * 100, 2),
+        "open_marks_pct": round(((final_pv - capital) - closed_pnl) / capital * 100, 2),
+        "backtest_capital": capital,
         "sharpe": round(sharpe, 2),
         "max_dd_pct": round(dd * 100, 2),
         "profit_factor": round(wins / losses, 2) if losses > 0 else float("inf"),
@@ -696,6 +708,9 @@ def phase_tune() -> None:
         f"sharpe={base_v['sharpe']} "
         f"pf={base_v['profit_factor']} "
         f"return={base_v['total_return_pct']}% "
+        f"closed_return={base_v['closed_return_pct']}% "
+        f"open_marks={base_v['open_marks_pct']}% "
+        f"capital={base_v['backtest_capital']} "
         f"drawdown={base_v['max_dd_pct']}% "
         f"n_trades={base_v['n_trades']}"
     )
