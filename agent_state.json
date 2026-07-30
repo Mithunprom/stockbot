@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked)",
- "last_iteration_date": "2026-07-29",
- "active_hypothesis": "ONGOING MONITORING (post-integrity-criterion). Sentinel ALL GREEN 08:25 UTC Jul 29. Integrity criterion MET since Jul 28. CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (4 weeks outstanding). M2 frozen-config: n=32, PF=0.741 (OFF TRACK \u2014 need 1.2@100).",
+ "last_iteration_date": "2026-07-30",
+ "active_hypothesis": "ONGOING MONITORING (post-integrity-criterion). Sentinel ALL GREEN 08:25 UTC Jul 30. Integrity criterion MET since Jul 28. CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (4 weeks+ outstanding). M2 frozen-config: n=32, PF=0.741 (OFF TRACK \u2014 need 1.2@100).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,7 +14,7 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-07-29T08:25:00Z",
+  "integrity_sentinel_last_run": "2026-07-30T08:25:00Z",
   "integrity_sentinel_status": "ok",
   "deployed_version": "0.5.5",
   "v053_note": "TP mult 3.0→1.5 (reachable within 1-day hold), TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling, fixing 6×15%=90% overshoot). 206 tests pass. Owner judgment: bug-fix class (TP unreachable by construction; heat cap derived from obsolete 4-slot config). Conservative direction; paper mode only.",
