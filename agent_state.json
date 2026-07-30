@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Ledger Integrity & Validation Recovery",
  "last_iteration_date": "2026-07-25",
- "active_hypothesis": "H9 IMPLEMENTED — PR #22 (DRAFT) open, awaiting Railway backtest (probe_floor phase). Integrity Sentinel ALL GREEN DAY 4/5 of 5-day exit streak. Circuit breaker HALTED Day 2 (max_drawdown) — owner action required to re-enable. Next: Thursday post-market (2026-07-30) sentinel run confirms Day 5/5; if clean AND circuit breaker still halted → escalate to owner.",
+ "active_hypothesis": "H9 IMPLEMENTED — PR #22 (DRAFT) open, awaiting Railway backtest (probe_floor phase). ✅ CODE RED criterion #1 MET: Integrity Sentinel ALL GREEN 5/5 consecutive trading days. Circuit breaker HALTED Day 3 (max_drawdown) — owner action required to re-enable. ESCALATION SENT: owner notified to re-enable circuit breaker + merge PR #22 before restart. Remaining CODE RED blocker: Railway worker (AGENT_WORKER_ENABLE=true) for hypothesis_at_data_run criterion.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -9,13 +9,13 @@
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
   "snapshot_date": "2026-07-28",
-  "integrity_clean_streak": 4,
-  "integrity_clean_streak_note": "Day 1 = Fri 2026-07-24 ✓. Day 2 = Mon 2026-07-27 ✓. Day 3 = Tue 2026-07-28 ✓. Day 4 = Wed 2026-07-29 ✓ (sentinel 20:25 UTC, ALL GREEN). 1 more trading day required: Thu 2026-07-30.",
+  "integrity_clean_streak": 5,
+  "integrity_clean_streak_note": "Day 1 = Fri 2026-07-24 ✓. Day 2 = Mon 2026-07-27 ✓. Day 3 = Tue 2026-07-28 ✓. Day 4 = Wed 2026-07-29 ✓. Day 5 = Thu 2026-07-30 ✓ (sentinel 19:25 UTC, ALL GREEN). CODE RED EXIT CRITERION #1 MET ✅.",
   "integrity_clean_streak_started": "2026-07-24",
-  "integrity_sentinel_last_run": "2026-07-29T20:25:00Z",
+  "integrity_sentinel_last_run": "2026-07-30T19:25:00Z",
   "integrity_sentinel_status": "ok",
   "integrity_sentinel_weekend_runs_clean": true,
-  "integrity_sentinel_next_trading_day": "2026-07-30",
+  "integrity_sentinel_next_trading_day": "2026-07-31",
   "all_time_n_closed": 91,
   "all_time_n_closed_note": "91 from 2026-07-25 live-snapshot pull; prior state showed 96 (likely snapshot lag or open-trade count difference)",
   "all_time_win_rate": 0.429,
@@ -33,15 +33,15 @@
    "halted": true,
    "halt_reason": "max_drawdown",
    "halted_as_of": "2026-07-28",
-   "halt_day_count": 2,
-   "halt_day_count_note": "Day 1 = Tue 2026-07-28 (triggered). Day 2 = Wed 2026-07-29 (still halted, n_trades_today=0, owner has not re-enabled). Kelly fraction unchanged (-0.0464) — no new trades to shift window. 5 quality signals missed today: GEV 1.69%, TER 1.81%, CIEN 0.92%, CRM 0.99%, ARM 1.48%.",
+   "halt_day_count": 3,
+   "halt_day_count_note": "Day 1 = Tue 2026-07-28 (triggered). Day 2 = Wed 2026-07-29 (still halted). Day 3 = Thu 2026-07-30 (still halted, n_trades_today=0, owner has not re-enabled). Kelly fraction unchanged (-0.0464). 2 quality signals today: INTC (ensemble=0.54, pred=+0.74%, prob=0.80) and LLY (ensemble=0.43, pred=+0.70%, prob=0.83) — both pass all gates but blocked by kelly_probation + circuit_breaker.",
    "autonomous_halt": true,
    "re_enable_requires": "HUMAN CONFIRMATION — per CLAUDE.md Risk Agent scope: 'Must NOT re-enable trading after a halt without human confirmation.'",
    "governance_note": "Risk Agent correctly triggered this halt autonomously (max_drawdown breach is within its scope). Re-enabling is an owner decision only."
   },
   "n_open_positions": 5,
-  "portfolio_heat_live": 0.5722,
-  "portfolio_heat_note": "57.22% as of Wed 2026-07-29 market close (was 58.45% Tue). managed_heat=0.0 (circuit breaker halted — no new managed entries). 5 open positions unchanged vs Tuesday.",
+  "portfolio_heat_live": 0.5906,
+  "portfolio_heat_note": "59.06% as of Thu 2026-07-30 market close (was 57.22% Wed). managed_heat=0.0 (circuit breaker still halted). 5 open positions; heat drift from mark-to-market, no new entries.",
   "take_profit_dvol_flag": "⚠️ GOVERNANCE QUESTION (OPEN): take_profit_dvol changed 3.0→1.5 between Fri and Mon close. Now stable at 1.5 on Tue. Source still unclear — owner confirmation pending.",
   "nvda_orphan_reconciled": "NVDA id=111 broker orphan (flagged in 02:12 UTC repair backups) now shows reconciled in 21:59 UTC integrity sentinel: db_vs_broker OK, 6 positions reconcile, orphans=[].",
   "suspected_corrupt_rows": [],
@@ -276,6 +276,18 @@
     "pr_22_status": "DRAFT, open, 0 review comments, mergeable_state=unknown (transient). H9 remains undeployed — owner should merge before re-enabling circuit breaker.",
     "action_taken": "agent_state.json updated (portfolio_heat, circuit_breaker Day 2 note, code_red exit criteria DAY 4/5, this log entry). No notification — routine silent update. Escalation threshold: Thu 2026-07-30 post-market (Day 5/5 confirmed + circuit breaker still halted → notify owner).",
     "next_checkin": "2026-07-30T21:00:00Z (Thursday post-market, Day 5/5 check)"
+   },
+   "checkin_21h00_utc_2026-07-30": {
+    "integrity_snapshot": "2026-07-30T19:25 UTC — ALL GREEN, 5/5 checks ok, orphans=[], 6 positions reconcile. DAY 5/5 TRADING-DAY STREAK CONFIRMED ✅. CODE RED criterion #1 MET.",
+    "circuit_breaker": "HALTED — Day 3. halt_reason=max_drawdown. n_trades_today=0, kelly unchanged (-0.0464). Owner has NOT re-enabled. ESCALATION TRIGGERED.",
+    "kelly_fraction": "-0.0464 unchanged (no trades, kelly_n_trades=22, window did not shift).",
+    "portfolio_heat": "59.06% (↑ from 57.22% Wed — mark-to-market drift on 5 open positions). managed_heat=0.0.",
+    "atr_note": "ATR values significantly lower than Wednesday spike. sizing_cost_threshold=0.00686 (down from 0.0083 Wed). Market volatility normalizing.",
+    "signals_passing": "2/10 — INTC (ensemble=0.54, pred=+0.74%, prob=0.80) and LLY (ensemble=0.43, pred=+0.70%, prob=0.83) pass all pred_return + dir_prob gates, blocked by kelly_probation + circuit_breaker. Both clear H9 floor (ensemble > 0.10 ✅).",
+    "pr_22_status": "DRAFT, open, 0 review comments, head SHA 7b40ca3, mergeable_state=unknown (transient), no new CI runs (code unchanged since Wed state commit). No blockers.",
+    "code_red_exit_status": "Criterion 1 ✅ (integrity 5 days). Criterion 2 ✅ (kelly_window_sane). Criterion 3 ❌ (Railway worker not enabled — hypothesis_at_data_run blocked). CODE RED remains active.",
+    "action_taken": "agent_state.json updated. ESCALATION PushNotification sent to owner: integrity 5-day streak complete, circuit breaker still halted Day 3, merge PR #22 before re-enabling.",
+    "next_checkin": "Monitoring only. No scheduled routine check-in — owner must act on circuit breaker. PR #22 subscription active."
    }
   },
   {
@@ -395,7 +407,7 @@
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "DAY 4/5 — Fri 2026-07-24 ✓, Mon 2026-07-27 ✓, Tue 2026-07-28 ✓, Wed 2026-07-29 ✓ (sentinel 20:25 UTC ALL GREEN). 1 more trading day required: Thu 2026-07-30.",
+   "integrity_clean_5_days": "✅ ACHIEVED — Fri 2026-07-24 ✓, Mon 2026-07-27 ✓, Tue 2026-07-28 ✓, Wed 2026-07-29 ✓, Thu 2026-07-30 ✓ (sentinel 19:25 UTC ALL GREEN). CODE RED criterion #1 MET. Remaining: kelly_window_sane ✅ (confirmed by sentinel), hypothesis_at_data_run ❌ (Railway worker still not enabled).",
    "kelly_window_sane": "OK — sentinel confirmed kelly_seed_sanity ok. Live diagnostics show kelly_fraction=0.0916 (normal, not probation) though agent_state still reads probation — reconcile on next live data pull.",
    "hypothesis_at_data_run": "BLOCKED — Railway worker not yet enabled (AGENT_WORKER_ENABLE=true required)"
   }
