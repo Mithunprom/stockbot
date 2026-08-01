@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). \ud83d\udea8 BOT HALTED: max_drawdown circuit breaker fired Jul 28. M2 PF deteriorating.",
- "last_iteration_date": "2026-07-31",
- "active_hypothesis": "H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). MONITORING + M2 DETERIORATION ALERT. Sentinel ALL GREEN 22:25 UTC Jul 30. Bot HALTED (max_drawdown CB since Jul 28, heat at 59.2% with 6 open positions). M2 frozen-config: n=35, PF=0.636 (WAS 0.741 \u2014 worsening, 3 new trades: NFLX +$349, WDC -$804, MU -$435). PLTR (id 124) flagged: sentiment=-0.969 on long entry. H11 already in PR #26 (DRAFT). CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5 outstanding).",
+ "last_iteration_date": "2026-08-01",
+ "active_hypothesis": "H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). MONITORING + M2 DETERIORATION ALERT. Sentinel ALL GREEN 07:25 UTC Aug 1. Bot HALTED (max_drawdown CB since Jul 28, heat at 59.2% with 6 open positions). M2 frozen-config: n=35, PF=0.636 (WAS 0.741 \u2014 worsening, 3 new trades: NFLX +$349, WDC -$804, MU -$435). PLTR (id 124) flagged: sentiment=-0.969 on long entry. H11 already in PR #26 (DRAFT). CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5 outstanding).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,7 +14,7 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-07-31T08:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-01T07:25:00Z",
   "integrity_sentinel_status": "ok",
   "deployed_version": "0.5.5",
   "circuit_breaker_halted": true,
