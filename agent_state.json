@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). \ud83d\udea8 BOT HALTED: max_drawdown circuit breaker fired Jul 28. M2 PF deteriorating.",
  "last_iteration_date": "2026-08-01",
- "active_hypothesis": "H12 IMPLEMENTED \u2014 Minimum ensemble signal floor (0.20) added to Gate 6 of _sizing_entry_gate_open(). DRAFT PR #29 open; CI in progress (2026-08-01). Bot still HALTED (max_drawdown CB since Jul 28). CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5+ outstanding).",
+ "active_hypothesis": "H12 IMPLEMENTED \u2014 Minimum ensemble signal floor (0.20) added to Gate 6 of _sizing_entry_gate_open(). DRAFT PR #29 open; CI in progress (2026-08-01). Bot still HALTED (max_drawdown CB since Jul 28). Sentinel ALL GREEN 07:25 UTC Aug 1. CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5+ outstanding).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,7 +14,7 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-07-31T08:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-01T07:25:00Z",
   "integrity_sentinel_status": "ok",
   "deployed_version": "0.5.5",
   "snapshot_aug01": "kelly_fraction=-0.0882 (probation), n_open=5 (diagnostics) / 6 (trades.json), portfolio_heat=59.2%, signals_passing=2 (GEV, COHR — both blocked by CB+kelly). Last-100 trades: 6 open, ~94 closed. Recent closed PF~0.453 (losses dominate: INTC #114 -$1149, MU #115 -$1162, WDC #121 -$804). All-time fill-corrected PF=0.860.",
