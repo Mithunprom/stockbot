@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). \ud83d\udea8 BOT HALTED: max_drawdown circuit breaker fired Jul 28. M2 PF deteriorating.",
- "last_iteration_date": "2026-07-31",
- "active_hypothesis": "MONITORING + M2 DETERIORATION ALERT. Sentinel ALL GREEN 22:25 UTC Jul 30. Bot HALTED (max_drawdown CB since Jul 28, heat at 59.2% with 6 open positions). M2 frozen-config: n=35, PF=0.636 (WAS 0.741 \u2014 worsening, 3 new trades: NFLX +$349, WDC -$804, MU -$435). H11 already in PR #26 (DRAFT). CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5 outstanding).",
+ "last_iteration_date": "2026-08-01",
+ "active_hypothesis": "H12 IMPLEMENTED \u2014 Minimum ensemble signal floor (0.20) added to Gate 6 of _sizing_entry_gate_open(). DRAFT PR #29 open; CI in progress (2026-08-01). Bot still HALTED (max_drawdown CB since Jul 28). CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5+ outstanding).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -17,6 +17,7 @@
   "integrity_sentinel_last_run": "2026-07-31T08:25:00Z",
   "integrity_sentinel_status": "ok",
   "deployed_version": "0.5.5",
+  "snapshot_aug01": "kelly_fraction=-0.0882 (probation), n_open=5 (diagnostics) / 6 (trades.json), portfolio_heat=59.2%, signals_passing=2 (GEV, COHR — both blocked by CB+kelly). Last-100 trades: 6 open, ~94 closed. Recent closed PF~0.453 (losses dominate: INTC #114 -$1149, MU #115 -$1162, WDC #121 -$804). All-time fill-corrected PF=0.860.",
   "circuit_breaker_halted": true,
   "circuit_breaker_halt_reason": "max_drawdown",
   "circuit_breaker_halted_since": "2026-07-28",
@@ -198,6 +199,21 @@
    "added_by": "owner go-ahead \u2192 validation pass"
   },
   {
+   "id": "H12",
+   "hypothesis": "Minimum aggregate ensemble signal floor for sizing-mode entry: require sig.ensemble_signal >= 0.20 (the 'flat' boundary in the EnsembleSignal taxonomy). Gate 6 previously checked lgbm_pred_return and lgbm_dir_prob independently but not the aggregate, allowing split signals (LGBM bullish + strong negative sentiment) to enter at full LGBM conviction.",
+   "status": "implemented \u2014 PR #29 (DRAFT) 2026-08-01",
+   "test": "python scripts/research_backtest.py --phase ensemble_floor (variants: min_signal \u2208 {0.15, 0.20, 0.25, 0.30}); acceptance = improvement on BOTH tune AND hold-out legs vs baseline",
+   "preliminary": "Last-100 snapshot analysis: TSLA #122 (ensemble=0.162, stop_loss), AVGO #27 (0.082), MSTR #80 (0.120) \u2014 all 3 were losses that would have been blocked. PLTR #124 (0.288), WDC #121 (0.274) pass. Estimate ~15-20% fewer entries. Expected PF uplift from eliminating lowest-signal entries that disproportionately hit stops.",
+   "expected_impact": "PF lift from 0.636 toward 1.0 (unvalidated). Requires Railway backtest to confirm threshold of 0.20 vs alternatives.",
+   "added": "2026-08-01",
+   "added_by": "Nightly routine analysis of last-100 trades snapshot \u2014 split-signal pattern identified as primary loss driver under CB halt",
+   "implementation_date": "2026-08-01",
+   "pr_branch": "feat/rnd-H12-ensemble-floor",
+   "pr_number": 29,
+   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact. MIN_ENSEMBLE_SIGNAL_ENTRY=0.20 constant added to signal_loop.py, Gate 6 modified. 3 new tests + 7 existing gate tests updated. 209 tests pass (2 skipped).",
+   "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required). Threshold variants 0.15/0.20/0.25/0.30 to backtest."
+  },
+  {
    "id": "H11",
    "hypothesis": "Re-enabling the per-ticker IC-block gate (30d window, drop `since`) improves PnL by refusing chronically wrong names (MU -0.27, RTX -0.48)",
    "status": "implemented \u2014 PR #26 (DRAFT) 2026-07-29",
@@ -213,6 +229,16 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-01",
+   "hypothesis_id": "NIGHTLY_LOG_W32b",
+   "result": "H12 IMPLEMENTED — Minimum ensemble signal floor (MIN_ENSEMBLE_SIGNAL_ENTRY=0.20) added to Gate 6 of _sizing_entry_gate_open() in signal_loop.py. Root cause identified: split-signal entries (LGBM bullish + strongly negative sentiment) bypassed Gate 6 because it only checked lgbm_pred_return and lgbm_dir_prob independently, not aggregate ensemble_signal. Live cases blocked: TSLA #122 (0.162), AVGO #27 (0.082), MSTR #80 (0.120). DRAFT PR #29 open. CI in progress at time of commit. 209 unit tests pass (2 skipped). Bot remains HALTED (max_drawdown CB). Snapshot performance as of 2026-08-01: 6 open positions (AVGO #126, INTC #125, PLTR #124, TSLA #122, AMAT #120, MSCI #119), kelly_fraction=-0.0882 (probation), n_closed_snapshot=94 (last-100: win_rate~39.8%, PF~0.453 for recent trades vs 0.860 fill-corrected all-time). CODE RED exit still BLOCKED on Railway worker (week 5+ outstanding).",
+   "expected_impact_unvalidated": "PF lift from 0.636 toward 1.0 — requires Railway backtest variants 0.15/0.20/0.25/0.30.",
+   "files_changed": ["src/agents/signal_loop.py", "tests/unit/test_signal_loop.py", "agent_state.json"],
+   "pr_number": 29,
+   "pr_branch": "feat/rnd-H12-ensemble-floor",
+   "ci_status_at_commit": "in_progress (triage job)"
+  },
   {
    "date": "2026-07-31",
    "hypothesis_id": "NIGHTLY_LOG_W32",
