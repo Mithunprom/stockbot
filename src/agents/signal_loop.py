@@ -60,6 +60,14 @@ DYN_THRESH_MIN_SAMPLES = 1000
 DYN_THRESH_WINDOW = 8000           # ≈1 trading day × 20 tickers × 390 bars
 SIZING_COST_THRESHOLD = DYN_THRESH_FALLBACK  # back-compat for diagnostics
 SIZING_DIR_PROB_DEAD_ZONE = (0.40, 0.60)  # long entries need P(up) ≥ 0.60
+# H12: Minimum aggregate ensemble signal for any sizing-mode entry.
+# The EnsembleSignal taxonomy defines flat < 0.20 — a trade whose combined
+# LGBM+sentiment+transformer signal is sub-flat means the models disagree
+# (e.g. LGBM bullish but sentiment strongly negative). Gate 6 already checks
+# LGBM pred_return + dir_prob independently; this floor adds the aggregate
+# view so conflicted signals cannot enter at full LGBM conviction.
+# Live cases blocked: TSLA #122 (0.162), AVGO #27 (0.082), MSTR #80 (0.120).
+MIN_ENSEMBLE_SIGNAL_ENTRY = 0.20
 # Signal-reversal exit — CONFIRMED reversals only (2026-07-07 diagnosis).
 # The old rule (4 consecutive bars of opposite pred_return SIGN) truncated the
 # 1-day swing design into a 25-minute scalper: 59% of all exits fired via
@@ -1645,7 +1653,8 @@ class SignalLoop:
         dir_prob = float(sig.lgbm_dir_prob)
         lo, hi = SIZING_DIR_PROB_DEAD_ZONE
         signal_ok = (abs(pred_ret) > self._dynamic_cost_threshold()
-                     and not (lo < dir_prob < hi))
+                     and not (lo < dir_prob < hi)
+                     and sig.ensemble_signal >= MIN_ENSEMBLE_SIGNAL_ENTRY)  # H12
         return signal_ok
 
     def _update_kelly(self) -> None:

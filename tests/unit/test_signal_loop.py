@@ -235,6 +235,7 @@ def test_kelly_probation_allows_single_probe():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only kelly gate is tested
 
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
@@ -270,6 +271,7 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only kelly gate is tested
 
     # 7d block cache full & positive, but probe cache empty → still blocked
     loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
@@ -292,6 +294,7 @@ def test_ticker_ic_gate_blocks_proven_negative():
     sig = EnsembleSignal(ticker="JPM", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.61
+    sig.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only IC gate is tested
     assert not loop._sizing_entry_gate_open(sig)
 
     # Insufficient sample fails open (other gates still apply)
@@ -411,6 +414,7 @@ def test_sector_position_cap_blocks_third_semi():
     sig2 = EnsembleSignal(ticker="XOM", timestamp=_stamp(0))
     sig2.lgbm_pred_return = 0.009
     sig2.lgbm_dir_prob = 0.65
+    sig2.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only sector gate is tested
     assert loop._sizing_entry_gate_open(sig2)
 
 
@@ -696,6 +700,7 @@ def test_h3_entry_gate_open_when_not_in_blackout():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.015
     sig.lgbm_dir_prob = 0.85
+    sig.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only blackout gate is tested
     # Gate 0c passes; gate 6 (signal quality) also passes (pred > fallback)
     assert loop._sizing_entry_gate_open(sig)
 
@@ -732,6 +737,7 @@ def test_gate_uses_dynamic_threshold():
     sig = EnsembleSignal(ticker="XOM", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.004   # above floor, below a high calibrated bar
     sig.lgbm_dir_prob = 0.70
+    sig.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only dynamic threshold is tested
     # Fallback threshold (0.003) → passes
     assert loop._sizing_entry_gate_open(sig)
     # Calibrate to a strong-magnitude model → 0.004 no longer top-8%
@@ -821,6 +827,7 @@ def test_ticker_ic_gate_requires_positive_ic():
     sig = EnsembleSignal(ticker="WDC", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.70
+    sig.ensemble_signal = 0.5  # H12: satisfy ensemble floor so only IC gate is tested
 
     # Mildly negative IC at full sample → blocked (previously slipped through)
     loop._ticker_ic = {"WDC": (-0.01, TICKER_IC_MIN_N + 50)}
@@ -956,3 +963,55 @@ def test_exit_of_short_position_buys_to_cover():
     assert submitted.get("side") == "buy", (
         f"short exit must BUY to cover, got {submitted}"
     )
+
+
+# ─── H12: Minimum ensemble signal floor (2026-08-01) ──────────────────────────
+
+def test_h12_flat_ensemble_signal_blocks_entry():
+    """H12: ensemble_signal below the flat boundary blocks entry even with strong LGBM.
+
+    Live case: TSLA #122 entered at ensemble_signal=0.162 (LGBM bullish,
+    sentiment=-0.557). Gate 6 passed because it only checked lgbm_pred_return
+    and lgbm_dir_prob independently. H12 adds the aggregate floor.
+    """
+    from src.agents.signal_loop import MIN_ENSEMBLE_SIGNAL_ENTRY
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    sig = EnsembleSignal(ticker="TSLA", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009   # passes pred_return gate
+    sig.lgbm_dir_prob = 0.65       # passes dir_prob gate
+    sig.ensemble_signal = 0.162    # flat — replicates TSLA #122 live case
+
+    assert sig.ensemble_signal < MIN_ENSEMBLE_SIGNAL_ENTRY
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_h12_boundary_ensemble_signal_passes_entry():
+    """H12: ensemble_signal exactly at 0.20 passes the gate (inclusive floor)."""
+    from src.agents.signal_loop import MIN_ENSEMBLE_SIGNAL_ENTRY
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.65
+    sig.ensemble_signal = MIN_ENSEMBLE_SIGNAL_ENTRY  # exactly at boundary
+
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h12_strong_ensemble_signal_unaffected():
+    """H12: strong signals (>= 0.40) are unaffected by the floor gate."""
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    sig = EnsembleSignal(ticker="NVDA", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.012
+    sig.lgbm_dir_prob = 0.72
+    sig.ensemble_signal = 0.55  # moderate — well above the flat/weak boundary
+
+    assert loop._sizing_entry_gate_open(sig)
