@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). \ud83d\udea8 BOT HALTED: max_drawdown circuit breaker fired Jul 28. M2 PF deteriorating.",
- "last_iteration_date": "2026-08-01",
- "active_hypothesis": "H12 IMPLEMENTED \u2014 Minimum ensemble signal floor (0.20) added to Gate 6 of _sizing_entry_gate_open(). DRAFT PR #29 open; CI in progress (2026-08-01). Bot still HALTED (max_drawdown CB since Jul 28). Sentinel ALL GREEN 07:25 UTC Aug 1. CODE RED sole remaining blocker: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5+ outstanding).",
+ "last_iteration_date": "2026-08-02",
+ "active_hypothesis": "\ud83d\udea8 STALE ROWS CRITICAL (Aug 2) + H12 ACTIVE \u2014 Sentinel fired critical 07:25 UTC Aug 2: MSCI #119, AMAT #120, TSLA #122 open >5 days (entered Jul 27); bot halted since Jul 28 likely blocked max_hold exits; owner must manually review and close at broker if needed. Cannot act autonomously \u2014 trade execution requires human. H12 IMPLEMENTED: minimum ensemble signal floor (0.20) added to Gate 6 of _sizing_entry_gate_open(). DRAFT PR #29 open (2026-08-01). Railway worker (AGENT_WORKER_ENABLE=true) sole CODE RED exit blocker (week 5+).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,8 +14,16 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-01T07:25:00Z",
-  "integrity_sentinel_status": "ok",
+  "integrity_sentinel_last_run": "2026-08-02T07:25:00Z",
+  "integrity_sentinel_status": "critical",
+  "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
+  "integrity_sentinel_critical_check": "stale_open_rows",
+  "integrity_sentinel_stale_rows": [
+   {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"},
+   {"id": 120, "ticker": "AMAT", "entry_time": "2026-07-27T14:19:46Z"},
+   {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"}
+  ],
+  "integrity_sentinel_critical_note": "3 positions >5 calendar days open. Bot halted since Jul 28 — halt likely blocked max_hold exit logic. db_vs_broker reconciles all 6 (broker also holds them open). Owner must review and manually close if needed. Integrity clean-streak criterion was MET (Jul 24-28) before this new event.",
   "deployed_version": "0.5.5",
   "snapshot_aug01": "kelly_fraction=-0.0882 (probation), n_open=5 (diagnostics) / 6 (trades.json), portfolio_heat=59.2%, signals_passing=2 (GEV, COHR — both blocked by CB+kelly). Last-100 trades: 6 open, ~94 closed. Recent closed PF~0.453 (losses dominate: INTC #114 -$1149, MU #115 -$1162, WDC #121 -$804). All-time fill-corrected PF=0.860.",
   "circuit_breaker_halted": true,
