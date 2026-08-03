@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). BOT HALTED (max_drawdown CB since Jul 28). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 RESET (n=0 on v0.6.0). W32 review complete.",
  "last_iteration_date": "2026-08-03",
- "active_hypothesis": "\ud83d\udea8 ALL 6 POSITIONS STALE + BOT HALTED. Sentinel CRITICAL 09:25 UTC Aug 3 (fresh \u2014 service alive post-v0.6.0). stale_open_rows: all 6 positions >5d open. PLTR/INTC/AVGO (Jul 28) joined MSCI/AMAT/TSLA (Jul 27) at Monday open. No automated exit while halted. Owner notified 3x. Action required: /admin/resume-trading (v0.6.1 persists it) OR manual broker closure. v0.6.0 (max_hold\u219230) will process exits once halt is lifted. H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). CODE RED: Railway worker AGENT_WORKER_ENABLE=true (WEEK 6 outstanding).",
+ "active_hypothesis": "IMPROVING: 5/6 stale positions resolved at Mon Aug 3 open (15:25 UTC sentinel). AMAT/TSLA/PLTR/INTC/AVGO closed. MSCI (id 119, Jul 27) still stale \u2014 1 open position in DB and broker. Sentinel still CRITICAL on stale_open_rows but improving. H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,19 +14,15 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-03T09:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-03T15:25:00Z",
   "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
   "integrity_sentinel_stale_rows": [
-   {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"},
-   {"id": 120, "ticker": "AMAT", "entry_time": "2026-07-27T14:19:46Z"},
-   {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"},
-   {"id": 124, "ticker": "PLTR", "entry_time": "2026-07-28T13:40:24Z"},
-   {"id": 125, "ticker": "INTC", "entry_time": "2026-07-28T13:41:09Z"},
-   {"id": 126, "ticker": "AVGO", "entry_time": "2026-07-28T13:42:23Z"}
+   {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"}
   ],
-  "integrity_sentinel_critical_note": "ALL 6 positions now >5 calendar days open (Aug 3 09:25 UTC). PLTR/INTC/AVGO (Jul 28) crossed threshold overnight. Sentinel IS running (fresh 09:25 UTC timestamp — v0.6.0 service alive). Bot halted since Jul 28 — halt blocking all exit processing including max_hold. db_vs_broker reconciles all 6 (broker holds them open). Owner notified 3x (Aug 2 07:25, 22:00; Aug 3 09:40). Market opens ~13:30 UTC. Manual broker review + halt lift required.",
+  "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
+  "integrity_sentinel_critical_note": "IMPROVING: 5/6 stale positions closed at Mon Aug 3 market open (15:25 UTC sentinel). MSCI (id 119, entered Jul 27) is the sole remaining stale position. db_vs_broker shows 1 open position (broker holds MSCI open). Halt likely lifted by owner at/before market open to enable exits. MSCI still stale — db record not yet closed despite other positions exiting.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
