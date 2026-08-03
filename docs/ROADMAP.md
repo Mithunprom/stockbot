@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-08-03 (v0.6.0 major — max_hold 390→30; M2 clock reset).
+Last updated: 2026-08-03 W32 review (v0.6.0/v0.6.1 deployed; M2 clock reset; bot halted; Railway worker week 6).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -38,10 +38,10 @@ starts from v0.6.0 deploy. Bot still HALTED; no new trades until halt is lifted.
 
 | ID | Milestone | Gate | Status |
 |----|-----------|------|--------|
-| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~17 days (Jul 10–27 est.); live-snapshot relay restored cloud visibility (PR #16) |
-| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🔄 RESET — v0.6.0 (max_hold 390→30) is a strategy change; prior n=35@PF=0.636 retired. New window starts Aug 2. n=100 ~mid-October (bot halted; no trades until lift). |
-| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. |
-| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — H4 at 17 days (3.4× flag), all others also flagged. |
+| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~24 days (Jul 10–Aug 3 est.); watchdog clean; bot halted (not an outage, but trading suspended) |
+| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🔄 RESET — v0.6.0 (max_hold 390→30) is a strategy change; prior n=35@PF=0.636 retired. New window starts Aug 2. n=0 (bot halted; no trades until halt lifted). ETA mid-Sep if halt lifted this week, mid-Oct+ if delayed. |
+| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 6. |
+| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — H4 at 24 days (4.8× flag), 12 hypotheses total blocked. Week 6. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M2 |
 | M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
@@ -49,41 +49,52 @@ starts from v0.6.0 deploy. Bot still HALTED; no new trades until halt is lifted.
 
 **Railway worker service** (`python agent_worker.py`, env `AGENT_WORKER_ENABLE=true`
 + Alpaca paper keys). Blocks M3, M4, and CODE RED exit (data_run criterion).
-Outstanding **3 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
+Outstanding **6 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
 
-All 7+ hypothesis validations blocked behind this single action.
+All 12 hypothesis validations (H0–H12) blocked behind this single action. Bot halt compounds
+the issue: M2 v0.6.0 also stalls at n=0 while trading is suspended.
+
+Secondary bottleneck: bot halt (max_drawdown CB since Jul 28). Owner action: `/admin/resume-trading`.
+v0.6.1 makes this safe (persists immediately). Removes CRITICAL sentinel stale_open_rows.
 
 ## Freeze Status (TPM-enforced)
 
-- **Strategy FROZEN at v0.4.4** since 2026-07-13. Intact through W31 (2026-07-27).
-  No strategy merges. No risk control changes.
+- **Strategy FROZEN at v0.6.0** since 2026-08-02. No strategy merges until n=100 closed
+  trades on v0.6.0 (max_hold=30) or a walk-forward-validated backtest justifies an exception.
 - Bug fixes, infra, monitoring always exempt.
-- Deployed since original freeze: v0.4.5–v0.4.17 (monitoring, bug fixes), v0.5.0–v0.5.3
-  (CODE RED repairs, TP fix, heat cap fix), v0.5.4 (durable risk state + halt alerting),
-  v0.5.5 (peak equity reconciliation), v0.6.0 (max_hold 390→30 **STRATEGY CHANGE**),
-  v0.6.1 (resume-persistence fix).
-- **v0.6.0 resets the strategy freeze baseline to Aug 2, 2026.** Prior M2 window closed
-  with invalid data. New M2 window: v0.6.0 (max_hold=30, stagnation=30, extensions=0).
-- **⚠️ v0.5.0 CLASSIFICATION MOOT:** v0.6.0 supersedes both the frozen config and the
-  v0.5.0 LGBM question. The M2 clock has reset.
-- Draft PRs queued: #7 (H1), #9 (H5 phase), #10 (H2+H6 phases), #11 (H7).
-  H5 (hold extension) is now disabled in prod (MAX_HOLD_EXTENSIONS=0); backtest phase
-  needs re-scoping under the 30-bar horizon before merit can be assessed.
+- v0.4.4 freeze (Jul 13) superseded by v0.6.0 (Aug 2): a governance-compliant exception
+  backed by two OOS backtest windows (IC horizon sweep, PF@30=4.55 OOS + 3.67 holdout).
+- v0.6.0 deployed: max_hold 390→30, MAX_HOLD_EXTENSIONS 2→0, SIZING_STAGNATION_BARS 390→30.
+  224 tests. STRATEGY CHANGE — M2 clock resets to Aug 2, 2026.
+- v0.6.1 deployed: resume-persistence fix (not a strategy change).
+- **⚠️ v0.5.0 CLASSIFICATION MOOT:** v0.6.0 supersedes both frozen configs. M2 clock
+  resets from v0.6.0 regardless. Owner should log formally but urgency is low.
+- Draft PRs queued: #7 (H1), #9 (H5 phase needs re-scope for 30-bar), #10 (H2+H6),
+  #11 (H7 needs re-scope: stagnation=30=max_hold now), #26 (H11), #29 (H12).
+- H5 (hold extension) disabled in prod (MAX_HOLD_EXTENSIONS=0); needs re-evaluation
+  under 30-bar horizon.
+- H10 (shorter max-hold) SUPERSEDED by v0.6.0 — max_hold=30 is live.
+- H7 (stagnation exits) needs re-scoping: stagnation_bars now equals max_hold (both 30).
+- Non-draft PRs #25 (PROD_PARAMS) and #27 (H9+H10) ready to merge.
 
 ## Risk Register
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| Railway worker not running — CODE RED exit + all hypothesis validation blocked | **CRITICAL** | Week 5; ~10 min owner action in Railway dashboard |
-| Stale open rows: MSCI/AMAT/TSLA >5d open, bot halted | **CRITICAL** | Sentinel critical since Aug 2; v0.6.0 max_hold fix deployed but halt blocks processing; will resolve at first run post-lift |
-| Bot HALTED — no exits firing, 6 positions open | **HIGH** | max_drawdown CB since Jul 28; owner must call /admin/resume-trading (v0.6.1 will persist it) |
-| M2 reset — new n=100 window not started (bot halted) | **HIGH** | No new trades until halt lifted; target ~mid-October |
-| H5 (hold extension) disabled by v0.6.0 | **MED** | MAX_HOLD_EXTENSIONS=0; backtest phase needs re-scoping for 30-bar horizon |
-| Hypothesis accumulation without validation | **MED** | 8+ hypotheses queued, 0 data runs in 5 weeks (Railway worker) |
-| Sentinel snapshot stale — Railway may not be publishing | **MED** | Last snapshot 07:25 UTC Aug 2; possible service restart gap after v0.6.0 deploy |
+| Bot HALTED — 6 stale positions (6-7d open), exits blocked | **CRITICAL** | Owner: /admin/resume-trading (v0.6.1 persists immediately); positions exit at first tick (max_hold=30) |
+| Railway worker not running — CODE RED exit + 12 hypothesis validations blocked | **CRITICAL** | Week 6; ~10 min owner action in Railway dashboard |
+| M2 v0.6.0 n=0 — no trades accumulating while halted | **HIGH** | Depends on halt lift; ~20 trading days to n=100 at ~5/day |
+| Sentinel CRITICAL stale_open_rows (all 6 positions) | **HIGH** | Self-clears at first post-halt-lift tick; no corrupt data (integrity checks pass) |
+| H5 + H7 need re-scoping for 30-bar horizon | **MED** | Backtest phases target wrong regime; re-scope before Railway runs |
+| H10 (shorter max-hold) superseded by v0.6.0 | **MED** | Mark as incorporated; no separate validation needed |
+| Hypothesis accumulation without validation | **MED** | 12 hypotheses queued, 0 data runs in 6 weeks (Railway worker) |
+| Non-draft PRs aging without merge (#25, #27) | **MED** | #25 safe to merge (infra); #27 safe to merge (probe floor + bug fix) |
 
 ## Decision Log
 
+- 2026-08-03: W32 review — bot halted (Jul 28), M2 reset (v0.6.0), Railway week 6. Sentinel
+  CRITICAL (stale_open_rows all 6 positions). H10 marked superseded by v0.6.0. H5/H7 flagged
+  for re-scoping. 2 CRITICAL owner decisions outstanding: lift halt + Railway worker.
 - 2026-08-02: v0.6.0 MAJOR — max_hold 390→30 (research: IC@390=0.004, edge gone 26x past
   training horizon). PF@30=4.55 vs 0.54@390 OOS. M2 clock reset. v0.6.1: resume-persistence
   fix. Sentinel CRITICAL: stale_open_rows (MSCI/AMAT/TSLA >5d). Bot still halted.
