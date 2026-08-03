@@ -14,7 +14,7 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-03T15:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-03T21:25:00Z",
   "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
@@ -22,7 +22,7 @@
    {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"}
   ],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
-  "integrity_sentinel_critical_note": "IMPROVING: 5/6 stale positions closed at Mon Aug 3 market open (15:25 UTC sentinel). MSCI (id 119, entered Jul 27) is the sole remaining stale position. db_vs_broker shows 1 open position (broker holds MSCI open). Halt likely lifted by owner at/before market open to enable exits. MSCI still stale — db record not yet closed despite other positions exiting.",
+  "integrity_sentinel_critical_note": "MSCI (id 119, entered Jul 27) survived full Monday trading session — still open at 21:25 UTC (after US market close ~21:00 UTC). 7 calendar days open. db_vs_broker shows 1 open position (broker agrees MSCI is open). 5 other positions resolved at Mon open; MSCI alone persists. Sentinel detail: 'orphan recovery matches newest-first and will never close these' — MSCI is not a DB-only orphan (broker also shows it open), so no auto-repair path exists. Possible: position was never touched by max_hold exit logic (bars_held recovery or halt blocking). Owner must manually close MSCI at broker AND update DB record, or investigate why max_hold=30 did not fire for this position. Escalation risk: Tuesday open exposure if not resolved.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
