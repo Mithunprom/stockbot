@@ -1035,3 +1035,91 @@ def test_stagnation_stays_inert_relative_to_max_hold():
         SIZING_MAX_HOLD_BARS, SIZING_STAGNATION_BARS,
     )
     assert SIZING_STAGNATION_BARS >= SIZING_MAX_HOLD_BARS
+
+
+# ─── bars_held recovery across a restart ─────────────────────────────────────
+#
+# The 30-bar max_hold cap (v0.6.0) is only enforceable if bars_held survives a
+# redeploy. It is NOT persisted in memory — it is rebuilt from the open Trade
+# row's entry_time by _recover_entry_state(), which runs in the tick after
+# sync_from_broker. These tests pin that reconstruction, because if it silently
+# returned 0 every deploy would hand each open position a fresh 30-bar window.
+
+def _loop_with_open_position(ticker: str, entry_time, last_price: float = 100.0):
+    """Loop with one broker position and a DB row returning `entry_time`."""
+    loop = _make_loop()
+    loop._pm.open_position(ticker=ticker, side="long", qty=10.0,
+                           entry_price=100.0)
+    loop._pm._positions[ticker].last_price = last_price
+
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = entry_time
+    session.execute = AsyncMock(return_value=result)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    loop._sf = MagicMock(return_value=ctx)
+    return loop
+
+
+def test_bars_held_recovered_for_same_day_entry():
+    """A position opened earlier today recovers its true age in minutes."""
+    import asyncio
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    entry = now - timedelta(minutes=12)
+    # The same-day branch keys off wall-clock minutes since the open, so it is
+    # only exercisable while the market is actually open.
+    if not ((9, 30) <= (now.hour, now.minute) <= (16, 0)):
+        pytest.skip("same-day branch only exercisable during market hours")
+
+    loop = _loop_with_open_position("AAPL", entry)
+    asyncio.run(loop._recover_entry_state())
+    assert 10 <= loop._bars_held["AAPL"] <= 14, loop._bars_held["AAPL"]
+
+
+def test_bars_held_recovered_for_prior_day_entry_exceeds_max_hold():
+    """A stale position must come back OLDER than max_hold, so it exits.
+
+    This is the case that matters after the v0.6.0 cap: the 6 positions left
+    open by the max_drawdown halt were days old. If recovery returned 0 they
+    would each get a fresh 30-bar lease on every redeploy instead of being
+    flushed at the next open.
+    """
+    import asyncio
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+
+    et = ZoneInfo("America/New_York")
+    entry = datetime.now(et) - timedelta(days=5)
+
+    loop = _loop_with_open_position("AAPL", entry)
+    asyncio.run(loop._recover_entry_state())
+
+    bars = loop._bars_held["AAPL"]
+    assert bars > SIZING_MAX_HOLD_BARS, (
+        f"stale position recovered at {bars} bars, which is inside the "
+        f"{SIZING_MAX_HOLD_BARS}-bar cap — it would get a fresh window"
+    )
+    assert loop._entry_dates["AAPL"] == entry.date()
+
+
+def test_bars_held_recovery_is_not_reset_for_known_tickers():
+    """Recovery only fills MISSING tickers — it must not clobber live counts."""
+    import asyncio
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    loop = _loop_with_open_position("AAPL", datetime.now(et) - timedelta(days=5))
+    loop._entry_dates["AAPL"] = datetime.now(et).date()
+    loop._bars_held["AAPL"] = 7
+
+    asyncio.run(loop._recover_entry_state())
+    assert loop._bars_held["AAPL"] == 7
