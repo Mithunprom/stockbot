@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). \ud83d\udea8 BOT HALTED: max_drawdown circuit breaker fired Jul 28. M2 PF deteriorating.",
- "last_iteration_date": "2026-08-02",
- "active_hypothesis": "\ud83d\udea8 CRITICAL: Sentinel stale_open_rows 07:25 UTC Aug 2 \u2014 MSCI (id 119), AMAT (id 120), TSLA (id 122) entered Jul 27, open 6 days. Bot halted since Jul 28 (max_drawdown CB) likely blocked max_hold exits. db_vs_broker reconciles all 6 (broker also holds open). Owner must manually review and close if needed \u2014 cannot act autonomously. H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). M2 frozen-config: n=35, PF=0.636 (worsening). PLTR (id 124) flagged: sentiment=-0.969 on long entry. H11 in PR #26 (DRAFT). CODE RED: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5 outstanding).",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). BOT HALTED (max_drawdown CB). v0.6.0 MAJOR: max_hold 390\u219230 deployed. M2 RESET. \ud83d\udea8 Stale rows MSCI/AMAT/TSLA open since Jul 27.",
+ "last_iteration_date": "2026-08-03",
+ "active_hypothesis": "v0.6.0 DEPLOYED (Aug 2 23:19 PDT): max_hold 390\u219230 bars \u2014 edge confirmed gone at 390 bars (IC=0.004, 46.6% tickers positive). Horizon sweep: PF@30=4.55 vs PF@390=0.54 OOS Jul 13-27. Research reproduced live failure (sim 40.4% win rate \u2248 live 44.4%). v0.6.1: resume-persistence fix. \ud83d\udea8 CRITICAL stale rows (MSCI/AMAT/TSLA entered Jul 27, now 7 days open) \u2014 halted bot cannot process max_hold exits; owner must manually review and close at broker. H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). M2 clock RESETS (max_hold change = strategy change). Trading still HALTED. CODE RED: Railway worker AGENT_WORKER_ENABLE=true (WEEK 5 outstanding).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -24,7 +24,10 @@
    {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"}
   ],
   "integrity_sentinel_critical_note": "3 positions >5 calendar days open. Bot halted since Jul 28 — halt likely blocked max_hold exit logic. db_vs_broker reconciles all 6 (broker also holds them open). Owner must review and manually close if needed. Integrity clean-streak criterion was MET (Jul 24-28) before this new event.",
-  "deployed_version": "0.5.5",
+  "deployed_version": "0.6.1",
+  "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
+  "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
+  "h5_status_note": "H5 (hold extension) effectively disabled by v0.6.0: MAX_HOLD_EXTENSIONS=0. Extension logic kept in code and covered by tests but will never fire. The 30-bar cap + 2 extensions would be 90 bars, back in the IC≈0.06 region. H5 needs re-evaluation under the new horizon.",
   "circuit_breaker_halted": true,
   "circuit_breaker_halt_reason": "max_drawdown",
   "circuit_breaker_halted_since": "2026-07-28",
@@ -59,7 +62,7 @@
   "kelly_mode": "probation",
   "suspected_corrupt_rows": [],
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure.",
-  "m2_trajectory": "OFF TRACK — PF=0.741 at n=32; target PF>=1.2 at n>=100. n=100 ~mid-August on current pace. W31 sub-window PF=1.42 (n=13, noise). Owner decision needed before gate closes."
+  "m2_trajectory": "RESET — v0.6.0 (max_hold 390→30) is a strategy change; M2 frozen-config clock restarts from v0.6.0 deploy (2026-08-02). Prior M2 stats (PF=0.636@n=35) measured a broken strategy and are retired. New baseline: max_hold=30 bars. Next n=100 gate ~mid-October on current trade pace (bot halted, no new trades until halt lifted)."
  },
  "live_data_status": {
   "date": "2026-07-22",
