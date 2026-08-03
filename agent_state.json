@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). \ud83d\udea8 BOT HALTED: max_drawdown circuit breaker fired Jul 28. M2 PF deteriorating.",
- "last_iteration_date": "2026-08-02",
- "active_hypothesis": "\ud83d\udea8 STALE ROWS CRITICAL (Aug 2) + H12 ACTIVE \u2014 Sentinel fired critical 07:25 UTC Aug 2: MSCI #119, AMAT #120, TSLA #122 open >5 days (entered Jul 27); bot halted since Jul 28 likely blocked max_hold exits; owner must manually review and close at broker if needed. Cannot act autonomously \u2014 trade execution requires human. H12 IMPLEMENTED: minimum ensemble signal floor (0.20) added to Gate 6 of _sizing_entry_gate_open(). DRAFT PR #29 open (2026-08-01). Railway worker (AGENT_WORKER_ENABLE=true) sole CODE RED exit blocker (week 5+).",
+ "last_iteration_date": "2026-08-03",
+ "active_hypothesis": "H12 ACTIVE + v0.6.0/v0.6.1 MERGED (Aug 3) \u2014 Owner pushed 4 commits to main overnight (Aug 2-3): v0.6.0 reduces max_hold 390\u219230 bars (matching LightGBM validated horizon; sim PF 0.54@390 vs 4.55@30); v0.6.1 fixes resume-persist gap (resume issued outside market hours now survives redeploys); bars_held recovery tests pin the mechanism. KEY IMPLICATION: stale positions (MSCI #119, AMAT #120, TSLA #122) will auto-flush at next market open after CB halt is lifted \u2014 bars_held recovery detects them as >30 bars old, so no manual broker close required if owner redeploys with v0.6.0+. H12 branch merged with main (conflict in test_signal_loop.py resolved \u2014 both H12 and bars_held test blocks kept). PR #29 head now d81cfea. Railway worker (AGENT_WORKER_ENABLE=true) still sole CODE RED exit blocker (week 5+).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
