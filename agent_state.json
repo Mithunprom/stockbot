@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). BOT HALTED (max_drawdown CB). v0.6.0 MAJOR: max_hold 390\u219230 deployed. M2 RESET.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). BOT HALTED (max_drawdown CB since Jul 28). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 RESET (n=0 on v0.6.0). W32 review complete.",
  "last_iteration_date": "2026-08-03",
- "active_hypothesis": "H12 ACTIVE + v0.6.0/v0.6.1 MERGED (Aug 3) \u2014 Owner pushed 4 commits to main overnight (Aug 2-3): v0.6.0 reduces max_hold 390\u219230 bars (matching LightGBM validated horizon; sim PF 0.54@390 vs 4.55@30); v0.6.1 fixes resume-persist gap (resume issued outside market hours now survives redeploys); bars_held recovery tests pin the mechanism. KEY IMPLICATION: stale positions (MSCI #119, AMAT #120, TSLA #122) will auto-flush at next market open after CB halt is lifted \u2014 bars_held recovery detects them as >30 bars old, so no manual broker close required if owner redeploys with v0.6.0+. H12 branch merged with main (conflict in test_signal_loop.py resolved \u2014 both H12 and bars_held test blocks kept). PR #29 head now 27cb8a7. Railway worker (AGENT_WORKER_ENABLE=true) still sole CODE RED exit blocker (week 5+). Sentinel commit 858b8d1 (Aug 3 08:08 UTC) notes M2 clock RESET.",
+ "active_hypothesis": "H12 ACTIVE \u2014 PR #29 open/draft (head 983098f). W32 review complete (Aug 3 14:19 UTC): 6 positions ALL stale (>5-7d). Sentinel CRITICAL 09:25 UTC Aug 3 (fresh \u2014 service alive). PLTR/INTC/AVGO (Jul 28) joined MSCI/AMAT/TSLA (Jul 27). v0.6.0 deployed (max_hold\u219230) \u2014 all stale positions will auto-flush at first tick post-halt-lift via bars_held recovery. Owner notified 3x. 2 CRITICAL decisions pending: (1) lift halt via /admin/resume-trading (v0.6.1 persists); (2) AGENT_WORKER_ENABLE=true (week 6, 12 hypotheses blocked incl. H12 Railway backtest). Railway worker remains sole CODE RED exit blocker.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,16 +14,19 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-02T07:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-03T09:25:00Z",
   "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
   "integrity_sentinel_stale_rows": [
    {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"},
    {"id": 120, "ticker": "AMAT", "entry_time": "2026-07-27T14:19:46Z"},
-   {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"}
+   {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"},
+   {"id": 124, "ticker": "PLTR", "entry_time": "2026-07-28T13:40:24Z"},
+   {"id": 125, "ticker": "INTC", "entry_time": "2026-07-28T13:41:09Z"},
+   {"id": 126, "ticker": "AVGO", "entry_time": "2026-07-28T13:42:23Z"}
   ],
-  "integrity_sentinel_critical_note": "3 positions >5 calendar days open. Bot halted since Jul 28 — halt likely blocked max_hold exit logic. db_vs_broker reconciles all 6 (broker also holds them open). Owner must review and manually close if needed. Integrity clean-streak criterion was MET (Jul 24-28) before this new event.",
+  "integrity_sentinel_critical_note": "ALL 6 positions now >5 calendar days open (Aug 3 09:25 UTC). PLTR/INTC/AVGO (Jul 28) crossed threshold overnight. Sentinel IS running (fresh 09:25 UTC timestamp — v0.6.0 service alive). Bot halted since Jul 28 — halt blocking all exit processing including max_hold. db_vs_broker reconciles all 6 (broker holds them open). Owner notified 3x (Aug 2 07:25, 22:00; Aug 3 09:40). Market opens ~13:30 UTC. Manual broker review + halt lift required.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
@@ -202,12 +205,27 @@
   {
    "id": "H10",
    "hypothesis": "Shorter max-hold (~260 bars / 2-3h) beats the 390-bar 1-day hold by cutting overnight-gap losers",
-   "status": "pending",
-   "test": "RESEARCH_CACHE=... python scripts/research_backtest.py --phase simulate across >=3 monthly windows",
-   "preliminary": "Jul 7-21 leg (retrained model, n~40): prod max_hold=390 \u2192 ret 0.63% PF 0.98 (breakeven); max_hold=260 \u2192 ret 3.49% PF 2.2, DD 4.46%\u21920.92%. Trade log confirms breakeven\u2192+$275. DIRECTIONAL support (today's -$1038 was all overnight max_hold gaps) but n=2 weeks \u2014 NOT shippable.",
-   "blockers": "(1) 2-week sample too small per governance; needs multi-window. (2) BUG: backtest total_return_pct (0.63/3.49) does not reconcile with summed trade pnl (-$10/+$275 on $100k) \u2014 10x discrepancy in the return calc must be fixed before trusting magnitude.",
+   "status": "SUPERSEDED \u2014 v0.6.0 deployed max_hold=30 (30 min), even shorter than H10's 260-bar proposal. The core fix is live. The return-calc reconciliation bug (preliminary finding) is addressed in PR #27 (H10 return reconciliation fix). No separate backtest phase needed.",
+   "test": "SUPERSEDED \u2014 see v0.6.0 horizon sweep reports/research/horizon_sweep_2026-07-29.md",
+   "preliminary": "Jul 7-21 leg: max_hold=260 \u2192 PF 2.2 vs 390 \u2192 PF 0.98. Directionally confirmed by v0.6.0 sweep (max_hold=30 \u2192 PF 4.55 OOS). Return-calc bug (10x discrepancy) flagged in PR #27.",
    "added": "2026-07-24",
-   "added_by": "owner go-ahead \u2192 validation pass"
+   "added_by": "owner go-ahead \u2192 validation pass",
+   "superseded_by": "v0.6.0 (max_hold 390\u219230, Aug 2 2026)",
+   "pm_priority_note": "CLOSED \u2014 incorporated into production."
+  },
+  {
+   "id": "H12",
+   "hypothesis": "Minimum ensemble signal floor for sizing-mode (non-probe) entries. Current prod allows entries with ensemble < 0.3 (e.g. PLTR id 124 at 0.288 with sentiment=-0.969). Require min ensemble_signal >= 0.20 (or parameterized) for standard-mode entries, parallel to H9's probe-mode floor.",
+   "status": "implemented \u2014 PR #29 (DRAFT) 2026-08-01",
+   "test": "python scripts/research_backtest.py --phase ensemble_floor (variants: min_signal \u2208 {0.15, 0.20, 0.25, 0.30}); acceptance = fewer noise entries, no reduction in profitable-trade rate, improvement on BOTH tune AND hold-out legs",
+   "added": "2026-08-01",
+   "added_by": "PLTR id 124 case (ensemble=0.288, sentiment=-0.969 on long entry) + nightly desk",
+   "pr_branch": "feat/rnd-H12-ensemble-floor",
+   "pr_number": 29,
+   "pr_state": "DRAFT \u2014 held pending Railway backtest",
+   "pm_priority": 4,
+   "pm_priority_note": "Low-risk noise guard for standard entries. Parallel to H9. Safe to validate once Railway enabled. Lower priority than H0 baseline and H2/H11.",
+   "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required)"
   },
   {
    "id": "H12",
@@ -240,6 +258,16 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-03",
+   "hypothesis_id": "W32_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW — W32 weekly review completed. Live data via live-snapshot relay (Railway 403 still affects cloud IPs). Bot HALTED since Jul 28 (max_drawdown CB). 6 positions stale (>5-7d). v0.6.0 STRATEGY CHANGE: max_hold 390→30, M2 clock reset to Aug 2. n=0 on v0.6.0 window. Retired M2 frozen-config stats (n=35, PF=0.636 — measured broken strategy). W32 closed trades: n=3 (NFLX +$349, WDC -$804, MU -$435) PF=0.28 noise. All-time: n=99, WR=45.8%, PF=0.860 (fill-corrected). Sentinel CRITICAL (stale_open_rows all 6). H10 marked SUPERSEDED (v0.6.0 incorporated). H12 added (PR #29). Railway worker week 6 — sole CODE RED exit + M2 blocker. 2 CRITICAL owner decisions: lift halt + Railway worker. Report: reports/program/2026-W32.md.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W32.md",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-08-01",
    "hypothesis_id": "NIGHTLY_LOG_W32b",
@@ -351,23 +379,29 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 3] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 7+ hypothesis validations and CODE RED data_run exit criterion.",
-  "[OWNER ACTION \u2014 NEW, HIGH] Classify v0.5.0 LGBM retrain (commit dff72eb): bug-fix (staleness trap, freeze-exempt) or strategy change (M2 clock resets)? Reply needed to confirm freeze integrity.",
-  "[OWNER ACTION \u2014 NEW, HIGH] M2 trajectory decision: PF=0.741@n=32, target PF>=1.2@n=100, ~13 trading days to measurement gate. Decide: (a) run clock out, (b) unlock Railway now to get H0/H5/H2 in window, or (c) declare M2 missed and pivot to validated-backtest route.",
+  "[OWNER ACTION \u2014 CRITICAL] Lift the halt: /admin/resume-trading. v0.6.1 persists immediately. 6 stale positions flush at first tick (max_hold=30). M2 v0.6.0 window starts accumulating trades.",
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 6] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 12 hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
+  "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",
+  "[OWNER ACTION \u2014 LOW] Formally log v0.5.0 LGBM classification as bug-fix. M2 clock resets from v0.6.0 regardless; close the open question.",
   "[CODE RED \u2014 INTEGRITY MET \u2705] Integrity criterion satisfied (Day 5/5, Jul 28). Remaining: hypothesis_at_data_run (Railway worker). Owner must set AGENT_WORKER_ENABLE=true to exit CODE RED.",
   "[Railway worker] Run H0 baseline (priority 0): python scripts/research_backtest.py --phase all",
-  "[Railway worker] Run H5 backtest (priority 1): --phase holdext",
-  "[Railway worker] Run H2 backtest (priority 2): --phase spy_ma",
-  "[Railway worker] Run H1 backtest (priority 3): --phase topk",
-  "[Railway worker] Run H3 backtest (priority 4): blackout + opportunity cost",
-  "[Railway worker] Run H6 backtest (priority 5): --phase persistence",
-  "[Railway worker] Run H7 backtest (priority 6): --phase stagnation",
-  "[Railway worker] Run H4 IC comparison (priority 7)"
+  "[Railway worker] Run H2 backtest (priority 1): --phase spy_ma",
+  "[Railway worker] Run H11 backtest (priority 2): IC-block gate validation",
+  "[Railway worker] Run H9/H12 backtest (priority 3): probe floor + ensemble floor",
+  "[Railway worker] Run H1 backtest (priority 4): --phase topk",
+  "[Railway worker] Run H4 IC comparison (priority 5)",
+  "[Railway worker] Run H3 backtest (priority 6): blackout + opportunity cost",
+  "[Railway worker] Run H6 backtest (priority 7): --phase persistence",
+  "[Railway worker] Run H7 backtest (priority 8, needs re-scope for 30-bar): --phase stagnation",
+  "[Railway worker] Run H5 backtest (priority 9, needs re-scope for 30-bar horizon): --phase holdext",
+  "[DESK] H10 \u2014 mark formally SUPERSEDED in PR #27 merge notes (v0.6.0 incorporated max_hold=30)",
+  "[DESK] H5 + H7 \u2014 re-scope backtest phases for 30-bar horizon before Railway runs"
  ],
  "blocked_by_token_limit": false,
  "governance": {
   "deploy_mode": "PR_REVIEW_REQUIRED",
-  "freeze_status": "FROZEN at v0.4.4 since 2026-07-13. Intact through W31 (2026-07-27). No strategy merges until M2 matures (n>=100) or validated backtest justifies exception. Bug fixes, infra, and docs always exempt. v0.5.0 LGBM retrain classification PENDING owner confirmation.",
+  "freeze_status": "FROZEN at v0.6.0 since 2026-08-02. v0.4.4 freeze (Jul 13) superseded by v0.6.0 strategy change (governance-compliant: two OOS backtest windows). No strategy merges until M2 matures (n>=100 on v0.6.0) or walk-forward-validated backtest justifies exception. Bug fixes, infra, docs always exempt. v0.5.0 LGBM classification moot (M2 resets from v0.6.0); low-urgency to close formally.",
   "note": "Per CLAUDE.md: no autonomous changes to live strategy/config. Agents research, implement, backtest, and open PRs; a human merges. Config staging: config/staging/."
  },
  "code_red": {
