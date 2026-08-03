@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion still blocked). BOT HALTED (max_drawdown CB). v0.6.0 MAJOR: max_hold 390\u219230 deployed. M2 RESET.",
  "last_iteration_date": "2026-08-03",
- "active_hypothesis": "v0.6.0 DEPLOYED (Aug 2 23:19 PDT): max_hold 390\u219230 bars \u2014 edge confirmed gone at 390 bars (IC=0.004, 46.6% tickers positive). Horizon sweep: PF@30=4.55 vs PF@390=0.54 OOS Jul 13-27. Research reproduced live failure (sim 40.4% win rate \u2248 live 44.4%). v0.6.1: resume-persistence fix. Sentinel snapshot stale (07:25 UTC Aug 2, no new publish since v0.6.0 redeploy). Stale rows (MSCI/AMAT/TSLA) unresolved in DB \u2014 will process at next bot run post-halt-lift. M2 clock RESETS (max_hold change = strategy change). Trading still HALTED.",
+ "active_hypothesis": "\ud83d\udea8 ALL 6 POSITIONS STALE + BOT HALTED. Sentinel CRITICAL 09:25 UTC Aug 3 (fresh \u2014 service alive post-v0.6.0). stale_open_rows: all 6 positions >5d open. PLTR/INTC/AVGO (Jul 28) joined MSCI/AMAT/TSLA (Jul 27) at Monday open. Market opens ~13:30 UTC. No automated exit while halted. Owner notified 3x. Action required: /admin/resume-trading (v0.6.1 persists it) OR manual broker closure. v0.6.0 (max_hold\u219230) is deployed and will process exits once halt is lifted.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,16 +14,19 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-02T07:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-03T09:25:00Z",
   "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
   "integrity_sentinel_stale_rows": [
    {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"},
    {"id": 120, "ticker": "AMAT", "entry_time": "2026-07-27T14:19:46Z"},
-   {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"}
+   {"id": 122, "ticker": "TSLA", "entry_time": "2026-07-27T16:45:02Z"},
+   {"id": 124, "ticker": "PLTR", "entry_time": "2026-07-28T13:40:24Z"},
+   {"id": 125, "ticker": "INTC", "entry_time": "2026-07-28T13:41:09Z"},
+   {"id": 126, "ticker": "AVGO", "entry_time": "2026-07-28T13:42:23Z"}
   ],
-  "integrity_sentinel_critical_note": "3 positions >5 calendar days open. Bot halted since Jul 28 — halt likely blocked max_hold exit logic. db_vs_broker reconciles all 6 (broker also holds them open). Owner must review and manually close if needed. Integrity clean-streak criterion was MET (Jul 24-28) before this new event.",
+  "integrity_sentinel_critical_note": "ALL 6 positions now >5 calendar days open (Aug 3 09:25 UTC). PLTR/INTC/AVGO (Jul 28) crossed threshold overnight. Sentinel IS running (fresh 09:25 UTC timestamp — v0.6.0 service alive). Bot halted since Jul 28 — halt blocking all exit processing including max_hold. db_vs_broker reconciles all 6 (broker holds them open). Owner notified 3x (Aug 2 07:25, 22:00; Aug 3 09:40). Market opens ~13:30 UTC. Manual broker review + halt lift required.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
