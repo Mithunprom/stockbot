@@ -154,27 +154,36 @@ def test_atr_exits_geometry():
     assert tp_lo >= 1.3 * sl_lo
 
 
-def test_take_profit_is_reachable_within_hold_window():
-    """TP must sit inside the move the hold window can plausibly produce.
+def test_take_profit_is_an_outlier_valve_not_a_noise_trigger():
+    """TP must sit well ABOVE the window's typical move, and above the stop.
 
-    Regression guard for the 2026-07-24 finding: TP was pinned at 3× daily
-    sigma while SIZING_MAX_HOLD_BARS caps the trade at ~1 trading day — i.e.
-    one sigma of time. A 3σ excursion inside 1σ of time is a ~0.1% event, so
-    take_profit fired on 2 of 108 trades and 51% of trades exited on the timer
-    at ~zero expectancy. Any future retune must keep the target within ~2σ of
-    daily vol, or the profit path is closed by construction.
+    History matters here. On 2026-07-24 this test asserted the opposite — that
+    TP must be *reachable* inside the hold window — because the design then was
+    a 390-bar swing whose profit came from hitting the target, and a 3σ target
+    inside 1σ of time meant take_profit fired on 2 of 108 trades.
+
+    The 2026-07-29 horizon sweep changed the design: max_hold is now 30 bars,
+    matched to the model's validated 15–30m horizon, and the profit path is the
+    TIMER (exit while IC is still ~0.12–0.17), not the target. The backtest
+    that produced PF 4.55 ran exactly this pairing — tp_mult 1.5 with a 30-bar
+    cap — with exits dominated by max_hold.
+
+    So the invariant flips: the risk is no longer an unreachable target, it is a
+    target tight enough to fire on ordinary 30-bar noise and truncate winners
+    the timer would have carried. TP is now a windfall valve.
     """
     from src.agents.signal_loop import (
         SIZING_TAKE_PROFIT_DVOL_MULT,
         SIZING_STOP_LOSS_DVOL_MULT,
         SIZING_MAX_HOLD_BARS,
     )
-    # The hold window is ~1 trading day → ~1 daily sigma of realised movement.
+    # Typical move over the hold window, in units of DAILY sigma.
     sigmas_of_time = (SIZING_MAX_HOLD_BARS / 390.0) ** 0.5
-    assert SIZING_TAKE_PROFIT_DVOL_MULT <= 2.0 * sigmas_of_time, (
-        "take-profit target is unreachable within the max-hold window"
+    assert SIZING_TAKE_PROFIT_DVOL_MULT >= 2.0 * sigmas_of_time, (
+        "take-profit sits inside ordinary noise for this hold window — it will "
+        "truncate winners the timer should have carried"
     )
-    # …but must still pay more than the stop risks.
+    # …and must still pay more than the stop risks.
     assert SIZING_TAKE_PROFIT_DVOL_MULT > SIZING_STOP_LOSS_DVOL_MULT
 
 
@@ -482,15 +491,38 @@ def _h5_fixture(loop, ticker="AAPL", entry_price=100.0, days_ago_entered=1,
     return sig
 
 
+def test_h5_extensions_are_disabled_in_production():
+    """Production runs a HARD max_hold cap — no extensions. (2026-07-29)
+
+    The extension reset bars_held and granted up to MAX_HOLD_EXTENSIONS more
+    windows, so a 30-bar cap would really be 90 bars — back out to the ~0.06 IC
+    region the horizon sweep showed is unprofitable. The mechanism is kept (and
+    still tested below under an explicit patch) but must stay off by default.
+    """
+    from src.agents.signal_loop import MAX_HOLD_EXTENSIONS
+    assert MAX_HOLD_EXTENSIONS == 0
+
+    loop = _make_loop()
+    loop._pm.portfolio_value = 100_000.0
+    sig = _h5_fixture(loop)
+    # At max_hold with extensions off, the position must exit — not extend.
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "max_hold"
+    assert loop._hold_extension_count.get("AAPL", 0) == 0
+
+
 def test_h5_extension_granted_on_fresh_signal():
-    """Extension fires when signal re-qualifies and position is not a loser."""
-    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, MAX_HOLD_EXTENSIONS
+    """Extension mechanism still works when explicitly enabled.
+
+    Disabled in production (see test above); patched on here so the code path
+    keeps its coverage rather than silently rotting.
+    """
     loop = _make_loop()
     loop._pm.portfolio_value = 100_000.0
     sig = _h5_fixture(loop)
 
-    # _check_sizing_exit should return None (extension granted, not max_hold)
-    result = loop._check_sizing_exit("AAPL", 100.0, sig)
+    with patch("src.agents.signal_loop.MAX_HOLD_EXTENSIONS", 2):
+        # _check_sizing_exit should return None (extension granted, not max_hold)
+        result = loop._check_sizing_exit("AAPL", 100.0, sig)
     assert result is None, f"Expected None (extension), got {result!r}"
     # Extension counter incremented
     assert loop._hold_extension_count.get("AAPL", 0) == 1
@@ -556,23 +588,27 @@ def test_h5_extension_denied_when_dir_prob_in_dead_zone():
 
 
 def test_h5_second_extension_resets_bars_again():
-    """Second extension resets bars_held a second time."""
+    """Second extension resets bars_held a second time (mechanism only).
+
+    Disabled in production — see test_h5_extensions_are_disabled_in_production.
+    """
     from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
     loop = _make_loop()
     loop._pm.portfolio_value = 100_000.0
     sig = _h5_fixture(loop)
 
-    # First extension
-    r1 = loop._check_sizing_exit("AAPL", 100.0, sig)
-    assert r1 is None
-    assert loop._hold_extension_count["AAPL"] == 1
-    assert loop._bars_held["AAPL"] == 0
+    with patch("src.agents.signal_loop.MAX_HOLD_EXTENSIONS", 2):
+        # First extension
+        r1 = loop._check_sizing_exit("AAPL", 100.0, sig)
+        assert r1 is None
+        assert loop._hold_extension_count["AAPL"] == 1
+        assert loop._bars_held["AAPL"] == 0
 
-    # Simulate another day of holding — bring bars back to max_hold
-    loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
+        # Simulate another window of holding — bring bars back to max_hold
+        loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
 
-    # Second extension
-    r2 = loop._check_sizing_exit("AAPL", 100.0, sig)
+        # Second extension
+        r2 = loop._check_sizing_exit("AAPL", 100.0, sig)
     assert r2 is None
     assert loop._hold_extension_count["AAPL"] == 2
     assert loop._bars_held["AAPL"] == 0
@@ -1015,3 +1051,134 @@ def test_h12_strong_ensemble_signal_unaffected():
     sig.ensemble_signal = 0.55  # moderate — well above the flat/weak boundary
 
     assert loop._sizing_entry_gate_open(sig)
+
+
+# ─── Hold horizon must match the model's validated horizon ───────────────────
+
+def test_max_hold_matches_model_horizon():
+    """max_hold must stay near the horizon LightGBM is trained/validated on.
+
+    Regression guard for the 2026-07-29 sweep. The model trains on
+    FORWARD_N = 15 and live IC validates at 15 minutes, but production held 390
+    bars — where mean IC measured 0.0044 (median NEGATIVE, only 46.6% of 73
+    tickers positive). Sim over the OOS leg: PF 0.54 @390 vs 4.55 @30.
+
+    IC by horizon, same predictions:
+        15 → 0.1690 | 30 → 0.1243 | 60 → 0.0857 | 195 → 0.0384 | 390 → 0.0044
+
+    Anything past ~4x the training horizon is harvesting decayed signal, so the
+    ceiling is deliberately tight. Raising it requires a fresh sweep, not a
+    parameter nudge.
+    """
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS, MAX_HOLD_EXTENSIONS
+
+    TRAINED_HORIZON = 15            # scripts/train_lgbm.py FORWARD_N
+    assert SIZING_MAX_HOLD_BARS <= 4 * TRAINED_HORIZON, (
+        f"max_hold {SIZING_MAX_HOLD_BARS} is far past the model's validated "
+        f"{TRAINED_HORIZON}-bar horizon — IC is ~0 out there"
+    )
+    assert SIZING_MAX_HOLD_BARS >= TRAINED_HORIZON
+
+    # The extension multiplies the effective cap; keep the total inside the band.
+    effective_cap = SIZING_MAX_HOLD_BARS * (1 + MAX_HOLD_EXTENSIONS)
+    assert effective_cap <= 4 * TRAINED_HORIZON, (
+        f"effective cap {effective_cap} bars "
+        f"({SIZING_MAX_HOLD_BARS} x {1 + MAX_HOLD_EXTENSIONS} windows) escapes "
+        "the validated horizon — hold extensions defeat the max_hold cap"
+    )
+
+
+def test_stagnation_stays_inert_relative_to_max_hold():
+    """Stagnation must not preempt max_hold (it is kept only for tuning)."""
+    from src.agents.signal_loop import (
+        SIZING_MAX_HOLD_BARS, SIZING_STAGNATION_BARS,
+    )
+    assert SIZING_STAGNATION_BARS >= SIZING_MAX_HOLD_BARS
+
+
+# ─── bars_held recovery across a restart ─────────────────────────────────────
+#
+# The 30-bar max_hold cap (v0.6.0) is only enforceable if bars_held survives a
+# redeploy. It is NOT persisted in memory — it is rebuilt from the open Trade
+# row's entry_time by _recover_entry_state(), which runs in the tick after
+# sync_from_broker. These tests pin that reconstruction, because if it silently
+# returned 0 every deploy would hand each open position a fresh 30-bar window.
+
+def _loop_with_open_position(ticker: str, entry_time, last_price: float = 100.0):
+    """Loop with one broker position and a DB row returning `entry_time`."""
+    loop = _make_loop()
+    loop._pm.open_position(ticker=ticker, side="long", qty=10.0,
+                           entry_price=100.0)
+    loop._pm._positions[ticker].last_price = last_price
+
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = entry_time
+    session.execute = AsyncMock(return_value=result)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    loop._sf = MagicMock(return_value=ctx)
+    return loop
+
+
+def test_bars_held_recovered_for_same_day_entry():
+    """A position opened earlier today recovers its true age in minutes."""
+    import asyncio
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    entry = now - timedelta(minutes=12)
+    # The same-day branch keys off wall-clock minutes since the open, so it is
+    # only exercisable while the market is actually open.
+    if not ((9, 30) <= (now.hour, now.minute) <= (16, 0)):
+        pytest.skip("same-day branch only exercisable during market hours")
+
+    loop = _loop_with_open_position("AAPL", entry)
+    asyncio.run(loop._recover_entry_state())
+    assert 10 <= loop._bars_held["AAPL"] <= 14, loop._bars_held["AAPL"]
+
+
+def test_bars_held_recovered_for_prior_day_entry_exceeds_max_hold():
+    """A stale position must come back OLDER than max_hold, so it exits.
+
+    This is the case that matters after the v0.6.0 cap: the 6 positions left
+    open by the max_drawdown halt were days old. If recovery returned 0 they
+    would each get a fresh 30-bar lease on every redeploy instead of being
+    flushed at the next open.
+    """
+    import asyncio
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+
+    et = ZoneInfo("America/New_York")
+    entry = datetime.now(et) - timedelta(days=5)
+
+    loop = _loop_with_open_position("AAPL", entry)
+    asyncio.run(loop._recover_entry_state())
+
+    bars = loop._bars_held["AAPL"]
+    assert bars > SIZING_MAX_HOLD_BARS, (
+        f"stale position recovered at {bars} bars, which is inside the "
+        f"{SIZING_MAX_HOLD_BARS}-bar cap — it would get a fresh window"
+    )
+    assert loop._entry_dates["AAPL"] == entry.date()
+
+
+def test_bars_held_recovery_is_not_reset_for_known_tickers():
+    """Recovery only fills MISSING tickers — it must not clobber live counts."""
+    import asyncio
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    loop = _loop_with_open_position("AAPL", datetime.now(et) - timedelta(days=5))
+    loop._entry_dates["AAPL"] = datetime.now(et).date()
+    loop._bars_held["AAPL"] = 7
+
+    asyncio.run(loop._recover_entry_state())
+    assert loop._bars_held["AAPL"] == 7

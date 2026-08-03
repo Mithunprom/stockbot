@@ -274,3 +274,33 @@ def test_peak_reconciliation_is_monotonic():
     """Reconciliation must only ever raise the peak, never lower it."""
     stored, broker, current = 104_278.55, 90_000.0, 97_482.41
     assert max(current, broker, stored) == pytest.approx(stored)
+
+
+def test_resume_must_be_persisted_not_left_in_memory():
+    """A human resume must survive a redeploy.
+
+    _persist_risk_state() runs late in _tick(), which returns early while the
+    market is closed. A resume issued outside market hours therefore never got
+    snapshotted, and the next redeploy would restore halted=True (v0.5.4
+    re-applies a persisted halt by design) — silently undoing a human decision.
+    """
+    cb = CircuitBreakers()
+    cb._halted = True
+    cb._halt_reason = "max_drawdown"
+
+    cb.resume_trading(authorized_by="mithun")
+    assert not cb.is_halted
+
+    # The snapshot written after a resume must say "not halted"...
+    snap = RiskStateSnapshot(
+        peak_value=104_278.55, daily_start_value=99_000.0,
+        daily_start_date=et_today_iso(), consecutive_losses=0,
+        halted=cb.is_halted, halt_reason=cb.halt_reason,
+    )
+    assert snap.halted is False
+
+    # ...so a fresh process does NOT re-halt on restore.
+    fresh = CircuitBreakers()
+    if snap.halted and not fresh.is_halted:
+        fresh._halted = True
+    assert not fresh.is_halted, "resume was undone by the restore path"

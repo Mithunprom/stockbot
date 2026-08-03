@@ -747,7 +747,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.6.1"
 
 app = FastAPI(
     title="StockBot API",
@@ -1191,6 +1191,21 @@ async def resume_trading(pipeline: str = "all", authorized_by: str = "admin") ->
             results["pipeline_b"] = "resumed"
         else:
             results["pipeline_b"] = "not_halted"
+
+    # Persist immediately — do NOT wait for the next tick to snapshot it.
+    # _persist_risk_state() runs late in _tick(), which returns early while the
+    # market is closed, so a resume issued outside market hours would live only
+    # in memory. Any redeploy before the open would then restore halted=True
+    # (v0.5.4 re-applies a persisted halt by design) and silently undo a human
+    # decision. A resume is exactly the state that must survive a restart.
+    for loop_ref, key in ((_signal_loop, "pipeline_a"), (_signal_loop_b, "pipeline_b")):
+        if loop_ref is not None and results.get(key) == "resumed":
+            try:
+                await loop_ref._persist_risk_state()
+                results[key] = "resumed_and_persisted"
+            except Exception as exc:
+                logger.warning("resume_persist_failed", pipeline=key, error=str(exc))
+                results[key] = "resumed_but_persist_failed"
 
     return JSONResponse(content={
         "action": "resume_trading",
