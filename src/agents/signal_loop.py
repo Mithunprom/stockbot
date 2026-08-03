@@ -143,19 +143,49 @@ SIZING_TAKE_PROFIT_FLOOR = 0.015   # 1.5% take profit floor (was 2.0%)
 # 13.5% ≈ 1.35 × the 10% stop cap, mirroring the 1.5/1.1 mult ratio, and is
 # still only ~1.1σ for a 12%-vol name — i.e. reachable, unlike the old 20%.
 SIZING_TAKE_PROFIT_CAP = 0.135     # 13.5% take profit cap (was 20% — unreachable)
-# Max hold 1 trading day (was 4h): holds right signals longer to capture the
-# bigger targets. Past ~1 day the signal decays into pure market beta (3-day
-# holds were −493bps in the June leg), so 1 day is the validated ceiling.
-# Most exits still fire earlier via trailing/signal_reversal.
-SIZING_MAX_HOLD_BARS = 390         # ~1 trading day of market-hours 1m bars
-# H5: signal-reconfirmed hold extension. At max_hold, if the signal re-qualifies
-# as a fresh entry AND the position is not underwater > 1× daily vol, grant one
-# extra trading day instead of exiting. Caps at MAX_HOLD_EXTENSIONS (3 days
-# absolute). Evidence for: max_hold exits 5W/4L post-fix — best exit cohort.
-# Evidence against: UNCONDITIONAL 3-day holds = −493 bps beta bleed in June.
-# That's the exact reason the extension must be SIGNAL-CONDITIONAL.
-MAX_HOLD_EXTENSIONS = 2            # max extra 1-day windows (3-day absolute cap)
-SIZING_STAGNATION_BARS = 390       # unreachable while == max hold (kept for tuning)
+# Max hold MATCHES THE MODEL'S HORIZON (2026-07-29: 390 → 30).
+#
+# LightGBM trains on FORWARD_N = 15 (a 15-minute forward return) and live IC
+# validates at the same 15 minutes (0.086, n=6,148, p≈0). Holding 390 bars
+# harvested that signal ~26x past its horizon. Measuring the SAME predictions
+# at each horizon (reports/research/horizon_sweep_2026-07-29.md):
+#
+#   horizon   mean IC   % of 73 tickers with IC > 0
+#        15    0.1690        100.0
+#        30    0.1243         98.6
+#        60    0.0857         93.2
+#       195    0.0384         64.4
+#       390    0.0044         46.6   <- the old setting: edge is GONE
+#      1170   -0.0487         30.1
+#
+# At 390 bars mean IC is statistically zero and the MEDIAN is negative. The
+# strategy sim agrees — OOS leg Jul 13–27, all else at production:
+#   hold  30 → PF 4.55, win 77.3%, maxDD 0.44%
+#   hold 390 → PF 0.54, win 40.4%, maxDD 5.58%
+# and the sim's 40.4% closely tracks the 44.4% win rate actually realised on
+# the live ledger (n=117), so it reproduces the real failure. Replicated on a
+# held-out window (Jul 1–10: PF 3.67 @30 vs 1.14 @390) and robust to 10x costs.
+#
+# 30 rather than 15: PF 3.67–4.55 in BOTH windows at DD ≤ 0.51%, and further
+# from the per-trade cost floor. 195 posts the best single return (+6.00%) but
+# only in one window (PF 1.42 in the other), so it is not robust.
+#
+# NOTE: PDT reappears below $25k, where a 30-bar hold IS a day trade and
+# same-day exits get deferred to the next session (the sim shows holds of
+# 15–195 collapsing to an identical ~333-bar realised hold). This setting is
+# calibrated for the current >$25k account; revisit if equity drops below it.
+SIZING_MAX_HOLD_BARS = 30          # == the model's validated 15–30m horizon
+# H5 extension DISABLED (2026-07-29: 2 → 0). It reset bars_held and granted up
+# to 2 more windows, so a 30-bar cap would really be 90 bars — back out to the
+# ~0.06 IC region and straight past the point of this change. It was also never
+# validated (0/5 hypotheses had a data run as of W31) and the backtest above
+# models a HARD cap, so leaving it on would ship something untested.
+MAX_HOLD_EXTENSIONS = 0            # hard cap — matches the validated backtest
+# Kept == max hold so it stays inert (max_hold is checked first in the elif
+# chain). SIZING_REVERSAL_BARS (45) now exceeds max hold, so signal_reversal
+# can no longer fire — consistent with the backtest, which produced no
+# signal_reversal exits at short holds.
+SIZING_STAGNATION_BARS = 30        # unreachable while == max hold (kept for tuning)
 SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
 CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
