@@ -96,23 +96,74 @@ def test_market_hours_weekday_open():
         assert loop._is_market_hours()
 
 
-def test_circuit_breaker_blocks_order():
-    """When trading is halted, _act_on_signal should return immediately."""
+def test_circuit_breaker_blocks_new_entry():
+    """When trading is halted, _act_on_signal blocks NEW entries (no open position)."""
     loop = _make_loop()
     loop._cb._halted = True
 
-    # _act_on_signal with halted CB should return without calling alpaca
     import asyncio
 
     async def run():
         sig = MagicMock(spec=EnsembleSignal)
         sig.ensemble_signal = 0.8
         sig.ticker = "AAPL"
-        await loop._act_on_signal(sig, 200.0)
+        # No open AAPL position — this is a new-entry attempt, must be blocked.
+        result = await loop._act_on_signal(sig, 200.0)
+        assert result is False
 
     asyncio.run(run())
     loop._alpaca.get_latest_quote.assert_not_called()
     loop._alpaca.submit_order.assert_not_called()
+
+
+def test_circuit_breaker_allows_exits_for_open_positions():
+    """When trading is halted, exits for existing positions must still fire.
+
+    Root cause of the MSCI stale-position incident (id 119, Jul 27–Aug 4):
+    _act_on_signal returned False before reaching exit evaluation, so
+    max_hold/stop_loss/trailing_stop were all suppressed during the halt.
+    """
+    import asyncio
+    from src.execution.position_manager import Position
+
+    loop = _make_loop()
+    loop._cb._halted = True
+    loop._sizing_mode = True
+
+    # Plant an open AAPL position past max_hold.
+    loop._pm._positions["AAPL"] = Position(ticker="AAPL", qty=10.0, avg_entry_price=190.0, side="long")
+    loop._bars_held["AAPL"] = 999  # well past SIZING_MAX_HOLD_BARS (30)
+    loop._entry_directions["AAPL"] = 1
+    loop._entry_prices["AAPL"] = 190.0
+    loop._peak_prices["AAPL"] = 200.0
+
+    submitted: list = []
+    async def fake_submit(req):
+        submitted.append(req)
+        m = MagicMock()
+        m.status = "filled"
+        m.filled_avg_price = 200.0
+        m.filled_at = None
+        return m
+
+    loop._alpaca.submit_order = AsyncMock(side_effect=fake_submit)
+    loop._alpaca.get_latest_quote = AsyncMock(return_value={"mid": 200.0})
+
+    async def run():
+        sig = MagicMock(spec=EnsembleSignal)
+        sig.ticker = "AAPL"
+        sig.ensemble_signal = 0.0
+        sig.lgbm_pred_return = 0.0
+        sig.lgbm_dir_prob = 0.5
+        sig.plain_english = MagicMock(return_value="max_hold exit")
+        await loop._act_on_signal(sig, 200.0)
+
+    asyncio.run(run())
+    # The exit order must have been submitted despite the halt.
+    assert len(submitted) == 1, (
+        "Exit order was NOT submitted during a halt — stale-position trap reproduced. "
+        f"H13 fix required. submitted={submitted}"
+    )
 
 
 def test_position_size_respects_cap():

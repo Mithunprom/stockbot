@@ -1976,11 +1976,15 @@ class SignalLoop:
         Returns True only when a new entry order FILLED (used by the per-tick
         entry cap); exits and skips return False.
         """
-        if self._cb.is_halted:
-            return False
-
         ticker = sig.ticker
         has_position = ticker in self._pm._positions
+
+        # A halt blocks NEW entries only. Exits (stop_loss, trailing_stop,
+        # max_hold, take_profit) must still fire to limit losses on existing
+        # positions — suppressing them is what trapped MSCI for 8 days after
+        # the Jul 28 max_drawdown halt (id 119, entered Jul 27).
+        if self._cb.is_halted and not has_position:
+            return False
 
         # A/B conflict prevention: skip entry if the OTHER pipeline holds this ticker
         if not has_position and self._other_pm is not None:
