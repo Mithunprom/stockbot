@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). BOT HALTED (max_drawdown CB since Jul 28). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 RESET (n=0 on v0.6.0). W32 review complete.",
- "last_iteration_date": "2026-08-03",
- "active_hypothesis": "IMPROVING: 5/6 stale positions resolved at Mon Aug 3 open (15:25 UTC sentinel). AMAT/TSLA/PLTR/INTC/AVGO closed. MSCI (id 119, Jul 27) still stale \u2014 1 open position in DB and broker. Sentinel still CRITICAL on stale_open_rows but improving. W32 review complete (owner). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
+ "last_iteration_date": "2026-08-04",
+ "active_hypothesis": "ZOMBIE POSITION: MSCI (id 119, entered Jul 27 13:40 UTC) survived full Monday session without exit. 8+ calendar days open as of Aug 4. 5/6 stale positions resolved at Mon open; MSCI alone persists. max_hold=30 did not fire for this position. db_vs_broker reconciles (broker also shows open). No auto-repair path \u2014 requires manual DB surgery and/or broker close. Sentinel CRITICAL (stale_open_rows). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,7 +14,7 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-03T21:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-04T08:25:00Z",
   "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
@@ -22,7 +22,7 @@
    {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"}
   ],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
-  "integrity_sentinel_critical_note": "MSCI (id 119, entered Jul 27) survived full Monday trading session — still open at 21:25 UTC (after US market close ~21:00 UTC). 7 calendar days open. db_vs_broker shows 1 open position (broker agrees MSCI is open). 5 other positions resolved at Mon open; MSCI alone persists. Sentinel detail: 'orphan recovery matches newest-first and will never close these' — MSCI is not a DB-only orphan (broker also shows it open), so no auto-repair path exists. Possible: position was never touched by max_hold exit logic (bars_held recovery or halt blocking). Owner must manually close MSCI at broker AND update DB record, or investigate why max_hold=30 did not fire for this position. Escalation risk: Tuesday open exposure if not resolved.",
+  "integrity_sentinel_critical_note": "ZOMBIE POSITION — MSCI (id 119, entered Jul 27 13:40 UTC) now 8+ calendar days open. Survived full Monday Aug 3 US session without exit. Confirmed still stale at Aug 4 08:25 UTC morning sentinel. db_vs_broker: broker and DB both show open (not an orphan — no auto-repair path). max_hold=30 did not fire for this position despite 5 others exiting at Mon open. Likely cause: bars_held counter lost on redeploy with halt active; position entered before v0.6.0 max_hold change; or halt blocked all exit logic including max_hold. THIS IS A GENUINE ZOMBIE. Owner must: (1) check broker MSCI position status, (2) if open at broker, decide to close or hold, (3) update DB record (set action=close or orphan) so sentinel clears, (4) investigate why max_hold=30 did not fire for this trade. Day 2 post-discovery. Tuesday open exposure ongoing.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
@@ -198,7 +198,6 @@
    "blocked_note": "needs_data_run on Railway; implement AFTER H0 baseline is established"
   },
   {
-   {
    "id": "H10",
    "hypothesis": "Shorter max-hold (~260 bars / 2-3h) beats the 390-bar 1-day hold by cutting overnight-gap losers",
    "status": "SUPERSEDED \u2014 v0.6.0 deployed max_hold=30 (30 min), even shorter than H10's 260-bar proposal. The core fix is live. The return-calc reconciliation bug (preliminary finding) is addressed in PR #27 (H10 return reconciliation fix). No separate backtest phase needed.",
@@ -239,6 +238,12 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-04",
+   "hypothesis_id": "MORNING_CHECK_AUG04",
+   "result": "MONITORING — MSCI (id 119) ZOMBIE POSITION confirmed. Sentinel timestamp 2026-08-04T08:25:00Z. Status CRITICAL (stale_open_rows). MSCI entered Jul 27 13:40 UTC — now 8+ calendar days open. Survived full Monday US session (Aug 3) without exit. db_vs_broker: broker and DB both agree open (not an orphan). max_hold=30 did not fire. No auto-repair path. Owner notification sent. Railway worker still blocked week 6. Bot still HALTED. M2 v0.6.0 n=0.",
+   "files_changed": ["agent_state.json"]
+  },
   {
    "date": "2026-08-03",
    "hypothesis_id": "W32_PROGRAM_REVIEW",
