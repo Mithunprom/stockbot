@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). BOT HALTED (max_drawdown CB since Jul 28). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 RESET (n=0 on v0.6.0). W32 review complete.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT HALTED (max_drawdown CB since Jul 28). v0.6.1 DEPLOYED. M2 RESET (n=0 on v0.6.0). W32 review complete. H13 BUG-FIX PR #31 OPEN (exit-suppression during halt). MSCI zombie (id 119) root cause fixed in PR #31.",
  "last_iteration_date": "2026-08-04",
- "active_hypothesis": "ZOMBIE POSITION: MSCI (id 119, entered Jul 27 13:40 UTC) survived full Monday session without exit. 8+ calendar days open as of Aug 4. 5/6 stale positions resolved at Mon open; MSCI alone persists. max_hold=30 did not fire for this position. db_vs_broker reconciles (broker also shows open). No auto-repair path \u2014 requires manual DB surgery and/or broker close. Sentinel CRITICAL (stale_open_rows). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
+ "active_hypothesis": "H13 IMPLEMENTED \u2014 PR #31 OPEN. Root cause of MSCI stale-position trap confirmed: _act_on_signal returned False on line 1979 before has_position check, suppressing ALL exits (stop_loss/trailing_stop/max_hold/take_profit) during circuit-breaker halt. Fix: halt guard moved to block entries only (has_position=False). BUG FIX class \u2014 M2 clock does NOT reset. 2 new tests (229 total). MSCI (id 119) still open in DB+broker \u2014 will exit at next tick once halt lifted (bars_held >> 30). Live data (Aug 3 snapshot): n_closed=100, 1 open (MSCI). Kelly fraction=-1.1741 (probation). Sentinel CRITICAL (stale_open_rows: MSCI). Railway worker still blocked week 7.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -70,6 +70,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H13",
+   "hypothesis": "Exit-only operation during circuit breaker halt: when is_halted, block new entries only (has_position=False), not exits for existing positions. The halt guard at _act_on_signal:1979 returned False before the has_position check, suppressing stop_loss/trailing_stop/max_hold/take_profit during the Jul 28 max_drawdown halt — root cause of the MSCI 8-day trap.",
+   "test": "2 unit tests: test_circuit_breaker_blocks_new_entry (entry blocked) + test_circuit_breaker_allows_exits_for_open_positions (max_hold fires). Both pass in sandbox. No Railway data run needed — unit-level coverage is sufficient.",
+   "status": "implemented — PR #30 (OPEN) 2026-08-04",
+   "added": "2026-08-04",
+   "added_by": "nightly desk — MSCI stale-position root-cause analysis",
+   "classification": "BUG FIX — safety/risk-control class. M2 clock does NOT reset. No strategy behavior change. Exits that should fire now actually fire.",
+   "pr_branch": "feat/rnd-H13-halt-aware-exits",
+   "pr_number": 30,
+   "pr_state": "OPEN — ready to merge. No Railway backtest needed (unit test coverage sufficient; no thresholds/parameters changed)."
+  },
   {
    "id": "H0",
    "hypothesis": "Production-baseline walk-forward backtest \u2014 the reference every H1-H7 comparison requires (also unblocks M2 attribution)",
@@ -240,6 +252,20 @@
  "completed_iterations": [
   {
    "date": "2026-08-04",
+   "hypothesis_id": "H13",
+   "result": "IMPLEMENTED — PR #31 OPEN. Safety bug fix: _act_on_signal (signal_loop.py:1979) returned False immediately on halt before checking has_position, suppressing all exits (stop_loss, trailing_stop, max_hold, take_profit) for open positions during a circuit-breaker halt. This is the root cause of the MSCI stale-position trap (id 119, Jul 27–Aug 4). Fix: moved halt guard to block only new entries (not has_position). 2 new tests added: test_circuit_breaker_blocks_new_entry (verifies entries still blocked) and test_circuit_breaker_allows_exits_for_open_positions (verifies exits fire during halt). 229 total tests, 9 pre-existing sandbox failures (yfinance/config), 0 new failures. BUG FIX class — M2 clock does NOT reset. Live snapshot: n_closed=100 (was 99 Jul 31, +1 since Aug 3 batch), 1 open (MSCI). Kelly=-1.1741. Sentinel CRITICAL (MSCI stale). Railway worker week 7 still blocked.",
+   "tests_status": "229 total, 217 passed, 9 pre-existing sandbox failures (yfinance/config), 3 skipped, 0 new failures",
+   "new_tests": 2,
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 31,
+   "pr_branch": "feat/rnd-H13-halt-aware-exits"
+  },
+  {
+   "date": "2026-08-04",
    "hypothesis_id": "MORNING_CHECK_AUG04",
    "result": "MONITORING — MSCI (id 119) ZOMBIE POSITION confirmed. Sentinel timestamp 2026-08-04T08:25:00Z. Status CRITICAL (stale_open_rows). MSCI entered Jul 27 13:40 UTC — now 8+ calendar days open. Survived full Monday US session (Aug 3) without exit. db_vs_broker: broker and DB both agree open (not an orphan). max_hold=30 did not fire. No auto-repair path. Owner notification sent. Railway worker still blocked week 6. Bot still HALTED. M2 v0.6.0 n=0.",
    "files_changed": ["agent_state.json"]
@@ -355,8 +381,9 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL] Lift the halt: /admin/resume-trading. v0.6.1 persists immediately. 6 stale positions flush at first tick (max_hold=30). M2 v0.6.0 window starts accumulating trades.",
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 6] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 12 hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 CRITICAL] Merge PR #30 (H13 halt-aware exits, BUG FIX). Ensures stop_loss/trailing_stop/max_hold fire during future halts. Resolves root cause of MSCI 8-day trap.",
+  "[OWNER ACTION \u2014 CRITICAL] Lift the halt: /admin/resume-trading. v0.6.1 persists immediately. MSCI (id 119) flushes at first tick via max_hold (bars_held >> 30). M2 v0.6.0 window starts accumulating trades.",
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 7] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 12 hypothesis validations and CODE RED data_run exit criterion.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",
   "[OWNER ACTION \u2014 LOW] Formally log v0.5.0 LGBM classification as bug-fix. M2 clock resets from v0.6.0 regardless; close the open question.",
@@ -395,7 +422,7 @@
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (6 positions reconcile). Criterion 1 of 3 satisfied.",
    "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok",
-   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (4 consecutive weeks outstanding). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H11 validations."
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (7 consecutive weeks outstanding as of 2026-08-04). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H13 validations."
   }
  }
 }
