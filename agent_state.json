@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). BOT HALTED (max_drawdown CB since Jul 28). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 RESET (n=0 on v0.6.0). W32 review complete.",
- "last_iteration_date": "2026-08-04",
- "active_hypothesis": "ZOMBIE POSITION: MSCI (id 119, entered Jul 27 13:40 UTC) survived full Monday session without exit. 8+ calendar days open as of Aug 4. 5/6 stale positions resolved at Mon open; MSCI alone persists. max_hold=30 did not fire for this position. db_vs_broker reconciles (broker also shows open). No auto-repair path \u2014 requires manual DB surgery and/or broker close. Sentinel CRITICAL (stale_open_rows). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). HALT LIFTED (Aug 4 \u2014 diagnostics circuit_breaker_halted: false). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 n=0 clean entries. H13 IMPLEMENTED (halt allows exits, blocks entries). MSCI zombie still open \u2014 expected to self-resolve Aug 5 open.",
+ "last_iteration_date": "2026-08-05",
+ "active_hypothesis": "H13 IMPLEMENTED: Fix circuit-breaker halt logic to allow exits on open positions (blocks new entries only). Root cause of MSCI zombie (id 119, 9+ calendar days open): signal_loop.py line 1979 did blanket `if self._cb.is_halted: return False` BEFORE checking has_position, blocking all exit logic (max_hold, stop-loss, trailing-stop) for the full Jul 28\u2013Aug 4 halt period. Fix: `if self._cb.is_halted and not has_position: return False`. Two tests: test_circuit_breaker_blocks_order (updated), test_halt_allows_exits_blocks_entries (new). Bug-fix class \u2014 exempt from freeze. PR pending.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -27,7 +27,8 @@
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
   "h5_status_note": "H5 (hold extension) effectively disabled by v0.6.0: MAX_HOLD_EXTENSIONS=0. Extension logic kept in code and covered by tests but will never fire. The 30-bar cap + 2 extensions would be 90 bars, back in the IC≈0.06 region. H5 needs re-evaluation under the new horizon.",
-  "circuit_breaker_halted": true,
+  "circuit_breaker_halted": false,
+  "circuit_breaker_halted_lifted": "2026-08-04",
   "circuit_breaker_halt_reason": "max_drawdown",
   "circuit_breaker_halted_since": "2026-07-28",
   "n_open_positions_jul31": 6,
@@ -37,14 +38,18 @@
   "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD. halt_state lost on every redeploy (CLAUDE.md violation — deploy must not re-enable trading after halt). Tests: test_risk_state_persistence.py added (276 lines).",
   "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start. Self-heals understated peak from prior restarts. Prevents drawdown baseline from resetting to 0 after any deploy.",
   "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Staleness fix = freeze-exempt. Model promotion classification (bug-fix vs strategy-change) pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy.",
-  "all_time_n_closed": 99,
-  "all_time_n_closed_note": "Updated Jul 31: +3 since Jul 27 (NFLX +$349, WDC -$804, MU -$435). Was 96.",
+  "all_time_n_closed": 104,
+  "all_time_n_closed_note": "Updated Aug 3: +5 since Jul 31 (AVGO, INTC, PLTR, TSLA, AMAT exited at Aug 3 market open via max_hold after halt lifted). Was 99. MSCI (id 119) still open.",
   "all_time_win_rate": 0.458,
   "all_time_pf_stored": 0.77,
   "all_time_pf_fill_corrected": 0.860,
   "trailing_30_pf_stored": 0.60,
   "trailing_30_pf_fill_corrected": 0.864,
   "trailing_30_win_rate": 0.433,
+  "kelly_fraction_aug4": -1.1741,
+  "kelly_fraction_aug4_note": "14 trades in 10-day window (Jul 27-Aug 5). 6 wins p=0.429, 8 losses. avg_win=1.944%, avg_loss=5.453%. b=0.357. K=(0.429*0.357-0.571)/0.357=-1.174. Driven by 4 large losses from Jul 24-28 (MU -1161, INTC -1148, FLEX -785, SMCI -677) — pre-v0.6.0 max_hold=390 era. These fall out of 10-day window Aug 6-7. Kelly will self-heal to positive territory. Bot remains in Kelly probation mode; no new entries until Kelly > 0.",
+  "m2_v060_n_clean": 0,
+  "m2_v060_n_clean_note": "No new positions entered since v0.6.0 deploy (Aug 2) — bot was halted, 5 pre-deploy positions exited Aug 3 under v0.6.0 max_hold but were ENTERED before the deploy. Clean M2 measurement (entries on v0.6.0) starts at 0. Kelly probation further suppresses entries. M2 gate: n>=100 clean entries.",
   "frozen_config_n": 35,
   "frozen_config_win_rate": 0.400,
   "frozen_config_pf": 0.636,
@@ -223,6 +228,20 @@
    "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required)"
   },
   {
+   "id": "H13",
+   "hypothesis": "Fix circuit-breaker halt to block new entries only — exits must always fire. Blanket `if self._cb.is_halted: return False` in _act_on_signal (line 1979, pre-fix) fires before has_position is checked, blocking all exit logic (max_hold, stop-loss, trailing-stop, take-profit) during the full halt period. Root cause of MSCI zombie (id 119, Jul 27–Aug 5 2026): 5 other positions exited Aug 3 when halt was lifted; MSCI alone persisted because bars_held=0 after market-close restart, and second tick sets bars_held via _recover_entry_state. Fix: move ticker/has_position assignment before halt check, then gate halt on `not has_position`.",
+   "fix": "if self._cb.is_halted and not has_position: return False",
+   "status": "implemented — 2026-08-05",
+   "classification": "bug_fix — exempt from freeze",
+   "test": "n/a (pure infrastructure bug fix, no strategy change)",
+   "evidence": "MSCI (id 119) open 9+ calendar days. 5 other stale positions (AVGO, INTC, PLTR, TSLA, AMAT) exited Aug 3 when halt was lifted; MSCI alone persisted due to bars_held=0 on restart while halted.",
+   "tests_added": ["test_halt_allows_exits_blocks_entries", "test_circuit_breaker_blocks_order (updated docstring)"],
+   "added": "2026-08-05",
+   "added_by": "nightly desk — root cause analysis of MSCI zombie + halt-lifted diagnostics Aug 4",
+   "pr_branch": "feat/rnd-H13-halt-allows-exits",
+   "pr_state": "pending"
+  },
+  {
    "id": "H11",
    "hypothesis": "Re-enabling the per-ticker IC-block gate (30d window, drop `since`) improves PnL by refusing chronically wrong names (MU -0.27, RTX -0.48)",
    "status": "implemented \u2014 PR #26 (DRAFT) 2026-07-29",
@@ -238,6 +257,19 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-05",
+   "hypothesis_id": "H13",
+   "result": "IMPLEMENTED — H13: Fix circuit-breaker halt to allow exits on open positions. Bug: _act_on_signal line 1979 blanket `if self._cb.is_halted: return False` blocked ALL signal processing including exits during the Jul 28–Aug 4 halt. Root cause of MSCI zombie (id 119, 9+ calendar days). Fix: `if self._cb.is_halted and not has_position: return False`. Exempt from freeze (bug fix). Tests: 2 new/updated. Baseline suite: 9 pre-existing failures (yfinance, market regime mock) unchanged. H13 tests PASS. All-time n=104 (+5 Aug 3 exits). Halt lifted Aug 4. Kelly=-1.174 (self-heals Aug 6-7 when large Jul losses exit 10d window). M2 clean n=0 (no new entries since Aug 2 deploy). MSCI expected to self-resolve Aug 5 open (2nd tick after sync_from_broker re-loads position, bars_held recovers to 2730+, max_hold fires). PR branch: feat/rnd-H13-halt-allows-exits.",
+   "tests_status": "217 passed / 9 pre-existing failures (unchanged) / 3 skipped. H13 tests: PASS (test_circuit_breaker_blocks_order, test_halt_allows_exits_blocks_entries).",
+   "new_tests": 2,
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-H13-halt-allows-exits"
+  },
   {
    "date": "2026-08-04",
    "hypothesis_id": "EOD_CHECK_AUG04",
@@ -361,7 +393,8 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL] Lift the halt: /admin/resume-trading. v0.6.1 persists immediately. 6 stale positions flush at first tick (max_hold=30). M2 v0.6.0 window starts accumulating trades.",
+  "[DESK \u2014 DONE] Halt lifted (Aug 4 \u2014 diagnostics confirmed). H13 deployed as PR. 5 pre-deploy positions exited Aug 3. MSCI (id 119) still open \u2014 expected to self-resolve Aug 5 market open.",
+  "[OWNER ACTION \u2014 CHECK] MSCI (id 119): verify broker shows closed after Aug 5 open. If still open, close manually and update DB. H13 fix prevents future zombies but cannot retroactively close this one \u2014 it requires the bot to run a tick with the position in memory.",
   "[OWNER ACTION \u2014 CRITICAL, WEEK 6] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 12 hypothesis validations and CODE RED data_run exit criterion.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",

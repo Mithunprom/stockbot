@@ -97,11 +97,11 @@ def test_market_hours_weekday_open():
 
 
 def test_circuit_breaker_blocks_order():
-    """When trading is halted, _act_on_signal should return immediately."""
+    """When trading is halted, new entries are blocked (no position)."""
     loop = _make_loop()
     loop._cb._halted = True
 
-    # _act_on_signal with halted CB should return without calling alpaca
+    # AAPL is not in _pm._positions → treated as a new entry → must be blocked
     import asyncio
 
     async def run():
@@ -113,6 +113,58 @@ def test_circuit_breaker_blocks_order():
     asyncio.run(run())
     loop._alpaca.get_latest_quote.assert_not_called()
     loop._alpaca.submit_order.assert_not_called()
+
+
+def test_halt_allows_exits_blocks_entries():
+    """Halted CB must block new entries but allow exits on open positions.
+
+    Root cause of MSCI zombie (id 119, Jul 27–Aug 5 2026): the original
+    blanket `if self._cb.is_halted: return False` fired before has_position
+    was checked, preventing max_hold/stop-loss exits for the entire halt period.
+    """
+    import asyncio
+    from unittest.mock import patch
+    from src.execution.position_manager import Position
+
+    # ── Case 1: open position during halt → exit logic must proceed ────────────
+    loop = _make_loop()
+    loop._cb._halted = True
+
+    fake_pos = Position(
+        ticker="MSCI",
+        side="long",
+        qty=10.0,
+        avg_entry_price=95.0,
+    )
+    loop._pm._positions["MSCI"] = fake_pos
+
+    async def run_with_position():
+        sig = MagicMock(spec=EnsembleSignal)
+        sig.ticker = "MSCI"
+        sig.ensemble_signal = -0.3
+        # Patch _check_sizing_exit to return None → "still holding" path,
+        # which increments bars_held — only reachable if halt check is bypassed.
+        with patch.object(loop, "_check_sizing_exit", return_value=None):
+            await loop._act_on_signal(sig, 100.0)
+
+    asyncio.run(run_with_position())
+    # bars_held incremented → function proceeded past the halt gate
+    assert loop._bars_held.get("MSCI", 0) == 1, (
+        "bars_held not updated: _act_on_signal returned early at the halt check"
+    )
+
+    # ── Case 2: no position during halt → entry must remain blocked ────────────
+    loop2 = _make_loop()
+    loop2._cb._halted = True
+
+    async def run_without_position():
+        sig = MagicMock(spec=EnsembleSignal)
+        sig.ticker = "AAPL"
+        sig.ensemble_signal = 0.8
+        await loop2._act_on_signal(sig, 200.0)
+
+    asyncio.run(run_without_position())
+    loop2._alpaca.submit_order.assert_not_called()
 
 
 def test_position_size_respects_cap():
