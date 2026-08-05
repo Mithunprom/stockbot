@@ -1976,11 +1976,14 @@ class SignalLoop:
         Returns True only when a new entry order FILLED (used by the per-tick
         entry cap); exits and skips return False.
         """
-        if self._cb.is_halted:
-            return False
-
         ticker = sig.ticker
         has_position = ticker in self._pm._positions
+
+        # Halt blocks NEW entries only — exits are risk-reduction and must always fire.
+        # Blanket halt caused the MSCI zombie (id 119, Jul 27–Aug 5 2026): CB triggered
+        # Jul 28 blocked all _act_on_signal calls, preventing max_hold exit for 9+ days.
+        if self._cb.is_halted and not has_position:
+            return False
 
         # A/B conflict prevention: skip entry if the OTHER pipeline holds this ticker
         if not has_position and self._other_pm is not None:
