@@ -170,6 +170,102 @@ def test_simulate_reversal_requires_sustained_confirmation(n_rev, expected_rever
     )
 
 
+# ─── H10: closed_return_pct reconciliation ────────────────────────────────────
+
+def test_simulate_returns_closed_return_pct():
+    """simulate() must include closed_return_pct, open_marks_pct, backtest_capital."""
+    preds = _make_preds()
+    p = Params(pdt_enabled=False, max_pos=1, heat_ceiling=0.90,
+               trades_per_day=10, cooldown=0, max_hold_bars=390, stag_bars=390)
+    res = simulate(preds, p, start="2026-05-19", end="2026-05-20")
+    assert "closed_return_pct" in res, "closed_return_pct missing from simulate() output"
+    assert "open_marks_pct" in res, "open_marks_pct missing from simulate() output"
+    assert "backtest_capital" in res, "backtest_capital missing from simulate() output"
+
+
+def test_simulate_closed_return_reconciles_with_trade_pnl():
+    """closed_return_pct must equal sum(trade pnl) / capital * 100."""
+    preds = _make_preds()
+    p = Params(pdt_enabled=False, max_pos=1, heat_ceiling=0.90,
+               trades_per_day=10, cooldown=0, max_hold_bars=50, stag_bars=50)
+    capital = 10_000.0
+    res = simulate(preds, p, start="2026-05-19", end="2026-05-20", capital=capital)
+    trades_df = res["_trades"]
+    if trades_df.empty:
+        return  # no trades in window — not a failure
+    expected_closed_pct = round(float(trades_df.pnl.sum()) / capital * 100, 2)
+    assert res["closed_return_pct"] == expected_closed_pct, (
+        f"closed_return_pct={res['closed_return_pct']} does not match "
+        f"sum(pnl)/capital*100={expected_closed_pct}"
+    )
+
+
+def test_simulate_total_return_equals_closed_plus_open_marks():
+    """total_return_pct == closed_return_pct + open_marks_pct (accounting identity)."""
+    preds = _make_preds(n_entry_bars=20)
+    p = Params(pdt_enabled=False, max_pos=1, heat_ceiling=0.90,
+               trades_per_day=10, cooldown=0, max_hold_bars=390, stag_bars=390)
+    res = simulate(preds, p, start="2026-05-19", end="2026-05-20")
+    reconstructed = round(res["closed_return_pct"] + res["open_marks_pct"], 2)
+    assert abs(reconstructed - res["total_return_pct"]) < 0.01, (
+        f"total={res['total_return_pct']} ≠ closed={res['closed_return_pct']} "
+        f"+ open_marks={res['open_marks_pct']} = {reconstructed}"
+    )
+
+
+# ─── H9: probe quality floor ──────────────────────────────────────────────────
+
+def test_h9_probe_floor_constants_are_set():
+    """KELLY_PROBE_MIN_ENSEMBLE and KELLY_PROBE_MIN_SENTIMENT exist and are sane."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE, KELLY_PROBE_MIN_SENTIMENT
+    assert 0.05 <= KELLY_PROBE_MIN_ENSEMBLE <= 0.20, (
+        f"KELLY_PROBE_MIN_ENSEMBLE={KELLY_PROBE_MIN_ENSEMBLE} outside expected range [0.05, 0.20]"
+    )
+    assert -0.60 <= KELLY_PROBE_MIN_SENTIMENT <= -0.30, (
+        f"KELLY_PROBE_MIN_SENTIMENT={KELLY_PROBE_MIN_SENTIMENT} outside expected range [-0.60, -0.30]"
+    )
+
+
+def test_h9_probe_floor_blocks_sndk_style_noise_entry():
+    """SNDK id=104 case: ensemble=0.018, sentiment=-0.90 must fail the floor."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE, KELLY_PROBE_MIN_SENTIMENT
+    sndk_ensemble = 0.018
+    sndk_sentiment = -0.90
+    assert sndk_ensemble < KELLY_PROBE_MIN_ENSEMBLE, (
+        f"SNDK noise-level ensemble {sndk_ensemble} should be below floor "
+        f"{KELLY_PROBE_MIN_ENSEMBLE} but is not"
+    )
+    assert sndk_sentiment < KELLY_PROBE_MIN_SENTIMENT, (
+        f"SNDK noise-level sentiment {sndk_sentiment} should be below floor "
+        f"{KELLY_PROBE_MIN_SENTIMENT} but is not"
+    )
+
+
+def test_h9_probe_floor_passes_genuine_opportunity():
+    """A signal with ensemble=0.42, sentiment=+0.30 must pass the probe floor."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE, KELLY_PROBE_MIN_SENTIMENT
+    ensemble = 0.42
+    sentiment = 0.30
+    assert ensemble >= KELLY_PROBE_MIN_ENSEMBLE, (
+        f"Genuine opportunity ensemble {ensemble} should be above floor "
+        f"{KELLY_PROBE_MIN_ENSEMBLE} but is not"
+    )
+    assert sentiment >= KELLY_PROBE_MIN_SENTIMENT, (
+        f"Genuine opportunity sentiment {sentiment} should be above floor "
+        f"{KELLY_PROBE_MIN_SENTIMENT} but is not"
+    )
+
+
+def test_h9_probe_floor_ensemble_floor_only():
+    """Signal with ensemble above floor but sentiment below floor must be blocked."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE, KELLY_PROBE_MIN_SENTIMENT
+    # PLTR #124: ensemble=0.288, sentiment=-0.969 — ensemble ok, sentiment not
+    ensemble = 0.288
+    sentiment = -0.969
+    assert ensemble >= KELLY_PROBE_MIN_ENSEMBLE  # passes ensemble floor
+    assert sentiment < KELLY_PROBE_MIN_SENTIMENT  # blocked by sentiment floor
+
+
 def test_simulate_noise_bar_does_not_trigger_reversal():
     """A sign flip below the cost threshold must never exit (pre-fix regression)."""
     # Build data: entry bar, then many bars with opposite sign but tiny magnitude

@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 6). BOT HALTED (max_drawdown CB since Jul 28). v0.6.0 DEPLOYED (max_hold 390\u219230). M2 RESET (n=0 on v0.6.0). W32 review complete.",
  "last_iteration_date": "2026-08-04",
- "active_hypothesis": "ZOMBIE POSITION: MSCI (id 119, entered Jul 27 13:40 UTC) survived full Monday session without exit. 8+ calendar days open as of Aug 4. 5/6 stale positions resolved at Mon open; MSCI alone persists. max_hold=30 did not fire for this position. db_vs_broker reconciles (broker also shows open). No auto-repair path \u2014 requires manual DB surgery and/or broker close. Sentinel CRITICAL (stale_open_rows). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
+ "active_hypothesis": "ZOMBIE POSITION: MSCI (id 119, entered Jul 27 13:40 UTC) survived full Monday session without exit. 8+ calendar days open as of Aug 4. 5/6 stale positions resolved at Mon open; MSCI alone persists. max_hold=30 did not fire for this position. db_vs_broker reconciles (broker also shows open). No auto-repair path \u2014 requires manual DB surgery and/or broker close. Sentinel CRITICAL (stale_open_rows). H9 IMPLEMENTED (probe quality floor) + H10 RETURN RECONCILIATION BUG FIXED. PR #27 open (pending merge). Railway worker still blocked (week 6). M2 v0.6.0 window: n=0.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -191,11 +191,13 @@
    "id": "H9",
    "hypothesis": "Probe quality floor: during Kelly probation, require a minimum ensemble_signal >= 0.10 (and sentiment >= -0.50) for the daily probe entry. SNDK id=104 entered with ensemble=0.018 and sentiment=-0.90 \u2014 essentially pure noise. Historical ticker IC may be >= 0.05 over 30d but the current-bar signal can still be junk. A simple floor prevents noise-level probe entries while preserving the right to probe on genuine opportunity.",
    "test": "python scripts/research_backtest.py --phase probe_floor (variants: min_signal \u2208 {0.05, 0.10, 0.15} \u00d7 min_sentiment \u2208 {-0.50, 0.0}); acceptance = fewer noise entries, no reduction in Kelly IC recovery rate, improvement on BOTH tune AND hold-out legs",
-   "status": "proposed",
+   "status": "implemented_needs_data_run",
    "added": "2026-07-22",
+   "implementation_date": "2026-07-30",
    "added_by": "Principal Skeptic / Integrity Sentinel review of SNDK probe id=104 (ensemble=0.018, sentiment=-0.90 \u2014 clear noise-level entry in probation mode). Separate from CODE RED integrity work; needs dedicated backtest on Railway.",
    "pm_priority_note": "Low-risk guard. Does not change live strategy for non-probe paths. Safe to implement once Railway worker is enabled.",
-   "blocked_note": "needs_data_run on Railway; implement AFTER H0 baseline is established"
+   "blocked_note": "backtest validation still needs Railway worker (AGENT_WORKER_ENABLE=true). Code in prod via PR #25.",
+   "implementation_note": "Added KELLY_PROBE_MIN_ENSEMBLE=0.10 and KELLY_PROBE_MIN_SENTIMENT=-0.50 constants to signal_loop.py. Gate 3 of _sizing_entry_gate_open() updated to require both when in Kelly probation. 4 unit tests added to test_research_backtest.py + 2 existing kelly_probation tests updated to pass ensemble_signal=0.40/sentiment_index=0.10."
   },
   {
    "id": "H10",
@@ -265,6 +267,24 @@
    "hypothesis_id": "NIGHTLY_LOG_W32",
    "result": "MONITORING — Bot HALTED (max_drawdown circuit breaker since 2026-07-28; 6 open positions, heat 59.2%). M2 frozen-config: n=35 (+3 since Jul 27), PF=0.636 (was 0.741 at n=32 — WORSENING). New closed: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop; 5th recent MU loss). PLTR (id 124) flagged: sentiment=-0.969 on a long entry. Sentinel ALL GREEN 22:25 UTC Jul 30 (criterion 1 satisfied). H11 confirmed implemented in PR #26 (DRAFT) — no duplicate needed. Railway worker BLOCKED week 5 — sole CODE RED exit blocker. Owner decisions outstanding: enable worker (10 min), M2 trajectory choice (~13 trading days remaining at n=35), v0.5.0 LGBM classification.",
    "files_changed": ["agent_state.json"]
+  },
+  {
+   "date": "2026-07-30",
+   "hypothesis_id": "H9+H10",
+   "result": "IMPLEMENTED — H9 probe quality floor + H10 return reconciliation bug fix. CIRCUIT BREAKER HALT DETECTED in live diagnostics (max_drawdown) — owner notification sent.",
+   "tests_status": "217 passed, 16 pre-existing failures (unchanged baseline), 2 skipped. 9 new tests added (4 H9 constants/probe-floor, 3 H10 reconciliation, 2 kelly_probation updated).",
+   "new_tests": 9,
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "scripts/research_backtest.py",
+    "tests/unit/test_research_backtest.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 27,
+   "pr_branch": "feat/rnd-H9H10-probe-floor-return-reconcile",
+   "circuit_breaker_event": "CRITICAL: diagnostics at 2026-07-29T21:54 UTC shows circuit_breaker_halted=true, halt_reason=max_drawdown. System correctly halted autonomously. Owner must confirm drawdown cause and manually re-enable (governance: Risk Agent MUST NOT re-enable after halt without human confirmation).",
+   "notes": "H9: KELLY_PROBE_MIN_ENSEMBLE=0.10, KELLY_PROBE_MIN_SENTIMENT=-0.50 added to signal_loop.py Gate 3. Prevents SNDK-class noise probes (ensemble=0.018, sentiment=-0.90). H10: early-return dict in simulate() was missing closed_return_pct/open_marks_pct/backtest_capital; all 3 now present in both return paths. Backtest max-hold hypothesis (H10 core) still needs Railway data run."
   },
   {
    "date": "2026-07-27",

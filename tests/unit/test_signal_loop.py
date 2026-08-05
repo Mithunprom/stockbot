@@ -244,6 +244,8 @@ def test_kelly_probation_allows_single_probe():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.40   # above H9 probe floor (KELLY_PROBE_MIN_ENSEMBLE)
+    sig.sentiment_index = 0.10   # above H9 probe floor (KELLY_PROBE_MIN_SENTIMENT)
 
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
@@ -279,6 +281,8 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.40   # above H9 probe floor (KELLY_PROBE_MIN_ENSEMBLE)
+    sig.sentiment_index = 0.10   # above H9 probe floor (KELLY_PROBE_MIN_SENTIMENT)
 
     # 7d block cache full & positive, but probe cache empty → still blocked
     loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
