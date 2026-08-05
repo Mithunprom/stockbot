@@ -14,7 +14,7 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-04T08:25:00Z",
+  "integrity_sentinel_last_run": "2026-08-04T21:25:00Z",
   "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
@@ -22,7 +22,7 @@
    {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"}
   ],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
-  "integrity_sentinel_critical_note": "ZOMBIE POSITION — MSCI (id 119, entered Jul 27 13:40 UTC) now 8+ calendar days open. Survived full Monday Aug 3 US session without exit. Confirmed still stale at Aug 4 08:25 UTC morning sentinel. db_vs_broker: broker and DB both show open (not an orphan — no auto-repair path). max_hold=30 did not fire for this position despite 5 others exiting at Mon open. Likely cause: bars_held counter lost on redeploy with halt active; position entered before v0.6.0 max_hold change; or halt blocked all exit logic including max_hold. THIS IS A GENUINE ZOMBIE. Owner must: (1) check broker MSCI position status, (2) if open at broker, decide to close or hold, (3) update DB record (set action=close or orphan) so sentinel clears, (4) investigate why max_hold=30 did not fire for this trade. Day 2 post-discovery. Tuesday open exposure ongoing.",
+  "integrity_sentinel_critical_note": "ZOMBIE POSITION — MSCI (id 119, entered Jul 27 13:40 UTC) now 8+ calendar days open. Survived BOTH Monday Aug 3 AND Tuesday Aug 4 full US sessions without exit. Latest sentinel: 2026-08-04T21:25:00Z — still critical. db_vs_broker: broker and DB both show open (not an orphan — no auto-repair path). max_hold=30 did not fire for this position across 2 trading days since 5 others exited. Likely cause: bars_held counter lost on redeploy with halt active; halt may be blocking all exit logic including max_hold. Owner not yet acknowledged (no commits since Aug 4 morning notification 49fb51c). Second notification sent EOD Aug 4. THIS IS A GENUINE ZOMBIE. Owner must: (1) check broker MSCI position status, (2) if open at broker, close it manually, (3) update DB record (set action=close or orphan) so sentinel clears. No auto-repair path exists. Wednesday open exposure ongoing.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
@@ -240,6 +240,12 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-04",
+   "hypothesis_id": "EOD_CHECK_AUG04",
+   "result": "MONITORING — MSCI (id 119) still open at EOD Aug 4 (21:25 UTC sentinel). Survived BOTH Monday and Tuesday full US sessions without exit. 8+ calendar days open (entered Jul 27). db_vs_broker reconciles — broker and DB both show open. No auto-repair path. Owner has not acknowledged (no git commits since morning check 49fb51c). Second PushNotification sent EOD. Railway worker week 6. Bot HALTED. M2 n=0.",
+   "files_changed": ["agent_state.json"]
+  },
   {
    "date": "2026-08-04",
    "hypothesis_id": "MORNING_CHECK_AUG04",
