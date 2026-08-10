@@ -1041,7 +1041,27 @@ class SignalLoop:
                     continue
                 price = prices.get(ticker, 0.0)
                 if price <= 0:
-                    continue
+                    # No OHLCV row — the bar poller is universe-driven, so a
+                    # position whose ticker was rotated out of the universe has
+                    # no price here and used to `continue` forever, making the
+                    # position unexitable (MSCI, 13 days). Fall back to the
+                    # broker's own mark, which is authoritative and always
+                    # present for a real position.
+                    pos_obj = self._pm._positions.get(ticker)
+                    price = float(getattr(pos_obj, "last_price", 0.0) or 0.0)
+                    if price <= 0:
+                        logger.warning(
+                            "exit_check_skipped_no_price",
+                            ticker=ticker,
+                            note="no OHLCV row and no broker mark — cannot exit",
+                        )
+                        continue
+                    logger.info(
+                        "exit_price_from_broker_mark",
+                        ticker=ticker,
+                        price=price,
+                        note="ticker outside universe — using broker mark",
+                    )
                 sig = sig_by_ticker.get(ticker)
                 if sig is None:
                     # Create a minimal signal for exit checking
@@ -1091,8 +1111,11 @@ class SignalLoop:
                         )
                         await self._act_on_signal(sig, price, feat_np, regime=regime)
 
-        # 5. Sync position state from broker (catches fills we missed)
+        # 5. Sync position state from broker (catches fills we missed).
+        #    _refresh_owned_tickers FIRST — sync drops non-universe tickers
+        #    unless it knows we own them, and a dropped position is unexitable.
         try:
+            await self._refresh_owned_tickers()
             await self._pm.sync_from_broker(self._alpaca)
             await self._recover_entry_state()
         except Exception as exc:
@@ -1370,6 +1393,43 @@ class SignalLoop:
             self._daytrade_count = int(account.get("daytrade_count", 0) or 0)
         except Exception as exc:
             logger.warning("daytrade_count_refresh_failed", error=str(exc))
+
+    async def _refresh_owned_tickers(self) -> None:
+        """Tell the PositionManager which tickers we hold per the ledger.
+
+        Must run BEFORE sync_from_broker: without it, sync drops any broker
+        position whose ticker the screener has rotated out of the universe, and
+        because the exit path iterates _positions that position can never close
+        (MSCI, open 13 days with $12.6k stranded). Scoped by pipeline_id so an
+        A/B run still can't claim the other pipeline's positions.
+
+        Fails open — on a DB error we leave the previous set in place rather
+        than clearing it, since clearing would re-expose the orphan bug.
+        """
+        from sqlalchemy import select as _sel
+
+        from src.data.db import Trade as _T
+
+        try:
+            async with self._sf() as session:
+                rows = (await session.execute(
+                    _sel(_T.ticker).where(
+                        _T.exit_time.is_(None),
+                        _T.pipeline_id == self._pipeline_id,
+                    )
+                )).scalars().all()
+            owned = {t.upper() for t in rows}
+            self._pm.set_owned_tickers(owned)
+            outside = owned - set(self._universe)
+            if outside:
+                logger.info(
+                    "owned_tickers_outside_universe",
+                    tickers=sorted(outside),
+                    note="held but rotated out of the screener universe — "
+                         "kept syncable so they remain exitable",
+                )
+        except Exception as exc:
+            logger.warning("owned_tickers_refresh_failed", error=str(exc))
 
     async def _recover_entry_state(self) -> None:
         """Rebuild entry dates/prices for broker positions we lost track of.

@@ -75,8 +75,17 @@ class PositionManager:
 
         self._positions: dict[str, Position] = {}
         self._managed_tickers: set[str] = set()   # positions opened by signal loop
+        # Tickers with an OPEN ledger row for this pipeline. These are synced
+        # from the broker even after the screener rotates them out of the
+        # universe — see sync_from_broker. Set by SignalLoop from the DB, so it
+        # survives redeploys (unlike _managed_tickers, which is in-process).
+        self._owned_tickers: set[str] = set()
         self._daily_returns: list[float] = []
         self._peak_value = initial_portfolio
+
+    def set_owned_tickers(self, tickers: set[str] | list[str]) -> None:
+        """Declare tickers we hold per the ledger, regardless of universe."""
+        self._owned_tickers = {t.upper() for t in tickers}
 
     # ── Position tracking ─────────────────────────────────────────────────────
 
@@ -272,7 +281,20 @@ class PositionManager:
             skipped = 0
             for pos in broker_positions:
                 ticker = pos["ticker"]
-                if self._universe and ticker not in self._universe:
+                # NEVER drop a position we actually hold. The universe filter
+                # exists only to stop one pipeline claiming the other's broker
+                # positions during A/B — but universe membership is the wrong
+                # proxy for ownership: the nightly screener rotates names out,
+                # and a held position that leaves the universe was silently
+                # skipped here. The exit path iterates _positions, so a skipped
+                # ticker is never exit-checked and can NEVER close.
+                # 2026-08-09: MSCI sat open 13 days and $12.6k (12.9% of the
+                # account) was stranded and invisible to portfolio_heat, so
+                # risk limits were being computed on understated exposure.
+                if (self._universe
+                        and ticker not in self._universe
+                        and ticker not in self._owned_tickers
+                        and ticker not in self._managed_tickers):
                     skipped += 1
                     continue
                 qty = abs(pos["qty"])

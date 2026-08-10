@@ -179,11 +179,32 @@ async def lifespan(app: FastAPI):
     # Without this, if the broker already has open positions from a previous session,
     # the signal loop would see "no position" and double-buy on the first tick.
     try:
+        # Seed ownership from the ledger first — sync drops any broker position
+        # whose ticker the screener rotated out of the universe, and a dropped
+        # position is never exit-checked (it iterates _positions). This runs
+        # before the loop's own refresh so the very first sync is already safe.
+        try:
+            from sqlalchemy import select as _sel
+
+            from src.data.db import Trade as _T
+            async with session_factory() as _s:
+                _owned = (await _s.execute(
+                    _sel(_T.ticker).where(
+                        _T.exit_time.is_(None), _T.pipeline_id == "pipeline_a"
+                    )
+                )).scalars().all()
+            pos_manager.set_owned_tickers({t.upper() for t in _owned})
+        except Exception as exc:
+            logger.warning("startup_owned_tickers_failed", error=str(exc))
+
         await pos_manager.sync_from_broker(alpaca_router)
         logger.info(
             "startup_positions_synced",
             count=len(pos_manager._positions),
             heat=round(pos_manager.portfolio_heat, 3),
+            owned_outside_universe=sorted(
+                pos_manager._owned_tickers - pos_manager._universe
+            ) or None,
         )
     except Exception as exc:
         logger.warning("startup_position_sync_failed", error=str(exc))
@@ -747,7 +768,7 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
 
 app = FastAPI(
     title="StockBot API",
