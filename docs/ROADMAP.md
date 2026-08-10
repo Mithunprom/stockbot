@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-08-03 W32 review (v0.6.0/v0.6.1 deployed; M2 clock reset; bot halted; Railway worker week 6).
+Last updated: 2026-08-10 W33 review (v0.6.2 deployed; MSCI zombie resolved; halt lifted; M2 n=16; Railway worker week 7).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -18,7 +18,7 @@ second, new alpha queued.
 |-----------|--------|
 | Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. 5 consecutive clean days (Jul 24–28). |
 | Kelly window verified sane | ✅ Sentinel confirmed ok |
-| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (4 weeks) |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (7 weeks) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
 Fill-corrected T30 PF = 0.864 (was 0.60 stored). Integrity criterion **MET** as of Jul 28.
@@ -38,10 +38,10 @@ starts from v0.6.0 deploy. Bot still HALTED; no new trades until halt is lifted.
 
 | ID | Milestone | Gate | Status |
 |----|-----------|------|--------|
-| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~24 days (Jul 10–Aug 3 est.); watchdog clean; bot halted (not an outage, but trading suspended) |
-| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🔄 RESET — v0.6.0 (max_hold 390→30) is a strategy change; prior n=35@PF=0.636 retired. New window starts Aug 2. n=0 (bot halted; no trades until halt lifted). ETA mid-Sep if halt lifted this week, mid-Oct+ if delayed. |
-| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 6. |
-| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — H4 at 24 days (4.8× flag), 12 hypotheses total blocked. Week 6. |
+| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~31 days (Jul 10–Aug 10); watchdog clean; no outages |
+| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🟡 IN PROGRESS — n=16, PF=2.02 (noise — n too small). Bot resumed Aug 6. ETA mid-Sep at ~5 trades/day. |
+| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 7. |
+| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — H4 at 31 days (6× flag), 13 hypotheses total blocked. Week 7. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M2 |
 | M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
@@ -49,13 +49,12 @@ starts from v0.6.0 deploy. Bot still HALTED; no new trades until halt is lifted.
 
 **Railway worker service** (`python agent_worker.py`, env `AGENT_WORKER_ENABLE=true`
 + Alpaca paper keys). Blocks M3, M4, and CODE RED exit (data_run criterion).
-Outstanding **6 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
+Outstanding **7 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
 
-All 12 hypothesis validations (H0–H12) blocked behind this single action. Bot halt compounds
-the issue: M2 v0.6.0 also stalls at n=0 while trading is suspended.
+All 13 hypothesis validations (H0–H12 + H13) blocked behind this single action.
 
-Secondary bottleneck: bot halt (max_drawdown CB since Jul 28). Owner action: `/admin/resume-trading`.
-v0.6.1 makes this safe (persists immediately). Removes CRITICAL sentinel stale_open_rows.
+Secondary bottleneck resolved: halt lifted Aug 6, MSCI zombie closed Aug 10 (v0.6.2). M2 is now
+accumulating at n=16. Remaining structural risk: halt-aware exits (PRs #31/#32) not yet merged.
 
 ## Freeze Status (TPM-enforced)
 
@@ -81,17 +80,20 @@ v0.6.1 makes this safe (persists immediately). Removes CRITICAL sentinel stale_o
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| Bot HALTED — 6 stale positions (6-7d open), exits blocked | **CRITICAL** | Owner: /admin/resume-trading (v0.6.1 persists immediately); positions exit at first tick (max_hold=30) |
-| Railway worker not running — CODE RED exit + 12 hypothesis validations blocked | **CRITICAL** | Week 6; ~10 min owner action in Railway dashboard |
-| M2 v0.6.0 n=0 — no trades accumulating while halted | **HIGH** | Depends on halt lift; ~20 trading days to n=100 at ~5/day |
-| Sentinel CRITICAL stale_open_rows (all 6 positions) | **HIGH** | Self-clears at first post-halt-lift tick; no corrupt data (integrity checks pass) |
+| Railway worker not running — CODE RED exit + 13 hypothesis validations blocked | **CRITICAL** | Week 7; ~10 min owner action in Railway dashboard |
+| Halt-aware exits not merged (PRs #31/#32) — halt could block exits if CB fires again | **HIGH** | Owner: choose #31 or #32 and merge; v0.6.2 fixed universe bug but halt-path still blocks exits |
+| M2 n=16 — PF=2.02 driven by 1 trade (MSTR +$504, 43% of gross profit) | **MED** | Monitor trajectory as n grows; do not act on signal until n≥50 |
+| Portfolio_heat blind spot sentinel check pending (PR #33) | **MED** | v0.6.2 fixes root cause; PR #33 adds ongoing detection — merge soon |
 | H5 + H7 need re-scoping for 30-bar horizon | **MED** | Backtest phases target wrong regime; re-scope before Railway runs |
-| H10 (shorter max-hold) superseded by v0.6.0 | **MED** | Mark as incorporated; no separate validation needed |
-| Hypothesis accumulation without validation | **MED** | 12 hypotheses queued, 0 data runs in 6 weeks (Railway worker) |
+| Hypothesis accumulation without validation | **MED** | 13 hypotheses queued, 0 data runs in 7 weeks (Railway worker) |
 | Non-draft PRs aging without merge (#25, #27) | **MED** | #25 safe to merge (infra); #27 safe to merge (probe floor + bug fix) |
+| **RESOLVED** Bot HALTED — ✅ Halt lifted Aug 6 | — | — |
+| **RESOLVED** MSCI zombie (id 119, 14d open) — ✅ Closed Aug 10 via v0.6.2 | — | — |
+| **RESOLVED** Sentinel CRITICAL stale_open_rows — ✅ Clearing after MSCI exit | — | — |
 
 ## Decision Log
 
+- 2026-08-10: W33 review — halt lifted (Aug 6), MSCI zombie closed (Aug 10) via v0.6.2 (universe-rotation exit bug). v0.6.2 revealed portfolio_heat blind spot ($12.6k / 12.9% deployed and invisible during zombie). M2 v0.6.0: n=16, PF=2.02 (noise). Railway worker week 7 — sole CODE RED exit blocker. Decisions outstanding: Railway worker (CRITICAL), halt-aware exits PRs #31/#32 (HIGH), PR #25/#27 merge (MED).
 - 2026-08-03: W32 review — bot halted (Jul 28), M2 reset (v0.6.0), Railway week 6. Sentinel
   CRITICAL (stale_open_rows all 6 positions). H10 marked superseded by v0.6.0. H5/H7 flagged
   for re-scoping. 2 CRITICAL owner decisions outstanding: lift halt + Railway worker.
