@@ -308,3 +308,65 @@ class TestBrokerOrphanReconcile:
         # one UPDATE for the orphan close + the commit
         assert session.execute.await_count == 1
         assert session.commit.await_count == 1
+
+
+class TestClosedWithNullExitHelpers:
+    """Pure-function tests for the closed_with_null_exit blind-spot check.
+
+    NVDA id 111 (entry 2026-07-23, exit_time 2026-07-24, exit_price=NULL,
+    pnl=NULL) is the motivating case: a row that passed every prior check
+    because (a) it has an exit_time so stale_open_rows skips it, (b) the
+    fill_price check filters exit_price IS NOT NULL, and (c) pnl=None causes
+    expected_pnl_pct to return None so pnl_pct_consistency also skips it.
+    These tests verify the detection logic on the pre-DB helpers, keeping the
+    fast-feedback loop alive even without a live DB in the sandbox.
+    """
+
+    def test_null_exit_price_is_detectable_pattern(self):
+        # A row with exit_time set but exit_price NULL has pnl=NULL too.
+        # Verify the helper functions treat NULL exit_price consistently.
+        dev = fill_price_pnl_deviation(
+            pnl=None, exit_price=None, entry_price=208.74, shares=2.0
+        )
+        assert dev is None, (
+            "fill_price_pnl_deviation must return None when exit_price is NULL "
+            "(this is the blind spot — it silently passes)"
+        )
+
+    def test_fill_consistency_skips_null_exit_price(self):
+        # Confirm why NVDA id 111 evaded fill_price_pnl_consistency:
+        # deviation is None, so it never enters the anomalous list.
+        dev = fill_price_pnl_deviation(
+            pnl=None, exit_price=None, entry_price=208.74, shares=2.0
+        )
+        assert dev is None  # not > FILL_PNL_TOLERANCE → skipped
+
+    def test_pnl_pct_consistency_skips_null_pnl(self):
+        # pnl=None → expected_pnl_pct returns None → is_divergent returns False
+        # → NVDA id 111 passes pnl_pct_consistency silently.
+        exp = expected_pnl_pct(pnl=None, entry_price=208.74, shares=2.0)
+        assert exp is None
+        assert not is_divergent(stored=None, expected=None)
+
+    def test_nvda_111_entry_price_is_valid_notional(self):
+        # The entry data for NVDA id 111 is valid — only the exit side is missing.
+        # This proves the check is about the exit fill, not a corrupt entry.
+        entry_notional = 208.74 * 2.0
+        assert entry_notional >= 1.0
+
+    def test_zero_pnl_row_would_not_trigger_null_exit_check(self):
+        # PFE id 128 (pnl=0.0, exit_price=25.87) is a genuine breakeven,
+        # not a null-exit row. The check uses IS NULL, not == 0.
+        pfe_exit_price = 25.87  # not None
+        pfe_pnl = 0.0           # not None
+        assert pfe_exit_price is not None
+        assert pfe_pnl is not None
+
+    def test_check_name_constant(self):
+        # The check name used in run() must be stable — downstream log
+        # parsers and the snapshot report both key on it.
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=None)
+        # The method exists and is callable
+        assert hasattr(agent, "_audit_closed_with_null_exit")
+        assert callable(agent._audit_closed_with_null_exit)

@@ -296,6 +296,72 @@ class IntegrityAgent:
             "detail": "all closed trade pnl values reconcile with fill prices",
         }
 
+    async def _audit_closed_with_null_exit(self, session: Any) -> dict[str, Any]:
+        """Closed rows (exit_time set) whose exit_price or pnl is NULL.
+
+        A row with exit_time but no exit_price is in an impossible state: the
+        DB thinks the trade is closed, but the fill data needed to compute PnL
+        was never recorded.  These rows:
+          - Pass ``stale_open_rows`` (they have exit_time)
+          - Pass ``fill_price_pnl_consistency`` (the query filters exit_price IS NOT NULL)
+          - Pass ``pnl_pct_consistency`` (pnl=None → expected_pnl_pct returns None → no flag)
+        The only effect visible to the system is that pnl/pnl_pct are NULL,
+        which silently excludes them from Kelly and PnL stats without any alert.
+
+        Origin: NVDA id 111 (entry 2026-07-23, exit_time 2026-07-24) was closed
+        in the DB with exit_price=NULL and pnl=NULL after a redeploy dropped the
+        position from _open_trade_ids; the exit path stored the timestamp but
+        failed to record the fill price.  The row survived every existing check.
+
+        Status: warn (not critical — no ongoing exposure, no sizing contamination
+        since NULL pnl rows are excluded from Kelly). Human must look up the
+        broker fill and manually update exit_price and pnl, or mark the row
+        as a known data gap.
+        """
+        from sqlalchemy import or_, select
+
+        from src.data.db import Trade
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=AUDIT_WINDOW_DAYS)
+        result = await session.execute(
+            select(Trade.id, Trade.ticker, Trade.entry_time, Trade.exit_time)
+            .where(
+                Trade.exit_time.isnot(None),
+                Trade.exit_time >= cutoff,
+                or_(Trade.exit_price.is_(None), Trade.pnl.is_(None)),
+            )
+        )
+        bad = [
+            {
+                "id": tid,
+                "ticker": ticker,
+                "entry_time": str(entry),
+                "exit_time": str(exit_t),
+                "issue": "exit_time set but exit_price/pnl is NULL — fill not recorded",
+            }
+            for tid, ticker, entry, exit_t in result.all()
+        ]
+        if bad:
+            return {
+                "name": "closed_with_null_exit",
+                "status": "warn",
+                "healed": False,
+                "rows": bad,
+                "detail": (
+                    f"{len(bad)} row(s) marked closed (exit_time set) but missing "
+                    "exit_price or pnl — fill was never recorded; these rows are "
+                    "silently absent from PnL totals and Kelly stats. "
+                    "Human must supply fill price or mark as data gap."
+                ),
+            }
+        return {
+            "name": "closed_with_null_exit",
+            "status": "ok",
+            "healed": False,
+            "rows": [],
+            "detail": "no closed rows with missing exit fill data",
+        }
+
     async def _audit_stale_open_rows(self, session: Any) -> dict[str, Any]:
         """Open DB rows too old for orphan recovery to ever close."""
         from sqlalchemy import select
@@ -505,6 +571,7 @@ class IntegrityAgent:
             checks = [
                 await self._audit_pnl_pct(session),
                 await self._audit_fill_price_pnl(session),
+                await self._audit_closed_with_null_exit(session),
                 await self._audit_stale_open_rows(session),
                 await self._audit_kelly_window(session),
                 await self._audit_db_vs_broker(session),

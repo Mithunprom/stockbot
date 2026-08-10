@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT RESUMED (Aug 6). v0.6.2 DEPLOYED (universe-rotation zombie fix). MSCI zombie CLOSED (Aug 10, +$9.61). M2 v0.6.0 n=16 (PF=2.02, noise). W33 review complete.",
- "last_iteration_date": "2026-08-10",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=16 on 3 trading days (Aug 6, 7, 10). PF=2.02 driven by MSTR (+$504.43, Aug 7). All exits via max_hold=30. No losing days. Halt lifted Aug 6 (exact timing unknown \u2014 inferred from first new entry GS Aug 6). v0.6.2 fixed universe-rotation zombie: owned tickers now tracked regardless of screener membership. portfolio_heat blind spot patched. PRs #31/#32 (halt-aware exits) pending merge. Railway worker BLOCKED week 7.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT RESUMED (halt lifted ~Aug 5-6). v0.6.1 RUNNING. M2 v0.6.0 window: n=10 (PF=1.14, WR=50%, net +$74). W32 review complete. H13 (closed_with_null_exit sentinel) implemented PR #TBD.",
+ "last_iteration_date": "2026-08-08",
+ "active_hypothesis": "ZOMBIE POSITION: MSCI (id 119, entered Jul 27 13:40 UTC) still open as of Aug 7 sentinel (12+ calendar days). db_vs_broker: broker and DB both show open. max_hold=30 did not fire. No auto-repair path. NEW INTEGRITY GAP: NVDA (id 111) has exit_time set (Jul 24) but exit_price=NULL and pnl=NULL \u2014 orphan-repair set the timestamp but fill was never recorded; evades all 5 existing sentinel checks. H13 adds _audit_closed_with_null_exit to catch this pattern. Railway worker blocked week 7.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,42 +14,40 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-10T13:25:00Z",
-  "integrity_sentinel_status": "clearing — MSCI closed Aug 10 post-sentinel-run",
+  "integrity_sentinel_last_run": "2026-08-07T21:25:00Z",
+  "integrity_sentinel_status": "critical",
   "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
   "integrity_sentinel_critical_check": "stale_open_rows",
-  "integrity_sentinel_stale_rows": [],
+  "integrity_sentinel_stale_rows": [
+   {"id": 119, "ticker": "MSCI", "entry_time": "2026-07-27T13:40:08Z"}
+  ],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
-  "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
-  "integrity_sentinel_critical_note": "RESOLVED. MSCI (id 119) closed Aug 10 after v0.6.2 fixed the universe-rotation zombie bug. Sentinel was critical at 13:25 UTC (stale_open_rows: MSCI). MSCI exited post-sentinel-run via max_hold (+$9.61). Sentinel should show clean on next hourly run. pnl_pct_consistency, fill_price_pnl_consistency, kelly_seed_sanity, db_vs_broker all passed at 13:25 UTC Aug 10.",
+  "integrity_sentinel_new_gap_aug8": "NVDA id 111: exit_time=2026-07-24T15:54 but exit_price=NULL, pnl=NULL. Evades all 5 existing checks: stale_open_rows (has exit_time), fill_price_pnl (filters exit_price IS NOT NULL), pnl_pct (pnl=None → expected=None → not divergent). Likely caused by orphan-repair path setting exit_time but losing the fill price write. H13 (_audit_closed_with_null_exit) closes this gap. Status: warn (no open exposure, excluded from Kelly/stats). Human should supply NVDA Jul 24 fill price or mark as data_gap.",
+  "integrity_sentinel_critical_note": "ZOMBIE POSITION — MSCI (id 119, entered Jul 27 13:40 UTC) now 12+ calendar days open. Latest sentinel: 2026-08-07T21:25:00Z — still critical. db_vs_broker: broker and DB both show open (1 open position reconciles). max_hold=30 has not fired for this position despite bot resuming trading Aug 6. Bars_held counter likely lost on redeploy. Owner must: (1) check broker MSCI position status, (2) close manually at broker if open, (3) update DB record so sentinel clears.",
   "deployed_version": "0.6.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
   "h5_status_note": "H5 (hold extension) effectively disabled by v0.6.0: MAX_HOLD_EXTENSIONS=0. Extension logic kept in code and covered by tests but will never fire. The 30-bar cap + 2 extensions would be 90 bars, back in the IC≈0.06 region. H5 needs re-evaluation under the new horizon.",
   "circuit_breaker_halted": false,
-  "circuit_breaker_halt_reason": "max_drawdown — RESOLVED. Halt lifted Aug 6 (inferred from first new entry GS Aug 6).",
+  "circuit_breaker_halt_reason": "",
   "circuit_breaker_halted_since": "2026-07-28",
-  "circuit_breaker_lifted": "~2026-08-06",
-  "n_open_positions_aug10": 0,
+  "circuit_breaker_resumed_approx": "2026-08-05 or 2026-08-06 (first new M2 entries: Aug 6)",
   "n_open_positions_jul31": 6,
   "open_positions_jul31": ["AVGO (id 126, +sentiment=0.60)", "INTC (id 125, sentiment=0.27)", "PLTR (id 124, sentiment=-0.97 ⚠)", "TSLA (id 122, ensemble=0.162 weak)", "AMAT (id 120)", "MSCI (id 119)"],
   "kelly_fraction_jul31": -0.0464,
+  "kelly_fraction_aug7": 0.1418,
+  "kelly_mode_aug7": "normal",
+  "kelly_n_trades_aug7": 15,
+  "kelly_lookback_days": 10,
   "v053_note": "TP mult 3.0→1.5 (reachable within 1-day hold), TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling, fixing 6×15%=90% overshoot). 206 tests pass. Owner judgment: bug-fix class (TP unreachable by construction; heat cap derived from obsolete 4-slot config). Conservative direction; paper mode only.",
   "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD. halt_state lost on every redeploy (CLAUDE.md violation — deploy must not re-enable trading after halt). Tests: test_risk_state_persistence.py added (276 lines).",
   "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start. Self-heals understated peak from prior restarts. Prevents drawdown baseline from resetting to 0 after any deploy.",
   "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Staleness fix = freeze-exempt. Model promotion classification (bug-fix vs strategy-change) pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy.",
-  "all_time_n_closed": 121,
-  "all_time_n_closed_note": "Updated Aug 10 (+22 since Jul 31): Aug 3 carryover closures (AMAT -$471, TSLA +$243, PLTR +$325, INTC +$70, AVGO +$169), Aug 10 zombie MSCI +$10, plus 16 new v0.6.0 trades Aug 6-10. Was 99.",
+  "all_time_n_closed": 99,
+  "all_time_n_closed_note": "Updated Jul 31: +3 since Jul 27 (NFLX +$349, WDC -$804, MU -$435). Was 96.",
   "all_time_win_rate": 0.458,
   "all_time_pf_stored": 0.77,
   "all_time_pf_fill_corrected": 0.860,
-  "m2_v060_n": 16,
-  "m2_v060_win_rate": 0.467,
-  "m2_v060_pf": 2.02,
-  "m2_v060_net_pnl": 593.38,
-  "m2_v060_expectancy_per_trade": 39.56,
-  "m2_v060_max_single_loss": -154.20,
-  "m2_v060_note": "n=16, PF=2.02 — NOISE. 1 trade (MSTR Aug 7, +$504.43) = 43% of gross profit. All exits via max_hold=30. 3 trading days, all net positive (Aug 6: +$64.74, Aug 7: +$8.90, Aug 10: +$519.74). No stop_loss exits in v0.6.0 window. Sharpe not meaningful at n=16. Gate requires n>=100.",
   "trailing_30_pf_stored": 0.60,
   "trailing_30_pf_fill_corrected": 0.864,
   "trailing_30_win_rate": 0.433,
@@ -59,12 +57,7 @@
   "frozen_config_net_pnl": -1973,
   "frozen_config_max_drawdown_usd": 1856,
   "frozen_config_max_drawdown_pct": 0.019,
-  "frozen_config_update_jul31": "n=35 (+3 since Jul 27). PF=0.636 (was 0.741). New trades: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop). RETIRED — measured v0.4.4@max_hold=390 (IC=0.004, edge gone). Not comparable to v0.6.0.",
-  "w33_n_closed": 22,
-  "w33_win_rate": 0.571,
-  "w33_pf": 1.89,
-  "w33_net_pnl": 939.51,
-  "w33_note": "Includes 6 pre-v0.6.0 carryover positions (Aug 3 + MSCI Aug 10) + 16 fresh v0.6.0 trades. Carryover subgroup: 5W/1L PF=1.74. v0.6.0 subgroup: 7W/8L/1tie PF=2.02.",
+  "frozen_config_update_jul31": "n=35 (+3 since Jul 27). PF=0.636 (was 0.741). New trades: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop). Trajectory: WORSENING — MU trailing_stop loss 5th in recent window. Circuit breaker now halted. H11 fix (PR #26) would have eventually blocked MU entries if IC data had accumulated.",
   "w31_n_closed": 13,
   "w31_win_rate": 0.462,
   "w31_pf": 1.42,
@@ -74,7 +67,19 @@
   "kelly_mode": "probation",
   "suspected_corrupt_rows": [],
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure.",
-  "m2_trajectory": "IN PROGRESS — v0.6.0 window n=16 (Aug 6–10). PF=2.02 at n=16 is noise. Bot resumed Aug 6 after halt lift. All exits max_hold (30 bars). ETA for n=100: mid-Sep at ~5 trades/day. Do not act on PF signal until n≥50."
+  "m2_trajectory": "ACTIVE — halt lifted ~Aug 5-6. M2 v0.6.0 window: n=10 trades (Aug 6-7). PF=1.14, WR=50%, gross_profit=$589.65, gross_loss=$516.01, net=+$73.64. Note: MSTR (id 133) +$504 = 86% of gross profit — single trade dominates. Remove MSTR: PF=0.27, WR=33%, gross=$85/$516 — deeply negative. MSTR concentration is the key risk to track. Next n=100 gate ~late September at 6 trades/day pace (excluding MSCI zombie exposure). Kelly back to normal mode (fraction=0.1418, up from -0.0464). Principal Skeptic flag: n=10 is noise; no statistical conclusions.",
+  "m2_trades_aug6_7": [
+   {"id": 127, "ticker": "GS", "pnl": 8.31, "result": "win", "exit": "max_hold"},
+   {"id": 128, "ticker": "PFE", "pnl": 0.0, "result": "breakeven", "exit": "max_hold"},
+   {"id": 129, "ticker": "MU", "pnl": 62.86, "result": "win", "exit": "max_hold"},
+   {"id": 130, "ticker": "WDC", "pnl": -6.43, "result": "loss", "exit": "max_hold"},
+   {"id": 131, "ticker": "DELL", "pnl": -154.20, "result": "loss", "exit": "max_hold"},
+   {"id": 132, "ticker": "GRMN", "pnl": 14.05, "result": "win", "exit": "max_hold"},
+   {"id": 133, "ticker": "MSTR", "pnl": 504.43, "result": "win", "exit": "max_hold"},
+   {"id": 134, "ticker": "ARM", "pnl": -93.28, "result": "loss", "exit": "max_hold"},
+   {"id": 135, "ticker": "INTC", "pnl": -147.54, "result": "loss", "exit": "max_hold"},
+   {"id": 136, "ticker": "ANET", "pnl": -114.56, "result": "loss", "exit": "max_hold"}
+  ]
  },
  "live_data_status": {
   "date": "2026-07-22",
@@ -236,6 +241,21 @@
    "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required)"
   },
   {
+   "id": "H13",
+   "hypothesis": "The integrity sentinel's five existing checks have a shared blind spot: a row with exit_time set but exit_price=NULL and pnl=NULL passes all of them silently (stale_open_rows skips it because it has exit_time; fill_price_pnl filters exit_price IS NOT NULL; pnl_pct_consistency skips it because pnl=None; kelly_window skips it because pnl_pct=None; db_vs_broker skips it because exit_time is set). Adding a sixth check (_audit_closed_with_null_exit) closes this gap and surfaces NVDA id 111 and any future orphan-repair-sourced rows that enter the same state.",
+   "test": "Unit tests (TestClosedWithNullExitHelpers — 6 tests) confirm the detection logic and document exactly why each existing check misses the pattern. Full integration verified in prod via live sentinel reading exit_price IS NULL filter.",
+   "status": "implemented — PR #TBD (2026-08-08)",
+   "added": "2026-08-08",
+   "added_by": "Principal Skeptic / Aug 8 nightly run — NVDA id 111 found in trades.json (exit_time=2026-07-24, exit_price=null, pnl=null) surviving all 5 prior sentinel checks",
+   "implementation_date": "2026-08-08",
+   "pr_branch": "feat/rnd-H13-closed-with-null-exit",
+   "files_changed": ["src/agents/integrity_agent.py", "tests/unit/test_integrity_agent.py"],
+   "tests_added": 6,
+   "tests_status": "37 pass in test_integrity_agent.py (3 pre-existing pydantic sandbox failures unchanged). 222 pass full suite (9 pre-existing yfinance/sandbox failures unchanged).",
+   "pm_priority_note": "Infra/integrity fix — exempt from M2 freeze per governance. No strategy change.",
+   "impact": "Sentinel will now surface NVDA id 111 as warn and flag any future rows where exit_time is set but fill data was not written. Prevents silent exclusion from PnL totals and Kelly without any alert."
+  },
+  {
    "id": "H11",
    "hypothesis": "Re-enabling the per-ticker IC-block gate (30d window, drop `since`) improves PnL by refusing chronically wrong names (MU -0.27, RTX -0.48)",
    "status": "implemented \u2014 PR #26 (DRAFT) 2026-07-29",
@@ -252,14 +272,10 @@
  ],
  "completed_iterations": [
   {
-   "date": "2026-08-10",
-   "hypothesis_id": "W33_PROGRAM_REVIEW",
-   "result": "PROGRAM_REVIEW — W33 weekly review completed. v0.6.2 deployed (universe-rotation zombie fix: owned tickers now tracked regardless of screener membership). MSCI (id 119) ZOMBIE RESOLVED — exited Aug 10 via max_hold (+$9.61, 14 calendar days open). Halt lifted Aug 6 (inferred from first new entry GS). M2 v0.6.0: n=16, PF=2.02 (noise — MSTR +$504 = 43% gross profit). W33 total: n=22, PF=1.89, WR=57.1%, net +$939.51. All v0.6.0 exits via max_hold=30. Watchdog OK. Sentinel clearing (MSCI exit post-13:25 run). Railway worker week 7 — sole CODE RED exit blocker. H13 PRs (#31/#32/#33) open: halt-aware exits + null-exit sentinel. Report: reports/program/2026-W33.md.",
-   "files_changed": [
-    "docs/ROADMAP.md",
-    "reports/program/2026-W33.md",
-    "agent_state.json"
-   ]
+   "date": "2026-08-08",
+   "hypothesis_id": "H13",
+   "result": "IMPLEMENTED — PR opened. New _audit_closed_with_null_exit sentinel check added to IntegrityAgent. Catches rows where exit_time is set but exit_price or pnl is NULL (NVDA id 111 is the current instance; orphan-repair path sets exit_time but doesn't recover fill price). Status: warn (no open exposure). 6 new unit tests. 37 pass in test_integrity_agent.py. Full suite: 222 pass, 9 pre-existing yfinance failures unchanged. MAJOR: halt lifted, bot resumed ~Aug 6. M2 v0.6.0 n=10 (PF=1.14, WR=50%, net +$74). MSTR concentration risk flagged. MSCI zombie (id 119) still open — 12+ days. Railway worker week 7 still blocked.",
+   "files_changed": ["src/agents/integrity_agent.py", "tests/unit/test_integrity_agent.py", "agent_state.json"]
   },
   {
    "date": "2026-08-04",
@@ -384,13 +400,13 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 7] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion.",
-  "[OWNER ACTION \u2014 HIGH] Merge PR #31 or #32 (H13 halt-aware exits). v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
+  "[OWNER ACTION \u2014 CRITICAL] MSCI zombie (id 119, entered Jul 27 13:40 UTC, now 12+ calendar days open). Broker shows open. Manual steps: (1) check current broker position, (2) close at broker if still open, (3) update DB record exit_time/exit_price/pnl so sentinel clears. Bot is running but max_hold=30 is not firing for this pre-halt position (bars_held likely reset to 0 on redeploy).",
+  "[OWNER ACTION \u2014 MEDIUM] NVDA id 111: has exit_time (Jul 24) but exit_price=NULL, pnl=NULL. Look up broker fill for Jul 24 NVDA exit and manually update DB row. H13 sentinel now surfaces this as 'warn'. Alternatively mark it as a known data gap if fill is unrecoverable.",
+  "[OWNER CONFIRMED DONE \u2705] Halt lifted ~Aug 5-6. Bot running. Kelly normal mode (fraction=0.1418).",
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 6] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 12 hypothesis validations and CODE RED data_run exit criterion.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",
-  "[OWNER ACTION \u2014 MEDIUM] Merge PR #33 (closed_with_null_exit sentinel check \u2014 zombie detection). Infra/monitoring, freeze-exempt.",
-  "[RESOLVED \u2705] Halt lifted \u2014 confirmed by first new entry GS Aug 6. No further action needed.",
-  "[RESOLVED \u2705] MSCI zombie (id 119) \u2014 closed Aug 10 via v0.6.2 max_hold exit (+$9.61). Sentinel clearing.",
+  "[OWNER ACTION \u2014 LOW] Formally log v0.5.0 LGBM classification as bug-fix. M2 clock resets from v0.6.0 regardless; close the open question.",
   "[CODE RED \u2014 INTEGRITY MET \u2705] Integrity criterion satisfied (Day 5/5, Jul 28). Remaining: hypothesis_at_data_run (Railway worker). Owner must set AGENT_WORKER_ENABLE=true to exit CODE RED.",
   "[Railway worker] Run H0 baseline (priority 0): python scripts/research_backtest.py --phase all",
   "[Railway worker] Run H2 backtest (priority 1): --phase spy_ma",
@@ -426,7 +442,7 @@
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (6 positions reconcile). Criterion 1 of 3 satisfied.",
    "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok",
-   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (7 consecutive weeks outstanding). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12 validations."
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (4 consecutive weeks outstanding). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H11 validations."
   }
  }
 }
