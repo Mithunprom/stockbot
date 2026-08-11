@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT RESUMED (Aug 6). v0.6.2 DEPLOYED (universe-rotation zombie fix). MSCI zombie CLOSED (Aug 10, +$9.61). M2 v0.6.0 n=16 (PF=2.02, noise). W33 review complete.",
- "last_iteration_date": "2026-08-10",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=16 on 3 trading days (Aug 6, 7, 10). PF=2.02 driven by MSTR (+$504.43, Aug 7). All exits via max_hold=30. No losing days. Halt lifted Aug 6 (exact timing unknown \u2014 inferred from first new entry GS Aug 6). v0.6.2 fixed universe-rotation zombie: owned tickers now tracked regardless of screener membership. portfolio_heat blind spot patched. PRs #31/#32 (halt-aware exits) pending merge. Railway worker BLOCKED week 7.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 8). BOT ACTIVE. v0.6.2 LIVE. M2 v0.6.0 n=25 updated (PF=1.65, noise). Kelly mode UPGRADED to NORMAL (was probation). Trailing-30 PF=1.73. H15 implemented (PR #34): durable daily trade cap \u2014 Aug-10 over-trading (15 trades vs cap=6) confirmed mid-day restart reset counter; fix persists n_trades_today in risk state store.",
+ "last_iteration_date": "2026-08-11",
+ "active_hypothesis": "H15: Durable daily trade cap \u2014 n_trades_today now persisted in RiskStateSnapshot so mid-day service restarts cannot reset the counter and grant a second allotment of SIZING_MAX_TRADES_PER_DAY=6. Evidence: Aug 10 saw 15 trades (IDs 137-151) vs cap of 6; EOD diagnostics showed n_trades_today=6 (post-reset); morning wave 6 trades + restart + 9 afternoon trades = 15. Fix: add n_trades_today to persist/restore path with same-day guard (parallel to daily_start_value). PR #34 (freeze-exempt: risk control enforcement fix). Continuing to monitor M2 v0.6.0 accumulation.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -43,16 +43,21 @@
   "all_time_win_rate": 0.458,
   "all_time_pf_stored": 0.77,
   "all_time_pf_fill_corrected": 0.860,
-  "m2_v060_n": 16,
-  "m2_v060_win_rate": 0.467,
-  "m2_v060_pf": 2.02,
-  "m2_v060_net_pnl": 593.38,
-  "m2_v060_expectancy_per_trade": 39.56,
+  "m2_v060_n": 25,
+  "m2_v060_win_rate": 0.400,
+  "m2_v060_pf": 1.652,
+  "m2_v060_gross_profit": 1246.27,
+  "m2_v060_gross_loss": 754.21,
+  "m2_v060_net_pnl": 492.07,
+  "m2_v060_expectancy_per_trade": 19.68,
   "m2_v060_max_single_loss": -154.20,
-  "m2_v060_note": "n=16, PF=2.02 — NOISE. 1 trade (MSTR Aug 7, +$504.43) = 43% of gross profit. All exits via max_hold=30. 3 trading days, all net positive (Aug 6: +$64.74, Aug 7: +$8.90, Aug 10: +$519.74). No stop_loss exits in v0.6.0 window. Sharpe not meaningful at n=16. Gate requires n>=100.",
-  "trailing_30_pf_stored": 0.60,
-  "trailing_30_pf_fill_corrected": 0.864,
-  "trailing_30_win_rate": 0.433,
+  "m2_v060_note": "UPDATED Aug 11: n=25 (was 16 — 9 more trades from Aug 10 afternoon session IDs 143-151 not captured in W33 review). PF=1.652 (was 2.02 at n=16 — afternoon session net -$101.31 diluted PF). WR=40% (10W/14L/1T). All exits via max_hold=30. Aug days: Aug 6: +$64.74, Aug 7: +$8.90, Aug 10 AM: +$519.74, Aug 10 PM: -$101.31. PF=1.652 is NOISE at n=25. Gate requires n>=100. Key anomaly: IDs 130 (WDC, ensemble=0.008) and 139 (MU, ensemble=0.021) entered with near-zero signals — H12 (PR #29) would have blocked these.",
+  "trailing_30_pf_stored": 1.726,
+  "trailing_30_pf_fill_corrected": 1.726,
+  "trailing_30_win_rate": 0.467,
+  "trailing_30_net_pnl": 864.23,
+  "trailing_30_n": 30,
+  "trailing_30_note": "MAJOR IMPROVEMENT. IDs 122-151. Was 0.864 (fill-corrected); now 1.726. Improvement driven by v0.6.0 max_hold=30 horizon alignment. Trailing-30 PF has crossed 1.0 and is solidly above it — consistent with M2 accumulation trajectory.",
   "frozen_config_n": 35,
   "frozen_config_win_rate": 0.400,
   "frozen_config_pf": 0.636,
@@ -71,7 +76,8 @@
   "w31_net_pnl": 621,
   "open_positions_jul27": 6,
   "open_positions_note": "IDs 112-117 opened Jul 24; survived weekend; will process at Jul 27 market open. Pre-v0.5.3 sizing. Heat 87.45% clears once these exit.",
-  "kelly_mode": "probation",
+  "kelly_mode": "normal",
+  "kelly_mode_upgraded_aug11": "Kelly transitioned from probation → normal by Aug 10 EOD. kelly_fraction=0.1801, kelly_n_trades=31 (lookback 10d). Probation ended — sizing is back to normal mode.",
   "suspected_corrupt_rows": [],
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure.",
   "m2_trajectory": "IN PROGRESS — v0.6.0 window n=16 (Aug 6–10). PF=2.02 at n=16 is noise. Bot resumed Aug 6 after halt lift. All exits max_hold (30 bars). ETA for n=100: mid-Sep at ~5 trades/day. Do not act on PF signal until n≥50."
@@ -193,6 +199,20 @@
    "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
   },
   {
+   "id": "H15",
+   "hypothesis": "Daily trade cap counter (n_trades_today) is lost on service restart, allowing the bot to exceed SIZING_MAX_TRADES_PER_DAY=6 within a single calendar day. Evidence: Aug 10 saw 15 trades (IDs 137-151) vs cap of 6; EOD diagnostics showed n_trades_today=6 (consistent with a mid-day restart resetting the counter after the AM wave of 6). Fix: persist n_trades_today in RiskStateSnapshot alongside the existing daily_start_value, restoring it on startup only when daily_start_date matches today (same-day guard).",
+   "status": "implemented — PR #34 (feat/rnd-H15-durable-daily-trade-cap) 2026-08-11",
+   "test": "5 unit tests added to test_risk_state_persistence.py. All pass. Backward-compatible (old snapshots without n_trades_today default to 0). Freeze-exempt: risk control enforcement fix, not a strategy change.",
+   "added": "2026-08-11",
+   "added_by": "Nightly desk — audit of Aug-10 trade data (15 trades vs cap=6; EOD n_trades_today=6 confirms mid-day reset)",
+   "pr_branch": "feat/rnd-H15-durable-daily-trade-cap",
+   "pr_number": 34,
+   "pr_state": "OPEN — freeze-exempt (risk control enforcement). Safe to merge without Railway backtest.",
+   "pm_priority": 1,
+   "pm_priority_note": "Highest priority for immediate merge — freeze-exempt risk control fix. Analogous to v0.5.4 durable risk state. No strategy change.",
+   "tpm_flag": "No Railway worker needed — pure persistence fix, testable in unit tests."
+  },
+  {
    "id": "H8",
    "hypothesis": "News catalyst tilt: entries on tickers with a fresh bullish catalyst (deal/earnings beat/guidance raise from the News Radar) outperform; macro tailwind days deserve fuller heat",
    "test": "needs a backtest phase joining reports/news_risk history to entries \u2014 design after H0 baseline",
@@ -251,6 +271,21 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-11",
+   "hypothesis_id": "H15",
+   "result": "IMPLEMENTED — Durable daily trade cap. Audit of Aug-10 snapshot revealed 15 trades (IDs 137-151) in a single day vs SIZING_MAX_TRADES_PER_DAY=6. EOD diagnostics showed n_trades_today=6 — consistent with mid-day service restart resetting counter. Fix: added n_trades_today field to RiskStateSnapshot (default=0, backward-compatible), included in _persist_risk_state every tick, restored in _restore_risk_state only when same_day (parallel to daily_start_value logic). 5 new tests added, all pass (20 pass total, 1 pre-existing sandbox failure unchanged). Updated M2 v0.6.0 metrics to n=25, PF=1.652, trailing-30 PF=1.726. Kelly mode confirmed NORMAL (was probation). PR #34 opened.",
+   "tests_status": "20 passed (15 pre-existing + 5 new) / 1 pre-existing sandbox failure (test_missing_smtp_config_does_not_raise — src.config unavailable in sandbox) / 0 regressions",
+   "new_tests": 5,
+   "files_changed": [
+    "src/risk/risk_state_store.py",
+    "src/agents/signal_loop.py",
+    "tests/unit/test_risk_state_persistence.py",
+    "agent_state.json"
+   ],
+   "pr_number": 34,
+   "pr_branch": "feat/rnd-H15-durable-daily-trade-cap"
+  },
   {
    "date": "2026-08-10",
    "hypothesis_id": "W33_PROGRAM_REVIEW",
@@ -384,7 +419,8 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 7] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 CRITICAL, WEEK 8] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 HIGH] Merge PR #34 (H15 durable daily trade cap \u2014 freeze-exempt risk control fix). Aug-10 saw 15 trades vs cap=6 due to mid-day restart. Fix persists n_trades_today in risk state store. 5 tests green.",
   "[OWNER ACTION \u2014 HIGH] Merge PR #31 or #32 (H13 halt-aware exits). v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",

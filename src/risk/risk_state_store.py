@@ -64,6 +64,11 @@ class RiskStateSnapshot:
     halted: bool = False
     halt_reason: str = ""
     halt_time: str | None = None   # ISO timestamp, UTC
+    # H15: persist the daily trade counter so a mid-day service restart cannot
+    # reset it to 0 and silently grant a second allotment of SIZING_MAX_TRADES_PER_DAY.
+    # Loaded only when daily_start_date matches today (same guard as daily_start_value).
+    # Default=0 is safe: old snapshots without this field load fine (backward compat).
+    n_trades_today: int = 0
     version: int = STATE_VERSION
 
     def to_json(self) -> str:

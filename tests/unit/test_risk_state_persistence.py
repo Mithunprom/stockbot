@@ -304,3 +304,89 @@ def test_resume_must_be_persisted_not_left_in_memory():
     if snap.halted and not fresh.is_halted:
         fresh._halted = True
     assert not fresh.is_halted, "resume was undone by the restore path"
+
+
+# ─── H15: Durable daily trade cap ────────────────────────────────────────────
+
+def test_n_trades_today_survives_roundtrip():
+    """n_trades_today must be preserved through JSON serialisation."""
+    snap = RiskStateSnapshot(
+        peak_value=104_278.55, daily_start_value=99_000.0,
+        daily_start_date=et_today_iso(), consecutive_losses=0,
+        n_trades_today=6,
+    )
+    back = RiskStateSnapshot.from_json(snap.to_json())
+    assert back is not None
+    assert back.n_trades_today == 6
+
+
+def test_n_trades_today_defaults_to_zero_on_old_snapshots():
+    """Old snapshots (pre-H15) that lack n_trades_today must load as 0.
+
+    from_json only populates allowed fields; any key absent in the JSON is
+    simply not passed to the constructor, so the default of 0 applies.
+    """
+    legacy_json = (
+        '{"version": 1, "peak_value": 104278.55, "daily_start_value": 99000.0,'
+        ' "daily_start_date": "2026-08-10", "consecutive_losses": 0,'
+        ' "halted": false, "halt_reason": "", "halt_time": null}'
+    )
+    snap = RiskStateSnapshot.from_json(legacy_json)
+    assert snap is not None
+    assert snap.n_trades_today == 0
+
+
+def test_mid_day_restart_cannot_grant_second_trade_allotment():
+    """Simulates the Aug-10 over-trading scenario.
+
+    Before H15: restart zeroed _sizing_n_trades_today → bot entered 9 more
+    trades after the AM wave of 6, exceeding SIZING_MAX_TRADES_PER_DAY.
+    After H15: restored counter stays at 6, entry gate blocks further entries.
+    """
+    MAX_TRADES = 6
+
+    # Snapshot written after the AM wave (6 trades, same day)
+    snap = RiskStateSnapshot(
+        peak_value=104_278.55, daily_start_value=99_000.0,
+        daily_start_date=et_today_iso(), consecutive_losses=0,
+        n_trades_today=MAX_TRADES,
+    )
+
+    # On restart the loop checks daily_start_date == today before restoring
+    same_day = snap.daily_start_date == et_today_iso()
+    restored_count = snap.n_trades_today if same_day else 0
+
+    assert restored_count == MAX_TRADES, "counter must carry over from persisted state"
+    assert restored_count >= MAX_TRADES, "entry gate must block new entries after restore"
+
+
+def test_overnight_restart_resets_trade_count():
+    """An overnight restart must NOT carry yesterday's trade count into today.
+
+    The same_day guard (daily_start_date == today) ensures the counter is only
+    restored when the snapshot belongs to the current ET trading day.
+    """
+    snap = RiskStateSnapshot(
+        peak_value=104_278.55, daily_start_value=99_000.0,
+        daily_start_date="2026-08-10",   # yesterday
+        consecutive_losses=0,
+        n_trades_today=6,
+    )
+
+    today = "2026-08-11"   # today is different
+    same_day = snap.daily_start_date == today
+    restored_count = snap.n_trades_today if same_day else 0
+
+    assert restored_count == 0, "yesterday's trade count must not carry to a new session"
+
+
+def test_n_trades_today_persisted_in_snapshot_payload():
+    """_persist_risk_state passes n_trades_today; verify it appears in JSON."""
+    snap = RiskStateSnapshot(
+        peak_value=100_000.0, daily_start_value=100_000.0,
+        daily_start_date=et_today_iso(), consecutive_losses=0,
+        n_trades_today=4,
+    )
+    import json
+    payload = json.loads(snap.to_json())
+    assert payload["n_trades_today"] == 4

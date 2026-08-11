@@ -670,6 +670,10 @@ class SignalLoop:
         if same_day:
             self._daily_start_value = snap.daily_start_value
             self._last_reset_date = date.fromisoformat(snap.daily_start_date)
+            # H15: restore daily trade count so a mid-day restart can't grant a
+            # second allotment of SIZING_MAX_TRADES_PER_DAY. Only trusted when the
+            # snapshot date matches today; an overnight restart starts fresh at 0.
+            self._sizing_n_trades_today = snap.n_trades_today
 
         self._consecutive_losses = snap.consecutive_losses
 
@@ -747,6 +751,7 @@ class SignalLoop:
             halted=self._cb.is_halted,
             halt_reason=self._cb.halt_reason,
             halt_time=halt_time.isoformat() if halt_time else None,
+            n_trades_today=self._sizing_n_trades_today,
         ))
 
     def get_latest_signals(self) -> list[dict[str, Any]]:
