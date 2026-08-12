@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Coroutine
 
@@ -175,6 +176,11 @@ SIZING_TAKE_PROFIT_CAP = 0.135     # 13.5% take profit cap (was 20% — unreacha
 # 15–195 collapsing to an identical ~333-bar realised hold). This setting is
 # calibrated for the current >$25k account; revisit if equity drops below it.
 SIZING_MAX_HOLD_BARS = 30          # == the model's validated 15–30m horizon
+# Scale factor to convert daily-vol thresholds to the actual holding horizon.
+# sqrt(30/390) ≈ 0.277: stops now correspond to 1.1σ of the 30-bar window, not
+# a full trading day.  Without this, all stops were ~4× too wide and never fired
+# (confirmed: 31/31 v0.6.0 exits via max_hold, 0 via stop/trail/tp).
+_HOLD_VOL_SCALE: float = math.sqrt(SIZING_MAX_HOLD_BARS / 390.0)
 # H5 extension DISABLED (2026-07-29: 2 → 0). It reset bars_held and granted up
 # to 2 more windows, so a 30-bar cap would really be 90 bars — back out to the
 # ~0.06 IC region and straight past the point of this change. It was also never
@@ -244,21 +250,24 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 
 
 def _atr_exits(daily_vol: float) -> tuple[float, float, float]:
-    """Compute (stop_loss, trailing_stop, take_profit) from a DAILY-vol fraction.
+    """Compute (stop_loss, trailing_stop, take_profit) scaled to the hold horizon.
 
-    `daily_vol` is a true daily volatility ratio (daily ATR% / price), supplied
-    by SignalLoop._daily_vol_for (which prefers the real daily-bar ATR and falls
-    back to the 1-minute proxy × sqrt(390)). It is clamped to a sane band, then
-    scaled per threshold. The caps let volatile names get proportional room
-    while the floors keep calm names meaningful.
+    `daily_vol` is a true daily volatility ratio, supplied by
+    SignalLoop._daily_vol_for. It is multiplied by _HOLD_VOL_SCALE before
+    computing thresholds, so each level corresponds to 1.1σ / 1.2σ / 1.5σ of
+    the ACTUAL holding window (SIZING_MAX_HOLD_BARS bars) rather than a full
+    trading day. At max_hold=30, _HOLD_VOL_SCALE ≈ 0.277; the raw daily-vol
+    stops required ~4σ intraday moves and never fired (confirmed: 31/31
+    v0.6.0 exits via max_hold).
     """
-    dv = _clamp(daily_vol, DAILY_VOL_FLOOR, DAILY_VOL_CEIL)
+    period_vol = daily_vol * _HOLD_VOL_SCALE
+    dv = _clamp(period_vol, DAILY_VOL_FLOOR * _HOLD_VOL_SCALE, DAILY_VOL_CEIL)
     sl = _clamp(dv * SIZING_STOP_LOSS_DVOL_MULT,
-                SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP)
+                SIZING_STOP_LOSS_FLOOR * _HOLD_VOL_SCALE, SIZING_STOP_LOSS_CAP)
     ts = _clamp(dv * SIZING_TRAILING_DVOL_MULT,
-                SIZING_TRAILING_STOP_FLOOR, SIZING_TRAILING_STOP_CAP)
+                SIZING_TRAILING_STOP_FLOOR * _HOLD_VOL_SCALE, SIZING_TRAILING_STOP_CAP)
     tp = _clamp(dv * SIZING_TAKE_PROFIT_DVOL_MULT,
-                SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
+                SIZING_TAKE_PROFIT_FLOOR * _HOLD_VOL_SCALE, SIZING_TAKE_PROFIT_CAP)
     return sl, ts, tp
 
 

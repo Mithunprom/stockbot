@@ -128,28 +128,29 @@ def test_position_size_respects_cap():
 # ─── Swing-mode exit geometry ──────────────────────────────────────────────────
 
 def test_atr_exits_geometry():
-    """Stops/targets scale with daily vol, respect floors/caps, and reward > risk."""
+    """Stops/targets scale with daily vol, respect floors/caps, and reward > risk.
+
+    2026-08-12 (H14): _atr_exits now scales by _HOLD_VOL_SCALE = sqrt(30/390).
+    Floors and caps are stated in DAILY-vol units but the effective floor applied
+    inside the function is SIZING_*_FLOOR * _HOLD_VOL_SCALE. Checks updated to
+    reference the scaled floor so the geometry invariant is testable in the
+    cloud test env (no env vars required for pure arithmetic tests).
+    """
     from src.agents.signal_loop import (
-        _atr_exits,
+        _atr_exits, _HOLD_VOL_SCALE,
         SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP,
         SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP,
     )
-    # _atr_exits now takes a TRUE daily-vol fraction (not 1m ATR).
-    # Low-vol name (JPM-like ~0.8% daily) → floors apply
+    # Low-vol name (JPM-like ~0.8% daily) → scaled floors apply
     sl_lo, ts_lo, tp_lo = _atr_exits(0.008)
-    assert sl_lo >= SIZING_STOP_LOSS_FLOOR
-    assert tp_lo >= SIZING_TAKE_PROFIT_FLOOR
-    # High-vol name (SNDK-like ~12% daily) → caps apply
+    assert sl_lo >= SIZING_STOP_LOSS_FLOOR * _HOLD_VOL_SCALE
+    assert tp_lo >= SIZING_TAKE_PROFIT_FLOOR * _HOLD_VOL_SCALE
+    # High-vol name (SNDK-like ~12% daily) → caps apply (caps are unscaled)
     sl_hi, ts_hi, tp_hi = _atr_exits(0.12)
     assert sl_hi <= SIZING_STOP_LOSS_CAP
     assert tp_hi <= SIZING_TAKE_PROFIT_CAP
     # Monotonic in volatility, and reward > risk
     assert sl_hi >= sl_lo and tp_hi >= tp_lo
-    # 2026-07-24: was `tp_lo >= 1.8 * sl_lo`, which encoded the old 3.0σ target.
-    # That ratio was only satisfiable by a TP so far away it was unreachable
-    # inside the 1-day hold window (see SIZING_TAKE_PROFIT_DVOL_MULT). Reward
-    # must still exceed risk, but the binding constraint is reachability, not
-    # ratio — a 2.7:1 target that never fills pays 0.
     assert tp_lo > sl_lo
     assert tp_lo >= 1.3 * sl_lo
 
@@ -1123,3 +1124,67 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ─── H14: Horizon-scaled exit thresholds ─────────────────────────────────────
+#
+# Root cause (2026-08-12): _atr_exits used full daily_vol, so with max_hold=30
+# (≈7.7% of a 390-bar day) stops were ~sqrt(390/30)≈3.6× too wide.
+# INTC daily_vol≈4% → stop was 4.4% before, needs ~1.2% for the 30-bar window.
+# All 31/31 v0.6.0 trades exited via max_hold; 0 via stop/trail/tp.
+# Fix: multiply daily_vol by _HOLD_VOL_SCALE = sqrt(30/390) ≈ 0.277.
+
+def test_h14_scale_constant_matches_hold_bars():
+    """_HOLD_VOL_SCALE = sqrt(SIZING_MAX_HOLD_BARS / 390) — regression guard."""
+    import math
+    from src.agents.signal_loop import _HOLD_VOL_SCALE, SIZING_MAX_HOLD_BARS
+    expected = math.sqrt(SIZING_MAX_HOLD_BARS / 390.0)
+    assert abs(_HOLD_VOL_SCALE - expected) < 1e-9, (
+        f"_HOLD_VOL_SCALE={_HOLD_VOL_SCALE} but sqrt({SIZING_MAX_HOLD_BARS}/390)={expected}"
+    )
+
+
+def test_h14_stops_tight_relative_to_daily_vol():
+    """After scaling, stop_loss must be well below the daily vol — not ~4× it.
+
+    Before H14, INTC (daily_vol≈4%) got stop=4.4% — wider than its 1-day move
+    expectation. The whole point of a 30-bar hold is the stop fires on 30-bar
+    noise, not full-day noise. Assert the stop is narrower than the unscaled
+    daily_vol figure.
+    """
+    from src.agents.signal_loop import _atr_exits, _HOLD_VOL_SCALE
+    intc_daily_vol = 0.04   # representative value
+    sl, _ts, tp = _atr_exits(intc_daily_vol)
+    # Stop should be near period_vol * 1.1 = 0.04 * 0.277 * 1.1 ≈ 1.22%
+    assert sl < intc_daily_vol, (
+        f"stop_loss {sl:.4f} is >= daily_vol {intc_daily_vol} — stops still "
+        "calibrated to the full trading day, not the 30-bar holding window"
+    )
+    # Must still be meaningful — not below the scaled floor
+    scaled_floor = 0.010 * _HOLD_VOL_SCALE
+    assert sl >= scaled_floor, f"stop_loss {sl:.4f} below scaled floor {scaled_floor:.4f}"
+
+
+def test_h14_reward_exceeds_risk_at_representative_vols():
+    """R:R stays > 1 at representative intraday daily_vol values after scaling."""
+    from src.agents.signal_loop import _atr_exits
+    for daily_vol in [0.008, 0.02, 0.04, 0.08, 0.12]:
+        sl, _ts, tp = _atr_exits(daily_vol)
+        assert tp > sl, (
+            f"R:R inverted at daily_vol={daily_vol}: tp={tp:.4f} sl={sl:.4f}"
+        )
+        assert tp / sl >= 1.3, (
+            f"R:R below 1.3 at daily_vol={daily_vol}: {tp/sl:.2f}"
+        )
+
+
+def test_h14_full_vol_range_reward_exceeds_risk():
+    """Sweep the full vol range — R:R must stay > 1 everywhere after scaling."""
+    from src.agents.signal_loop import _atr_exits, DAILY_VOL_FLOOR, DAILY_VOL_CEIL
+    steps = 40
+    for i in range(steps + 1):
+        dv = DAILY_VOL_FLOOR + (DAILY_VOL_CEIL - DAILY_VOL_FLOOR) * i / steps
+        sl, _ts, tp = _atr_exits(dv)
+        assert tp > sl, (
+            f"reward <= risk at daily_vol={dv:.4f}: tp={tp:.4f} sl={sl:.4f}"
+        )

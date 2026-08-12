@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT RESUMED (Aug 6). v0.6.2 DEPLOYED (universe-rotation zombie fix). MSCI zombie CLOSED (Aug 10, +$9.61). M2 v0.6.0 n=16 (PF=2.02, noise). W33 review complete.",
- "last_iteration_date": "2026-08-10",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=16 on 3 trading days (Aug 6, 7, 10). PF=2.02 driven by MSTR (+$504.43, Aug 7). All exits via max_hold=30. No losing days. Halt lifted Aug 6 (exact timing unknown \u2014 inferred from first new entry GS Aug 6). v0.6.2 fixed universe-rotation zombie: owned tickers now tracked regardless of screener membership. portfolio_heat blind spot patched. PRs #31/#32 (halt-aware exits) pending merge. Railway worker BLOCKED week 7.",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT RESUMED (Aug 6). v0.6.2 DEPLOYED. H14 IMPLEMENTED (horizon-scaled ATR exits, PR pending). H15 IMPLEMENTED (n_trades_today persistence, PR #35 pending merge). M2 v0.6.0 n=31 (PF=1.79, noise). W34 day 2.",
+ "last_iteration_date": "2026-08-12",
+ "active_hypothesis": "H14 IMPLEMENTED \u2014 horizon-scaled ATR exits. Root cause: _atr_exits used full daily_vol, so at max_hold=30 (7.7% of day) stops were ~3.6x too wide (INTC stop was 4.4% vs ~1.2% needed). Confirmed: 31/31 v0.6.0 exits via max_hold, 0 via stop/trail/tp. Fix: _HOLD_VOL_SCALE=sqrt(30/390)=0.277. PR pending human merge + Railway data_run. H15 also implemented (PR #35): n_trades_today now persisted across restarts \u2014 Aug 10 had 15 trades vs cap 6 due to mid-day restart.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -38,18 +38,18 @@
   "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD. halt_state lost on every redeploy (CLAUDE.md violation — deploy must not re-enable trading after halt). Tests: test_risk_state_persistence.py added (276 lines).",
   "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start. Self-heals understated peak from prior restarts. Prevents drawdown baseline from resetting to 0 after any deploy.",
   "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Staleness fix = freeze-exempt. Model promotion classification (bug-fix vs strategy-change) pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy.",
-  "all_time_n_closed": 121,
-  "all_time_n_closed_note": "Updated Aug 10 (+22 since Jul 31): Aug 3 carryover closures (AMAT -$471, TSLA +$243, PLTR +$325, INTC +$70, AVGO +$169), Aug 10 zombie MSCI +$10, plus 16 new v0.6.0 trades Aug 6-10. Was 99.",
-  "all_time_win_rate": 0.458,
+  "all_time_n_closed": 136,
+  "all_time_n_closed_note": "Updated Aug 12 (+15 since Aug 10): 15 new v0.6.0 trades Aug 11-12. Was 121.",
+  "all_time_win_rate": 0.456,
   "all_time_pf_stored": 0.77,
   "all_time_pf_fill_corrected": 0.860,
-  "m2_v060_n": 16,
-  "m2_v060_win_rate": 0.467,
-  "m2_v060_pf": 2.02,
-  "m2_v060_net_pnl": 593.38,
-  "m2_v060_expectancy_per_trade": 39.56,
+  "m2_v060_n": 31,
+  "m2_v060_win_rate": 0.452,
+  "m2_v060_pf": 1.79,
+  "m2_v060_net_pnl": 701.0,
+  "m2_v060_expectancy_per_trade": 22.6,
   "m2_v060_max_single_loss": -154.20,
-  "m2_v060_note": "n=16, PF=2.02 — NOISE. 1 trade (MSTR Aug 7, +$504.43) = 43% of gross profit. All exits via max_hold=30. 3 trading days, all net positive (Aug 6: +$64.74, Aug 7: +$8.90, Aug 10: +$519.74). No stop_loss exits in v0.6.0 window. Sharpe not meaningful at n=16. Gate requires n>=100.",
+  "m2_v060_note": "n=31, PF=1.79 — NOISE. All 31 exits via max_hold=30 (0 via stop/trail/tp). Root cause of 0 exits: daily_vol stops were ~3.6x too wide for 30-bar window. H14 fix deployed Aug 12 — PR pending. Sharpe not meaningful at n=31. Gate requires n>=100.",
   "trailing_30_pf_stored": 0.60,
   "trailing_30_pf_fill_corrected": 0.864,
   "trailing_30_win_rate": 0.433,
@@ -193,6 +193,31 @@
    "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
   },
   {
+   "id": "H14",
+   "hypothesis": "Horizon-scaled ATR exits: _atr_exits uses full daily_vol, so stops for max_hold=30 (7.7% of a 390-bar day) are sqrt(390/30)≈3.6x too wide. Scale daily_vol by _HOLD_VOL_SCALE=sqrt(30/390)≈0.277 before computing thresholds, so each stop corresponds to 1.1σ of the ACTUAL holding window. Confirmed: 31/31 v0.6.0 exits via max_hold (0 via stop/trail/tp).",
+   "status": "implemented — PR #36 pending merge + needs_data_run",
+   "implementation_date": "2026-08-12",
+   "test": "Railway data_run: compare stop_loss/trailing_stop/take_profit exit counts before (0 in 31 trades) vs after H14. Acceptance: >10% exits via non-max_hold path on next 30+ trades.",
+   "pr_branch": "feat/rnd-H14-horizon-scaled-exits",
+   "pr_number": 36,
+   "files_changed": ["src/agents/signal_loop.py", "tests/unit/test_signal_loop.py"],
+   "new_tests": 5,
+   "pm_priority": 1,
+   "pm_priority_note": "CRITICAL infra fix — not a strategy change. All v0.6.0 exits via max_hold is a confirmed symptom of stops 3.6x too wide. This is a correctness fix (stops should correspond to holding-window noise, not full-day noise). Freeze-exempt: it corrects a parameter calibration error, not a new strategy.",
+   "tpm_flag": "Implemented — awaiting human merge. Railway data_run needed to confirm exit-type distribution shift.",
+   "blocked_note": "Needs human PR merge; then will run with Railway data."
+  },
+  {
+   "id": "H15",
+   "hypothesis": "Persist n_trades_today across restarts. Aug 10 had 15 trades vs daily cap of 6 because _sizing_n_trades_today was not persisted — mid-day restart (v0.6.2 deploy) reset the counter to 0, granting a fresh day-trade budget. Same durable-state pattern as v0.5.4 risk_state_store.",
+   "status": "implemented — PR #35 pending merge",
+   "implementation_date": "2026-08-11",
+   "pr_branch": "feat/rnd-H15-persist-n-trades-today",
+   "pr_number": 35,
+   "pm_priority_note": "Risk control integrity fix (budget reset on redeploy = risk control bypass). Freeze-exempt: restores correct risk control behavior, does not change strategy.",
+   "tpm_flag": "Implemented — awaiting human merge."
+  },
+  {
    "id": "H8",
    "hypothesis": "News catalyst tilt: entries on tickers with a fresh bullish catalyst (deal/earnings beat/guidance raise from the News Radar) outperform; macro tailwind days deserve fuller heat",
    "test": "needs a backtest phase joining reports/news_risk history to entries \u2014 design after H0 baseline",
@@ -251,6 +276,29 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-12",
+   "hypothesis_id": "H14",
+   "result": "IMPLEMENTED — needs_data_run. Root cause confirmed: 31/31 v0.6.0 exits via max_hold (0 via stop_loss/trailing_stop/take_profit). _atr_exits used full daily_vol, making stops ~3.6x too wide for the 30-bar holding window (INTC: stop was 4.4% vs ~1.2% needed for 1.1σ of 30 bars). Fix: added _HOLD_VOL_SCALE=sqrt(30/390)≈0.277 as module constant; multiplied daily_vol and all floor constants by this factor inside _atr_exits. 5 tests added/updated (test_h14_scale_constant_matches_hold_bars, test_h14_stops_tight_relative_to_daily_vol, test_h14_reward_exceeds_risk_at_representative_vols, test_h14_full_vol_range_reward_exceeds_risk, updated test_atr_exits_geometry). All arithmetic tests pass; pre-existing env-var failures unchanged. PR #36 opened.",
+   "tests_status": "7 related tests pass (arithmetic only; env-var tests unchanged from prior run)",
+   "new_tests": 5,
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-H14-horizon-scaled-exits",
+   "pr_number": 36,
+   "notes": "Freeze-exempt (correctness fix: parameter calibration error, not new strategy). Expected impact: stop_loss/trailing_stop/take_profit exits will begin firing, reducing max_hold dominance. INTC (id 150, -1.33%) would have triggered stop at ~1.22% — first non-max_hold exit since v0.6.0 deploy. Railway data_run required to confirm exit-type distribution shift."
+  },
+  {
+   "date": "2026-08-11",
+   "hypothesis_id": "H15",
+   "result": "IMPLEMENTED — PR #35 pending merge. Aug 10 had 15 trades vs daily cap of 6. Root cause: _sizing_n_trades_today reset to 0 on redeploy (mid-day v0.6.2 deploy). Fix: persist counter to risk_state_store using same pattern as v0.5.4. Freeze-exempt (risk control integrity fix).",
+   "files_changed": ["src/agents/signal_loop.py", "tests/unit/test_risk_state_persistence.py"],
+   "pr_branch": "feat/rnd-H15-persist-n-trades-today",
+   "pr_number": 35
+  },
   {
    "date": "2026-08-10",
    "hypothesis_id": "W33_PROGRAM_REVIEW",
@@ -385,6 +433,8 @@
  ],
  "pending_tasks": [
   "[OWNER ACTION \u2014 CRITICAL, WEEK 7] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion.",
+  "[OWNER ACTION \u2014 HIGH] Merge PR #36 (H14 horizon-scaled ATR exits). FREEZE-EXEMPT correctness fix: 31/31 v0.6.0 exits via max_hold because stops were 3.6x too wide. Fix scales _atr_exits by sqrt(30/390). 5 tests pass.",
+  "[OWNER ACTION \u2014 HIGH] Merge PR #35 (H15 persist n_trades_today). FREEZE-EXEMPT risk control fix: Aug 10 had 15 trades vs cap 6 due to counter reset on redeploy.",
   "[OWNER ACTION \u2014 HIGH] Merge PR #31 or #32 (H13 halt-aware exits). v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
   "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",
