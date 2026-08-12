@@ -349,6 +349,64 @@ class Params:
 DVOL = 19.75
 REGIME_SCALE = {0: 1.00, 1: 0.70, 2: 0.50}
 
+# ─── Production-aligned parameters ───────────────────────────────────────────
+# PROD_PARAMS mirrors the live signal_loop constants exactly.  Use it as the
+# backtest BASELINE so simulation and live are directly comparable.
+#
+# Root of the H10 return-calc discrepancy (2026-07-24 finding):
+#   Params() defaults use max_hold_bars=1170 (3-day), tp_mult=3.0 (unreachable),
+#   max_pos=4, heat_ceiling=0.60, trades_per_day=4, pdt_enabled=True — none of
+#   which match production (390 bars, 1.5×, 6, 0.75, 6, False respectively).
+#   A 3-day hold on a 1-day-signal system introduces survivorship bias in the
+#   winners that drift for 3 days; the result is a 5-10× return inflation vs the
+#   production account.  Switching phase_simulate to PROD_PARAMS+PROD_CAPITAL
+#   eliminates this systematic overstatement.
+#
+# PROD_CAPITAL: the sizer's _MAX_NOTIONAL=$2500 hard cap only binds below ~$20k
+# portfolio value (12.5% × $20k = $2500).  At $10k the backtest deploys 25% per
+# position instead of the production 12.5%, further inflating returns.  Use
+# PROD_CAPITAL to keep the notional sizing proportional.
+#
+# Each field is followed by the corresponding signal_loop constant.
+# Tests in test_research_backtest.py enforce these stay in sync.
+PROD_CAPITAL: float = 100_000.0  # matches paper account scale (~$97-104k range)
+
+PROD_PARAMS = Params(
+    # exit geometry (v0.5.3 — TP rescaled to reachable-within-1-day)
+    stop_mult=1.1,          # SIZING_STOP_LOSS_DVOL_MULT
+    trail_mult=1.2,         # SIZING_TRAILING_DVOL_MULT
+    tp_mult=1.5,            # SIZING_TAKE_PROFIT_DVOL_MULT  (default=3.0, unreachable)
+    sl_floor=0.010,         # SIZING_STOP_LOSS_FLOOR
+    sl_cap=0.100,           # SIZING_STOP_LOSS_CAP
+    ts_floor=0.008,         # SIZING_TRAILING_STOP_FLOOR
+    ts_cap=0.100,           # SIZING_TRAILING_STOP_CAP
+    tp_floor=0.015,         # SIZING_TAKE_PROFIT_FLOOR     (default=0.020)
+    tp_cap=0.135,           # SIZING_TAKE_PROFIT_CAP       (default=0.200, unreachable)
+    # hold / stagnation
+    max_hold_bars=390,      # SIZING_MAX_HOLD_BARS  (~1 trading day; default=1170 = 3 days)
+    stag_bars=390,          # SIZING_STAGNATION_BARS (== max_hold → unreachable as designed)
+    stag_pnl=0.004,         # SIZING_STAGNATION_PNL
+    reversal_bars=45,       # SIZING_REVERSAL_BARS
+    catastrophic_mult=2.0,  # CATASTROPHIC_STOP_MULT
+    # entry gates
+    cost_threshold=0.003,   # DYN_THRESH_FALLBACK
+    dead_hi=0.60,           # SIZING_DIR_PROB_DEAD_ZONE[1] (default=0.55)
+    dead_lo=0.40,           # SIZING_DIR_PROB_DEAD_ZONE[0]
+    entry_start=(9, 40),    # ENTRY_WINDOW_ET[0]
+    entry_end=(15, 30),     # ENTRY_WINDOW_ET[1]
+    # portfolio / capacity
+    max_pos=6,              # MAX_OPEN_POSITIONS        (default=4)
+    heat_ceiling=0.75,      # PORTFOLIO_HEAT_CEILING    (default=0.60)
+    sector_cap_n=2,         # MAX_POSITIONS_PER_SECTOR
+    max_entries_tick=2,     # MAX_ENTRIES_PER_TICK
+    trades_per_day=6,       # SIZING_MAX_TRADES_PER_DAY (default=4)
+    cooldown=60,            # SIZING_TICKER_COOLDOWN_BARS
+    pdt_enabled=False,      # equity > PDT_EQUITY_THRESHOLD=$25k  (default=True)
+    pdt_max=3,              # PDT_MAX_DAY_TRADES
+    cost_bps=2.0,
+    label="prod_params",
+)
+
 
 def _exits(daily_vol: float, p: Params) -> tuple[float, float, float]:
     # Mirrors live signal_loop._atr_exits: consumes a TRUE daily-vol fraction.
@@ -638,7 +696,9 @@ def phase_simulate() -> None:
         (os.environ.get("RESEARCH_TUNE_LEG_START", "2026-05-18"), TUNE_END, "tune-leg"),
         (VAL_LEG_START, VAL_LEG_END, "val-leg"),
     ]:
-        res = simulate(preds, Params(label=f"baseline {tag}"), s, e)
+        from dataclasses import replace as _replace
+        p = _replace(PROD_PARAMS, label=f"prod_baseline {tag}")
+        res = simulate(preds, p, s, e, capital=PROD_CAPITAL)
         res.pop("_trades")
         print(json.dumps(res, indent=1))
 
@@ -678,9 +738,11 @@ def phase_tune() -> None:
         r = simulate(preds, replace(p, label=lbl + "|VAL"), VAL_LEG_START, VAL_LEG_END)
         r.pop("_trades")
         val_rows.append(r)
-    base_t = simulate(preds, Params(label="baseline|TUNE"),
-                      os.environ.get("RESEARCH_TUNE_LEG_START", "2026-05-18"), TUNE_END)
-    base_v = simulate(preds, Params(label="baseline|VAL"), VAL_LEG_START, VAL_LEG_END)
+    base_t = simulate(preds, replace(PROD_PARAMS, label="prod_baseline|TUNE"),
+                      os.environ.get("RESEARCH_TUNE_LEG_START", "2026-05-18"), TUNE_END,
+                      capital=PROD_CAPITAL)
+    base_v = simulate(preds, replace(PROD_PARAMS, label="prod_baseline|VAL"),
+                      VAL_LEG_START, VAL_LEG_END, capital=PROD_CAPITAL)
     base_t.pop("_trades"); base_v.pop("_trades")
     val_rows.extend([base_t, base_v])
     vout = pd.DataFrame(val_rows)
