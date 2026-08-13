@@ -1,65 +1,75 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 7). BOT RESUMED (Aug 6). v0.6.2 DEPLOYED (universe-rotation zombie fix). MSCI zombie CLOSED (Aug 10, +$9.61). M2 v0.6.0 n=16 (PF=2.02, noise). W33 review complete.",
- "last_iteration_date": "2026-08-10",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=16 on 3 trading days (Aug 6, 7, 10). PF=2.02 driven by MSTR (+$504.43, Aug 7). All exits via max_hold=30. No losing days. Halt lifted Aug 6 (exact timing unknown \u2014 inferred from first new entry GS Aug 6). v0.6.2 fixed universe-rotation zombie: owned tickers now tracked regardless of screener membership. portfolio_heat blind spot patched. PRs #31/#32 (halt-aware exits) pending merge. Railway worker BLOCKED week 7.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 8). BOT ACTIVE (resumed Aug 6). v0.6.2 DEPLOYED. M2 v0.6.0 n=37 (PF=1.87, still noise). PRs #35 (H15: persist daily trade cap) and #36 (H14: horizon-scaled ATR exits) open — both freeze-exempt correctness fixes. Aug 13 nightly review complete.",
+ "last_iteration_date": "2026-08-13",
+ "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=37 on 7 trading days (Aug 6–12). PF=1.87 (was 2.02 at n=16 — normalizing as sample grows). All 37 exits via max_hold=30 — DIAGNOSTIC: _atr_exits() floors (SL=1%, trail=0.8%, TP=1.5%) are calibrated for daily holds, 3.6× too wide for 30-min holds; stops NEVER fire. H14 (PR #36) applies _HOLD_VOL_SCALE=sqrt(30/390)≈0.277 to all ATR stops. H15 (PR #35) persists n_trades_today across restarts — Aug 10 had 15 trades vs cap=6 due to v0.6.2 mid-day restart resetting counter (IDs 143–151 = extra batch). JNJ anomaly: ID 163, BUY with ensemble_signal=-0.0238 (negative ensemble on long entry) — H12 ensemble floor would block this. Railway worker BLOCKED week 8.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-07-27",
+  "snapshot_date": "2026-08-12",
   "integrity_clean_streak": 5,
   "integrity_clean_streak_started": "2026-07-24",
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-10T13:25:00Z",
-  "integrity_sentinel_status": "clearing — MSCI closed Aug 10 post-sentinel-run",
-  "integrity_sentinel_critical_since": "2026-08-02T07:25:00Z",
-  "integrity_sentinel_critical_check": "stale_open_rows",
+  "integrity_sentinel_last_run": "2026-08-12T21:25:00Z",
+  "integrity_sentinel_status": "ALL GREEN Aug 12 21:25 UTC — all 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker",
+  "integrity_sentinel_critical_since": null,
+  "integrity_sentinel_critical_check": null,
   "integrity_sentinel_stale_rows": [],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
   "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
-  "integrity_sentinel_critical_note": "RESOLVED. MSCI (id 119) closed Aug 10 after v0.6.2 fixed the universe-rotation zombie bug. Sentinel was critical at 13:25 UTC (stale_open_rows: MSCI). MSCI exited post-sentinel-run via max_hold (+$9.61). Sentinel should show clean on next hourly run. pnl_pct_consistency, fill_price_pnl_consistency, kelly_seed_sanity, db_vs_broker all passed at 13:25 UTC Aug 10.",
-  "deployed_version": "0.6.1",
+  "watchdog_status": "OK — last tick 2026-08-12T21:38:00Z, 0 tick errors",
+  "deployed_version": "0.6.2",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
-  "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently. Now reports 'resumed_and_persisted' or 'resumed_but_persist_failed'. 227 tests.",
+  "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
+  "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
   "h5_status_note": "H5 (hold extension) effectively disabled by v0.6.0: MAX_HOLD_EXTENSIONS=0. Extension logic kept in code and covered by tests but will never fire. The 30-bar cap + 2 extensions would be 90 bars, back in the IC≈0.06 region. H5 needs re-evaluation under the new horizon.",
   "circuit_breaker_halted": false,
   "circuit_breaker_halt_reason": "max_drawdown — RESOLVED. Halt lifted Aug 6 (inferred from first new entry GS Aug 6).",
   "circuit_breaker_halted_since": "2026-07-28",
   "circuit_breaker_lifted": "~2026-08-06",
+  "n_open_positions_aug13": 0,
   "n_open_positions_aug10": 0,
   "n_open_positions_jul31": 6,
   "open_positions_jul31": ["AVGO (id 126, +sentiment=0.60)", "INTC (id 125, sentiment=0.27)", "PLTR (id 124, sentiment=-0.97 ⚠)", "TSLA (id 122, ensemble=0.162 weak)", "AMAT (id 120)", "MSCI (id 119)"],
+  "kelly_mode": "normal",
+  "kelly_fraction_aug12": 0.2349,
   "kelly_fraction_jul31": -0.0464,
-  "v053_note": "TP mult 3.0→1.5 (reachable within 1-day hold), TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling, fixing 6×15%=90% overshoot). 206 tests pass. Owner judgment: bug-fix class (TP unreachable by construction; heat cap derived from obsolete 4-slot config). Conservative direction; paper mode only.",
-  "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD. halt_state lost on every redeploy (CLAUDE.md violation — deploy must not re-enable trading after halt). Tests: test_risk_state_persistence.py added (276 lines).",
-  "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start. Self-heals understated peak from prior restarts. Prevents drawdown baseline from resetting to 0 after any deploy.",
-  "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Staleness fix = freeze-exempt. Model promotion classification (bug-fix vs strategy-change) pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy.",
-  "all_time_n_closed": 121,
-  "all_time_n_closed_note": "Updated Aug 10 (+22 since Jul 31): Aug 3 carryover closures (AMAT -$471, TSLA +$243, PLTR +$325, INTC +$70, AVGO +$169), Aug 10 zombie MSCI +$10, plus 16 new v0.6.0 trades Aug 6-10. Was 99.",
+  "v053_note": "TP mult 3.0→1.5, TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling). 206 tests pass.",
+  "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD.",
+  "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start.",
+  "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Classification pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy. Low urgency — M2 clock already resets from v0.6.0.",
+  "all_time_n_closed": 136,
+  "all_time_n_closed_note": "Updated Aug 13 (+15 since Aug 10 state): Aug 11–12 new v0.6.0 trades. Was 121.",
   "all_time_win_rate": 0.458,
   "all_time_pf_stored": 0.77,
   "all_time_pf_fill_corrected": 0.860,
-  "m2_v060_n": 16,
-  "m2_v060_win_rate": 0.467,
-  "m2_v060_pf": 2.02,
-  "m2_v060_net_pnl": 593.38,
-  "m2_v060_expectancy_per_trade": 39.56,
+  "m2_v060_n": 37,
+  "m2_v060_win_rate": 0.472,
+  "m2_v060_pf": 1.87,
+  "m2_v060_gross_profit": 2042.01,
+  "m2_v060_gross_loss": 1094.06,
+  "m2_v060_net_pnl": 947.95,
+  "m2_v060_expectancy_per_trade": 25.62,
   "m2_v060_max_single_loss": -154.20,
-  "m2_v060_note": "n=16, PF=2.02 — NOISE. 1 trade (MSTR Aug 7, +$504.43) = 43% of gross profit. All exits via max_hold=30. 3 trading days, all net positive (Aug 6: +$64.74, Aug 7: +$8.90, Aug 10: +$519.74). No stop_loss exits in v0.6.0 window. Sharpe not meaningful at n=16. Gate requires n>=100.",
-  "trailing_30_pf_stored": 0.60,
-  "trailing_30_pf_fill_corrected": 0.864,
+  "m2_v060_exit_distribution": {"max_hold": 37, "stop_loss": 0, "trailing_stop": 0, "take_profit": 0, "signal_reversal": 0},
+  "m2_v060_note": "n=37 Aug 6–12, PF=1.87, WR=47.2% (17W/1T/19L), net +$947.95. DIAGNOSTIC: 100% max_hold exits — SL/trail/TP floors are 3.6× too wide for 30-bar holds (daily ATR 2% → 30-bar SL=0.28% < floor=1%). Stops will never fire until H14 (PR #36) is merged. MSTR (Aug 7, +$504.43) no longer sole driver but still outsized. JNJ anomaly: ID 163 BUY with ensemble_signal=-0.0238 (negative ensemble on long entry — H12 floor would block). Gate requires n≥100 — do not act on PF until then.",
+  "trailing_30_pf": 2.03,
+  "trailing_30_pf_stored": 2.03,
+  "trailing_30_pf_fill_corrected": 2.03,
   "trailing_30_win_rate": 0.433,
+  "trailing_30_net_pnl": 960.50,
+  "trailing_30_note": "IDs 133–162 (30 most recent closed trades through Aug 12). All v0.6.0 era, post-repair — no fill-corrected vs stored distinction needed.",
   "frozen_config_n": 35,
   "frozen_config_win_rate": 0.400,
   "frozen_config_pf": 0.636,
   "frozen_config_net_pnl": -1973,
   "frozen_config_max_drawdown_usd": 1856,
   "frozen_config_max_drawdown_pct": 0.019,
-  "frozen_config_update_jul31": "n=35 (+3 since Jul 27). PF=0.636 (was 0.741). New trades: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop). RETIRED — measured v0.4.4@max_hold=390 (IC=0.004, edge gone). Not comparable to v0.6.0.",
+  "frozen_config_update_jul31": "n=35. PF=0.636 (was 0.741). RETIRED — measured v0.4.4@max_hold=390 (IC=0.004, edge gone). Not comparable to v0.6.0.",
   "w33_n_closed": 22,
   "w33_win_rate": 0.571,
   "w33_pf": 1.89,
@@ -70,22 +80,55 @@
   "w31_pf": 1.42,
   "w31_net_pnl": 621,
   "open_positions_jul27": 6,
-  "open_positions_note": "IDs 112-117 opened Jul 24; survived weekend; will process at Jul 27 market open. Pre-v0.5.3 sizing. Heat 87.45% clears once these exit.",
-  "kelly_mode": "probation",
+  "open_positions_note": "IDs 112-117 opened Jul 24; survived weekend; processed at Jul 27 market open. Pre-v0.5.3 sizing. Heat 87.45% cleared once these exited.",
   "suspected_corrupt_rows": [],
-  "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy. Fill-corrected trailing-30 PF=0.864 is the canonical figure.",
-  "m2_trajectory": "IN PROGRESS — v0.6.0 window n=16 (Aug 6–10). PF=2.02 at n=16 is noise. Bot resumed Aug 6 after halt lift. All exits max_hold (30 bars). ETA for n=100: mid-Sep at ~5 trades/day. Do not act on PF signal until n≥50."
+  "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy.",
+  "m2_trajectory": "IN PROGRESS — v0.6.0 window n=37 (Aug 6–12). PF=1.87 at n=37 is still noise (MSTR +$504 remains outsized). Bot active. All exits via max_hold — stops are miscalibrated for 30-bar horizon (H14 fix pending). JNJ anomaly warrants monitoring. ETA for n=100: mid-Sep at ~5 trades/day. Do not act on PF signal until n≥50.",
+  "jnj_anomaly": "ID 163, BUY, ensemble_signal=-0.0238 (NET NEGATIVE on long entry). Won +$62.86 via max_hold. A negative ensemble on a BUY means the weighted composite of model scores is bearish even though LGBM pred_return+dir_prob passed the entry gate. H12 (min_signal=0.20) would block this. Monitor for recurrence."
  },
  "live_data_status": {
-  "date": "2026-07-22",
-  "status": "OK \u2014 direct + snapshot relay",
-  "note": "The '403' was never the service: Railway blocks datacenter IPs (cloud sandbox, GH Actions), not residential. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
+  "date": "2026-08-13",
+  "status": "OK — live-snapshot relay",
+  "note": "Railway blocks datacenter IPs. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
   {
+   "id": "H13",
+   "hypothesis": "Halt-aware exits: when the circuit breaker fires, the current code blocks the exit path too (the per-tick gate uses the same halted flag). Open positions cannot exit after a halt, stranding capital indefinitely. Fix: allow exits through the halt gate; only block new entries.",
+   "status": "implemented — PRs #31/#32 (owner to choose full fix variant) + PR #33 (null-exit sentinel) open since Aug 3",
+   "added": "2026-08-03",
+   "pr_number_choice": "31 or 32 (owner decision)",
+   "pr_number_sentinel": 33,
+   "pr_state": "OPEN — awaiting owner merge. v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
+   "priority": "HIGH",
+   "pm_priority_note": "Structural risk: halt could strand positions again as with the Jul 28 event. Owner must choose PR #31 or #32."
+  },
+  {
+   "id": "H14",
+   "hypothesis": "Horizon-scaled ATR exits: _atr_exits() floors (SL=1%, trail=0.8%, TP=1.5%) were calibrated for daily holds (390-bar). v0.6.0 reduced max_hold to 30 bars but did not rescale — stops are 3.6× too wide for intraday holds, causing 100% max_hold exits. Apply _HOLD_VOL_SCALE=sqrt(30/390)≈0.277 to daily_vol and all floor constants in _atr_exits(). Evidence: all 37 v0.6.0 exits via max_hold; with daily ATR 2%, 30-bar SL=0.28% < floor=1%.",
+   "status": "implemented — PR #36 open (freeze-exempt correctness fix, Aug 12)",
+   "added": "2026-08-12",
+   "added_by": "nightly desk — root cause analysis of 100% max_hold exit distribution in v0.6.0 window",
+   "pr_branch": "feat/rnd-H14-horizon-scaled-exits",
+   "pr_number": 36,
+   "pr_state": "OPEN — 4 unit tests pass (test_h14_scale_constant, test_h14_stops_tight_relative_to_daily_vol, test_h14_reward_exceeds_risk_at_representative_vols, test_h14_full_vol_range_reward_exceeds_risk). Freeze-exempt: corrects stop calibration to match the deployed horizon without changing entry logic or direction.",
+   "priority": "HIGH — merge soon. Stops are currently dead code for all 30-bar positions."
+  },
+  {
+   "id": "H15",
+   "hypothesis": "Persist n_trades_today in RiskStateSnapshot so mid-day restarts do not reset the daily trade cap. Aug 10: v0.6.2 deploy mid-day reset _sizing_n_trades_today to 0, granting a second 6-trade allotment → 15 trades vs cap=6 (IDs 143–151 = extra batch). Fix: restore n_trades_today from snapshot when same-day restart is detected.",
+   "status": "implemented — PR #35 open (freeze-exempt risk-control fix, Aug 11)",
+   "added": "2026-08-11",
+   "added_by": "nightly desk — Aug 10 had 15 trades vs SIZING_MAX_TRADES_PER_DAY=6 due to v0.6.2 mid-day restart resetting counter",
+   "pr_branch": "feat/rnd-H15-persist-daily-trade-cap",
+   "pr_number": 35,
+   "pr_state": "OPEN — 5 unit tests pass (roundtrip, backward-compat, mid-day-restart, overnight-reset, JSON-payload). Freeze-exempt: risk-control enforcement fix (cap was being circumvented by restarts).",
+   "priority": "HIGH — merge soon. Trade cap is currently ineffective across deploys."
+  },
+  {
    "id": "H0",
-   "hypothesis": "Production-baseline walk-forward backtest \u2014 the reference every H1-H7 comparison requires (also unblocks M2 attribution)",
+   "hypothesis": "Production-baseline walk-forward backtest — the reference every H1-H7 comparison requires (also unblocks M2 attribution)",
    "test": "python scripts/research_backtest.py --phase all",
    "status": "pending",
    "added": "2026-07-21",
@@ -93,48 +136,45 @@
   },
   {
    "id": "H5",
-   "hypothesis": "Signal-reconfirmed hold extension: at max_hold (390 bars), if the ticker would qualify as a FRESH entry right now (lgbm_pred_return > dynamic cost threshold AND dir_prob >= 0.60), extend the hold one more day instead of exiting \u2014 equivalent to a re-entry without paying the round-trip spread. Hard caps: max 2 extensions (3 days absolute), stops/trail/target always active, extension NEVER allowed if position is at a loss > 1x daily vol.",
-   "test": "python scripts/research_backtest.py --phase holdext (4 variants: max_ext\u2208{1,2} \u00d7 loss_gate_mult\u2208{1.0,2.0}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "hypothesis": "Signal-reconfirmed hold extension: at max_hold (390 bars), if the ticker would qualify as a FRESH entry right now (lgbm_pred_return > dynamic cost threshold AND dir_prob >= 0.60), extend the hold one more day instead of exiting. Hard caps: max 2 extensions, stops/trail/target always active, extension NEVER allowed if position is at a loss > 1x daily vol.",
+   "test": "python scripts/research_backtest.py --phase holdext (4 variants: max_ext∈{1,2} × loss_gate_mult∈{1.0,2.0}); acceptance = improvement on BOTH tune AND hold-out legs. NOTE: needs re-scope for 30-bar horizon before running.",
    "status": "blocked_phase_unmerged",
-   "priority": "high \u2014 owner-requested",
+   "priority": "high — owner-requested",
    "implementation_date": "2026-07-14",
    "backtest_phase_pr": 9,
    "pr_branch": "feat/rnd-H5H3-hold-extension-earnings-blackout",
    "pr_number": 6,
-   "pr_status": "MERGED \u2014 in production (v0.4.4). Backtest phase in PR #9 (DRAFT).",
+   "pr_status": "MERGED — in production (v0.4.4). Backtest phase in PR #9 (DRAFT).",
    "pm_priority": 1,
-   "pm_priority_note": "Highest Railway backtest priority: owner-requested, strongest live evidence base (5W/4L max_hold cohort). Backtest phase PR #9 correctly held as DRAFT.",
-   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-14 \u2014 6 DAYS (PAST FLAG THRESHOLD)",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run — BLOCKED. Also needs re-scope for 30-bar horizon (H5 was written for 390-bar).",
+   "blocked_note": "MAX_HOLD_EXTENSIONS=0 in production — H5 effectively disabled. Needs re-evaluation under 30-bar horizon before Railway backtest."
   },
   {
    "id": "H2",
    "hypothesis": "SPY/QQQ regime overlay (only deploy full heat when SPY > 20d MA) improves Sharpe by cutting down-tape exposure",
-   "test": "python scripts/research_backtest.py --phase spy_ma (4 variants: MA period\u2208{10d,20d} \u00d7 action\u2208{gate,half}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "test": "python scripts/research_backtest.py --phase spy_ma (4 variants: MA period∈{10d,20d} × action∈{gate,half}); acceptance = improvement on BOTH tune AND hold-out legs",
    "status": "blocked_phase_unmerged",
    "implementation_date": "2026-07-11",
    "backtest_phase_pr": 10,
    "pr_branch": "feat/rnd-H2-spy-ma-overlay",
    "pr_number": 4,
-   "pr_status": "MERGED \u2014 in production (v0.4.2). Backtest phase in PR #10 (DRAFT).",
+   "pr_status": "MERGED — in production (v0.4.2). Backtest phase in PR #10 (DRAFT).",
    "pm_priority": 2,
-   "pm_priority_note": "Conservative risk reduction; clean mechanism. Backtest phase PR #10 correctly held as DRAFT.",
-   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-11 \u2014 9 DAYS (PAST FLAG THRESHOLD)",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run since 2026-07-11 — blocked week 8",
+   "blocked_note": "needs Railway worker (AGENT_WORKER_ENABLE=true)"
   },
   {
    "id": "H1",
    "hypothesis": "Cross-sectional daily top-k ranking (long top 3-4 by LGBM pred at 14:00 ET, exit next day) beats per-ticker threshold entries",
-   "test": "python scripts/research_backtest.py --phase topk (4 variants: k\u2208{3,4} \u00d7 snapshot\u2208{13:00,14:00 ET}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "test": "python scripts/research_backtest.py --phase topk (4 variants: k∈{3,4} × snapshot∈{13:00,14:00 ET}); acceptance = improvement on BOTH tune AND hold-out legs",
    "status": "blocked_phase_unmerged",
    "implementation_date": "2026-07-15",
    "pr_branch": "feat/rnd-H1-cross-sectional-topk",
    "pr_number": 7,
-   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact",
+   "pr_state": "DRAFT — held pending Railway backtest; freeze intact",
    "pm_priority": 3,
-   "pm_priority_note": "Largest architectural change; backtest required before merge. Correctly held as DRAFT.",
-   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-15 \u2014 5 DAYS (AT FLAG THRESHOLD)",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run since 2026-07-15 — blocked week 8",
+   "blocked_note": "needs Railway worker (AGENT_WORKER_ENABLE=true)"
   },
   {
    "id": "H3",
@@ -144,39 +184,36 @@
    "implementation_date": "2026-07-14",
    "pr_branch": "feat/rnd-H5H3-hold-extension-earnings-blackout",
    "pr_number": 6,
-   "pr_status": "MERGED \u2014 in production (v0.4.4). No dedicated backtest phase PR yet.",
+   "pr_status": "MERGED — in production (v0.4.4). No dedicated backtest phase PR yet.",
    "pm_priority": 4,
-   "pm_priority_note": "Risk reduction hypothesis; outcome uncertain (may remove alpha). Validate H5 and H2 first, then run opportunity-cost analysis.",
-   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-14 \u2014 6 DAYS (PAST FLAG THRESHOLD)",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run since 2026-07-14 — blocked week 8",
+   "blocked_note": "needs Railway worker (AGENT_WORKER_ENABLE=true)"
   },
   {
    "id": "H6",
-   "hypothesis": "Signal persistence filter: require N consecutive qualifying bars (pred_return > threshold AND dir_prob > dead_hi) before allowing a position entry. Filters noise at the cost of some delayed entries.",
-   "test": "python scripts/research_backtest.py --phase persistence (N \u2208 {0, 1, 2, 3}; N=0 is exactly current baseline); acceptance = improvement on BOTH tune AND hold-out legs",
+   "hypothesis": "Signal persistence filter: require N consecutive qualifying bars before allowing a position entry. Filters noise at the cost of some delayed entries.",
+   "test": "python scripts/research_backtest.py --phase persistence (N ∈ {0, 1, 2, 3}; N=0 is current baseline); acceptance = improvement on BOTH tune AND hold-out legs",
    "status": "blocked_phase_unmerged",
    "implementation_date": "2026-07-17",
    "pr_branch": "feat/rnd-H2H6-spy-ma-backtest-persistence",
    "pr_number": 10,
-   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact",
+   "pr_state": "DRAFT — held pending Railway backtest; freeze intact",
    "pm_priority": 5,
-   "pm_priority_note": "New noise-reduction hypothesis. Correctly held as DRAFT. Validate H5/H2 first \u2014 those are deployed and burning live sample. Lower priority than H1.",
-   "tpm_flag": "needs_data_run since 2026-07-17 \u2014 3 days",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run since 2026-07-17 — blocked week 8",
+   "blocked_note": "needs Railway worker (AGENT_WORKER_ENABLE=true)"
   },
   {
    "id": "H7",
-   "hypothesis": "Stagnation exits are dead code in production (SIZING_STAGNATION_BARS == SIZING_MAX_HOLD_BARS = 390, so max_hold always fires first on flat trades). Re-enabling stagnation at 50/67/80% of max_hold frees capital from flat trades earlier. Bonus: PROD_PARAMS establishes the first production-comparable backtest baseline.",
-   "test": "python scripts/research_backtest.py --phase stagnation (stag_bars \u2208 {390 disabled=baseline, 195 50%, 260 67%, 312 80%}); acceptance = improvement on BOTH tune AND hold-out legs",
+   "hypothesis": "Stagnation exits are dead code in production (SIZING_STAGNATION_BARS == SIZING_MAX_HOLD_BARS = 30, so max_hold always fires first). Re-enabling stagnation at 50/67/80% of max_hold frees capital from flat trades earlier.",
+   "test": "python scripts/research_backtest.py --phase stagnation (stag_bars ∈ {30 disabled=baseline, 15 50%, 20 67%, 24 80%}); NOTE: needs re-scope for 30-bar horizon before running.",
    "status": "blocked_phase_unmerged",
    "implementation_date": "2026-07-18",
    "pr_branch": "feat/rnd-H7-prod-aligned-stagnation",
    "pr_number": 11,
-   "pr_state": "DRAFT \u2014 held pending Railway backtest; freeze intact. PROD_PARAMS is read-only reference constant \u2014 no behavior change until explicitly used.",
+   "pr_state": "DRAFT — held pending Railway backtest; freeze intact",
    "pm_priority": 6,
-   "pm_priority_note": "PROD_PARAMS baseline is the most intellectually honest addition this week \u2014 gives Railway worker a production-comparable floor. Stagnation exit is a reasonable optimization but unvalidated. Correctly held as DRAFT.",
-   "tpm_flag": "needs_data_run since 2026-07-18 \u2014 2 days",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run since 2026-07-18 — blocked week 8. Needs re-scope for 30-bar horizon.",
+   "blocked_note": "needs Railway worker; also stagnation_bars test values need updating from 390-bar era to 30-bar era"
   },
   {
    "id": "H4",
@@ -186,71 +223,74 @@
    "implementation_date": "2026-07-10",
    "pr_branch": "feat/rnd-H4-dead-weight-renorm",
    "pr_number": 3,
-   "pr_status": "MERGED \u2014 commit 16051d4. In production (v0.4.4). No dedicated backtest phase PR.",
+   "pr_status": "MERGED — commit 16051d4. In production (v0.4.4). No dedicated backtest phase PR.",
    "pm_priority": 7,
-   "pm_priority_note": "Calibration fix already in production; IC delta confirmation is useful but not blocking. Lowest Railway backtest priority.",
-   "tpm_flag": "\u26a0\ufe0f needs_data_run since 2026-07-10 \u2014 10 DAYS (2\u00d7 FLAG THRESHOLD)",
-   "blocked_note": "test needs a backtest phase from draft PR #9/#10/#11 (unmerged) or a rewritten runnable command; flip to 'pending' with an exact CLI once the phase lands on main"
+   "tpm_flag": "⚠️ needs_data_run since 2026-07-10 — blocked week 8",
+   "blocked_note": "needs Railway worker (AGENT_WORKER_ENABLE=true)"
   },
   {
    "id": "H8",
-   "hypothesis": "News catalyst tilt: entries on tickers with a fresh bullish catalyst (deal/earnings beat/guidance raise from the News Radar) outperform; macro tailwind days deserve fuller heat",
-   "test": "needs a backtest phase joining reports/news_risk history to entries \u2014 design after H0 baseline",
+   "hypothesis": "News catalyst tilt: entries on tickers with a fresh bullish catalyst outperform; macro tailwind days deserve fuller heat",
+   "test": "needs a backtest phase joining reports/news_risk history to entries — design after H0 baseline",
    "status": "proposed",
    "added": "2026-07-21",
    "added_by": "owner request (two-sided news radar, v0.4.10)"
   },
   {
    "id": "H9",
-   "hypothesis": "Probe quality floor: during Kelly probation, require a minimum ensemble_signal >= 0.10 (and sentiment >= -0.50) for the daily probe entry. SNDK id=104 entered with ensemble=0.018 and sentiment=-0.90 \u2014 essentially pure noise. Historical ticker IC may be >= 0.05 over 30d but the current-bar signal can still be junk. A simple floor prevents noise-level probe entries while preserving the right to probe on genuine opportunity.",
-   "test": "python scripts/research_backtest.py --phase probe_floor (variants: min_signal \u2208 {0.05, 0.10, 0.15} \u00d7 min_sentiment \u2208 {-0.50, 0.0}); acceptance = fewer noise entries, no reduction in Kelly IC recovery rate, improvement on BOTH tune AND hold-out legs",
+   "hypothesis": "Probe quality floor: during Kelly probation, require a minimum ensemble_signal >= 0.10 (and sentiment >= -0.50) for the daily probe entry. SNDK id=104 entered with ensemble=0.018 and sentiment=-0.90 — essentially pure noise.",
+   "test": "python scripts/research_backtest.py --phase probe_floor (variants: min_signal ∈ {0.05, 0.10, 0.15} × min_sentiment ∈ {-0.50, 0.0}); acceptance = fewer noise entries, no reduction in Kelly IC recovery rate, improvement on BOTH tune AND hold-out legs",
    "status": "proposed",
    "added": "2026-07-22",
-   "added_by": "Principal Skeptic / Integrity Sentinel review of SNDK probe id=104 (ensemble=0.018, sentiment=-0.90 \u2014 clear noise-level entry in probation mode). Separate from CODE RED integrity work; needs dedicated backtest on Railway.",
+   "added_by": "Principal Skeptic / Integrity Sentinel review of SNDK probe id=104 (ensemble=0.018, sentiment=-0.90). Separate from CODE RED integrity work; needs dedicated backtest on Railway.",
    "pm_priority_note": "Low-risk guard. Does not change live strategy for non-probe paths. Safe to implement once Railway worker is enabled.",
    "blocked_note": "needs_data_run on Railway; implement AFTER H0 baseline is established"
   },
   {
    "id": "H10",
    "hypothesis": "Shorter max-hold (~260 bars / 2-3h) beats the 390-bar 1-day hold by cutting overnight-gap losers",
-   "status": "SUPERSEDED \u2014 v0.6.0 deployed max_hold=30 (30 min), even shorter than H10's 260-bar proposal. The core fix is live. The return-calc reconciliation bug (preliminary finding) is addressed in PR #27 (H10 return reconciliation fix). No separate backtest phase needed.",
-   "test": "SUPERSEDED \u2014 see v0.6.0 horizon sweep reports/research/horizon_sweep_2026-07-29.md",
-   "preliminary": "Jul 7-21 leg: max_hold=260 \u2192 PF 2.2 vs 390 \u2192 PF 0.98. Directionally confirmed by v0.6.0 sweep (max_hold=30 \u2192 PF 4.55 OOS). Return-calc bug (10x discrepancy) flagged in PR #27.",
-   "added": "2026-07-24",
-   "added_by": "owner go-ahead \u2192 validation pass",
-   "superseded_by": "v0.6.0 (max_hold 390\u219230, Aug 2 2026)",
-   "pm_priority_note": "CLOSED \u2014 incorporated into production."
-  },
-  {
-   "id": "H12",
-   "hypothesis": "Minimum ensemble signal floor for sizing-mode (non-probe) entries. Current prod allows entries with ensemble < 0.3 (e.g. PLTR id 124 at 0.288 with sentiment=-0.969). Require min ensemble_signal >= 0.20 (or parameterized) for standard-mode entries, parallel to H9's probe-mode floor.",
-   "status": "implemented \u2014 PR #29 (DRAFT) 2026-08-01",
-   "test": "python scripts/research_backtest.py --phase ensemble_floor (variants: min_signal \u2208 {0.15, 0.20, 0.25, 0.30}); acceptance = fewer noise entries, no reduction in profitable-trade rate, improvement on BOTH tune AND hold-out legs",
-   "added": "2026-08-01",
-   "added_by": "PLTR id 124 case (ensemble=0.288, sentiment=-0.969 on long entry) + nightly desk",
-   "pr_branch": "feat/rnd-H12-ensemble-floor",
-   "pr_number": 29,
-   "pr_state": "DRAFT \u2014 held pending Railway backtest",
-   "pm_priority": 4,
-   "pm_priority_note": "Low-risk noise guard for standard entries. Parallel to H9. Safe to validate once Railway enabled. Lower priority than H0 baseline and H2/H11.",
-   "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required)"
+   "status": "SUPERSEDED — v0.6.0 deployed max_hold=30 (30 min), even shorter than H10's 260-bar proposal. The core fix is live. The return-calc reconciliation bug is addressed in PR #27.",
+   "test": "SUPERSEDED — see v0.6.0 horizon sweep reports/research/horizon_sweep_2026-07-29.md",
+   "superseded_by": "v0.6.0 (max_hold 390→30, Aug 2 2026)",
+   "pm_priority_note": "CLOSED — incorporated into production."
   },
   {
    "id": "H11",
    "hypothesis": "Re-enabling the per-ticker IC-block gate (30d window, drop `since`) improves PnL by refusing chronically wrong names (MU -0.27, RTX -0.48)",
-   "status": "implemented \u2014 PR #26 (DRAFT) 2026-07-29",
+   "status": "implemented — PR #26 (DRAFT) 2026-07-29",
    "test": "backtest entry set with IC-block active vs current (gate effectively disabled)",
-   "preliminary": "Audit Finding 4: gate reads _ticker_ic (7d, since=loop_start) which rarely reaches n=300 across frequent deploys, so tickers_ic_blocked is always empty. Same deadlock class the Kelly-probe fix already solved. Changes which names trade \u2192 needs backtest per governance A.",
+   "preliminary": "Audit Finding 4: gate reads _ticker_ic (7d, since=loop_start) which rarely reaches n=300, so tickers_ic_blocked is always empty. Changes which names trade → needs backtest per governance A.",
    "added": "2026-07-24",
-   "added_by": "audit Finding 4",
    "implementation_date": "2026-07-29",
    "pr_branch": "feat/rnd-H11-ic-block-gate",
    "pr_number": 26,
-   "pr_state": "DRAFT \u2014 held pending Railway backtest; fix confirmed by nightly audit Jul 31. Constant TICKER_IC_BLOCK_WINDOW_DAYS=30, `since` param removed from _maybe_refresh_ticker_ic. 2 tests added (test_h11_ic_block_window_constant_is_30d, test_h11_ic_block_fires_on_chronically_negative_ticker). All 221 tests pass.",
+   "pr_state": "DRAFT — held pending Railway backtest; freeze intact. 2 tests added (test_h11_ic_block_window_constant_is_30d, test_h11_ic_block_fires_on_chronically_negative_ticker).",
    "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required). Will begin blocking MU/RTX entries ~30d after deploy as IC window accumulates."
+  },
+  {
+   "id": "H12",
+   "hypothesis": "Minimum ensemble signal floor for sizing-mode (non-probe) entries. Current prod allows entries with ensemble < 0.3. Evidence: JNJ id=163 BUY with ensemble_signal=-0.0238 (negative!). Require min ensemble_signal >= 0.20 for standard-mode entries.",
+   "status": "implemented — PR #29 (DRAFT) 2026-08-01",
+   "test": "python scripts/research_backtest.py --phase ensemble_floor (variants: min_signal ∈ {0.15, 0.20, 0.25, 0.30}); acceptance = fewer noise entries, no reduction in profitable-trade rate, improvement on BOTH tune AND hold-out legs",
+   "added": "2026-08-01",
+   "added_by": "PLTR id 124 case (ensemble=0.288, sentiment=-0.969 on long entry) + nightly desk. JNJ id=163 (ensemble=-0.0238 on long entry Aug 12) adds urgency.",
+   "pr_branch": "feat/rnd-H12-ensemble-floor",
+   "pr_number": 29,
+   "pr_state": "DRAFT — held pending Railway backtest",
+   "pm_priority": 4,
+   "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required)"
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-13",
+   "hypothesis_id": "NIGHTLY_LOG_AUG13",
+   "result": "NIGHTLY REVIEW — M2 v0.6.0: n=37 (PF=1.87, WR=47.2%, net +$947.95, expectancy $25.62/trade, 17W/1T/19L). All 37 exits via max_hold=30 — SL/trail/TP floors are 3.6× too wide for 30-bar holds (H14 in PR #36 addresses). Trailing-30 (IDs 133–162): PF=2.03, WR=43.3%, net +$960.50. Integrity Sentinel ALL GREEN Aug 12 21:25 UTC — all 5 checks pass. Watchdog OK, last tick Aug 12 21:38 UTC, 0 tick errors. Kelly mode: normal, fraction=0.2349. JNJ anomaly: ID 163 BUY with ensemble_signal=-0.0238 (negative ensemble on long entry — H12 ensemble floor would block). PRs #35 (H15: persist daily trade cap) and #36 (H14: horizon-scaled ATR exits) open and freeze-exempt. CONFLICT WARNING: PRs #35/#36 modified agent_state.json from Aug 10 baseline and will conflict on merge — merge chore/rnd-log-aug13 first as canonical state; then #35/#36 should merge cleanly for their code-only changes. H13 (PRs #31/#32/#33) structural risk remains. Railway worker BLOCKED week 8.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-08-10",
    "hypothesis_id": "W33_PROGRAM_REVIEW",
@@ -264,19 +304,19 @@
   {
    "date": "2026-08-04",
    "hypothesis_id": "EOD_CHECK_AUG04",
-   "result": "MONITORING — MSCI (id 119) still open at EOD Aug 4 (21:25 UTC sentinel). Survived BOTH Monday and Tuesday full US sessions without exit. 8+ calendar days open (entered Jul 27). db_vs_broker reconciles — broker and DB both show open. No auto-repair path. Owner has not acknowledged (no git commits since morning check 49fb51c). Second PushNotification sent EOD. Railway worker week 6. Bot HALTED. M2 n=0.",
+   "result": "MONITORING — MSCI (id 119) still open at EOD Aug 4 (21:25 UTC sentinel). 8+ calendar days open. db_vs_broker reconciles. Second PushNotification sent EOD. Railway worker week 6. Bot HALTED. M2 n=0.",
    "files_changed": ["agent_state.json"]
   },
   {
    "date": "2026-08-04",
    "hypothesis_id": "MORNING_CHECK_AUG04",
-   "result": "MONITORING — MSCI (id 119) ZOMBIE POSITION confirmed. Sentinel timestamp 2026-08-04T08:25:00Z. Status CRITICAL (stale_open_rows). MSCI entered Jul 27 13:40 UTC — now 8+ calendar days open. Survived full Monday US session (Aug 3) without exit. db_vs_broker: broker and DB both agree open (not an orphan). max_hold=30 did not fire. No auto-repair path. Owner notification sent. Railway worker still blocked week 6. Bot still HALTED. M2 v0.6.0 n=0.",
+   "result": "MONITORING — MSCI (id 119) ZOMBIE POSITION confirmed. Sentinel timestamp 2026-08-04T08:25:00Z. Status CRITICAL (stale_open_rows). MSCI entered Jul 27 13:40 UTC — now 8+ calendar days open. No auto-repair path. Owner notification sent. Railway worker still blocked week 6. Bot still HALTED. M2 v0.6.0 n=0.",
    "files_changed": ["agent_state.json"]
   },
   {
    "date": "2026-08-03",
    "hypothesis_id": "W32_PROGRAM_REVIEW",
-   "result": "PROGRAM_REVIEW — W32 weekly review completed. Live data via live-snapshot relay (Railway 403 still affects cloud IPs). Bot HALTED since Jul 28 (max_drawdown CB). 6 positions stale (>5-7d). v0.6.0 STRATEGY CHANGE: max_hold 390→30, M2 clock reset to Aug 2. n=0 on v0.6.0 window. Retired M2 frozen-config stats (n=35, PF=0.636 — measured broken strategy). W32 closed trades: n=3 (NFLX +$349, WDC -$804, MU -$435) PF=0.28 noise. All-time: n=99, WR=45.8%, PF=0.860 (fill-corrected). Sentinel CRITICAL (stale_open_rows all 6). H10 marked SUPERSEDED (v0.6.0 incorporated). H12 added (PR #29). Railway worker week 6 — sole CODE RED exit + M2 blocker. 2 CRITICAL owner decisions: lift halt + Railway worker. Report: reports/program/2026-W32.md.",
+   "result": "PROGRAM_REVIEW — W32 weekly review completed. Bot HALTED since Jul 28 (max_drawdown CB). 6 positions stale (>5-7d). v0.6.0 STRATEGY CHANGE: max_hold 390→30, M2 clock reset to Aug 2. n=0 on v0.6.0 window. Retired M2 frozen-config stats (n=35, PF=0.636 — measured broken strategy). W32 closed: n=3 (NFLX +$349, WDC -$804, MU -$435) PF=0.28. All-time: n=99, WR=45.8%, PF=0.860 (fill-corrected). Sentinel CRITICAL (stale_open_rows all 6). H10 marked SUPERSEDED (v0.6.0 incorporated). H12 added (PR #29). Railway worker week 6 — sole CODE RED exit + M2 blocker. Report: reports/program/2026-W32.md.",
    "files_changed": [
     "docs/ROADMAP.md",
     "reports/program/2026-W32.md",
@@ -286,13 +326,13 @@
   {
    "date": "2026-07-31",
    "hypothesis_id": "NIGHTLY_LOG_W32",
-   "result": "MONITORING — Bot HALTED (max_drawdown circuit breaker since 2026-07-28; 6 open positions, heat 59.2%). M2 frozen-config: n=35 (+3 since Jul 27), PF=0.636 (was 0.741 at n=32 — WORSENING). New closed: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop; 5th recent MU loss). PLTR (id 124) flagged: sentiment=-0.969 on a long entry. Sentinel ALL GREEN 22:25 UTC Jul 30 (criterion 1 satisfied). H11 confirmed implemented in PR #26 (DRAFT) — no duplicate needed. Railway worker BLOCKED week 5 — sole CODE RED exit blocker. Owner decisions outstanding: enable worker (10 min), M2 trajectory choice (~13 trading days remaining at n=35), v0.5.0 LGBM classification.",
+   "result": "MONITORING — Bot HALTED (max_drawdown circuit breaker since 2026-07-28; 6 open positions, heat 59.2%). M2 frozen-config: n=35 (+3 since Jul 27), PF=0.636 (was 0.741 at n=32 — WORSENING). New closed: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop; 5th recent MU loss). PLTR (id 124) flagged: sentiment=-0.969 on a long entry. Sentinel ALL GREEN 22:25 UTC Jul 30 (criterion 1 satisfied). H11 confirmed in PR #26 (DRAFT). Railway worker BLOCKED week 5.",
    "files_changed": ["agent_state.json"]
   },
   {
    "date": "2026-07-27",
    "hypothesis_id": "W31_PROGRAM_REVIEW",
-   "result": "PROGRAM_REVIEW — W31 weekly review completed. Live data via live-snapshot relay (Railway 403 still affects cloud IPs; snapshot read OK). CODE RED Day 4/5 — Sentinel clean 09:25 UTC Jul 27; one more day (Jul 28) exits integrity criterion. M2 frozen-config: n=32 @ PF=0.741 (OFF TRACK). W31 sub-window PF=1.42 (n=13). Three owner decisions escalated: Railway worker (week 3), v0.5.0 LGBM classification, M2 trajectory. ROADMAP + agent_state updated. Report at reports/program/2026-W31.md.",
+   "result": "PROGRAM_REVIEW — W31 weekly review completed. CODE RED Day 4/5. M2 frozen-config: n=32 @ PF=0.741 (OFF TRACK). W31 sub-window PF=1.42 (n=13). Three owner decisions escalated: Railway worker (week 3), v0.5.0 LGBM classification, M2 trajectory. ROADMAP + agent_state updated. Report at reports/program/2026-W31.md.",
    "files_changed": [
     "docs/ROADMAP.md",
     "reports/program/2026-W31.md",
@@ -302,29 +342,26 @@
   {
    "date": "2026-07-24",
    "hypothesis_id": "INTEGRITY_FILL_PNL_REPAIR",
-   "result": "DEPLOYED — PR #20 (fix(integrity): heal residual fill-price pnl corruption v0.5.1) merged by owner at 05:36 UTC. Extends _repair() to rewrite pnl + pnl_pct to fill-implied values for rows with action=rewrite_pnl. 5 known corrupt rows: V#54 ($37.63→$2.56), XOM#68 (-$169.33→-$42.90), MSFT#82 (-$363.73→-$63.70), MU#93 (-$512.48→-$113.64), SMCI#83 (-$638.06→-$138.96). Fill-corrected trailing-30 PF=0.864 (stored 0.60). Our parallel PR #19 (same objective, different function name corrected_fill_pnl vs fill_price_implied_pnl) closed as superseded. Repair will activate on next hourly Sentinel run once INTEGRITY_AUTO_REPAIR=true is set. Two repair backups in reports/integrity/ (05:32+05:33 UTC) predate the merge and show empty corruption — they are from pre-v0.5.1 sentinel. H10 (short max-hold, owner preliminary data) and H11 (IC-block gate deadlock fix) queued on main.",
-   "pr_number": 20,
-   "pr_branch": "merged to main",
-   "notes": "CODE RED P1: repair now deployed. Owner must set INTEGRITY_AUTO_REPAIR=true in Railway. After repair runs: Kelly seed will update (MU#93 -19.85%→-4.40%, MSFT#82 -13.35%→-2.34%), improving Kelly fraction from -0.102. Integrity clean 5-day clock starts only after repair + 5 consecutive days of clean sentinel runs."
+   "result": "DEPLOYED — PR #20 (fix(integrity): heal residual fill-price pnl corruption v0.5.1) merged by owner at 05:36 UTC. 5 known corrupt rows healed. Fill-corrected trailing-30 PF=0.864 (stored 0.60).",
+   "files_changed": ["agent_state.json"],
+   "pr_number": 20
   },
   {
    "date": "2026-07-22",
    "hypothesis_id": "INTEGRITY_FILL_PRICE_CHECK",
-   "result": "SHIPPED \u2014 fill_price_pnl_consistency check added to Integrity Sentinel (CODE RED P1). Closes blind spot where pnl=pnl_pct\u00d7entry\u00d7shares was internally consistent even when pnl itself was corrupted vs actual fill prices. Two pre-v0.4.5 rows confirmed: MU #93 (15.5% deviation) and SMCI #83 (24.8% deviation). New FILL_PNL_TOLERANCE=0.05 (5%) calibrated from live data (clean trades 0-3%, corrupted trades 15-25%). H9 proposed: probe quality floor (ensemble_signal >= 0.10 for probation probes).",
-   "tests_status": "24/24 tests pass in test_integrity_agent.py; 105 pass full suite (18 pre-existing sandbox failures unchanged \u2014 torch/pydantic deps absent in sandbox)",
-   "new_tests": 8,
+   "result": "SHIPPED — fill_price_pnl_consistency check added to Integrity Sentinel (CODE RED P1). H9 proposed: probe quality floor.",
+   "tests_status": "24/24 tests pass in test_integrity_agent.py",
    "files_changed": [
     "src/agents/integrity_agent.py",
     "tests/unit/test_integrity_agent.py",
     "agent_state.json"
    ],
-   "pr_branch": "feat/rnd-integrity-fill-price-check",
-   "notes": "CODE RED P1: ledger integrity. No strategy change. All new code is pure functions (no DB writes). Status 'warn' (not 'critical') because auto-repair would require all fill records which may not be available for historical trades."
+   "pr_branch": "feat/rnd-integrity-fill-price-check"
   },
   {
    "date": "2026-07-20",
    "hypothesis_id": "W30_PROGRAM_REVIEW",
-   "result": "PROGRAM_REVIEW \u2014 W30 weekly review completed. No live data (403 day 8). Three new DRAFT PRs noted (#9/#10/#11). Freeze intact. ROADMAP + agent_state updated. Report at reports/program/2026-W30.md.",
+   "result": "PROGRAM_REVIEW — W30 weekly review completed. No live data (403 day 8). Three new DRAFT PRs noted (#9/#10/#11). Freeze intact. Report at reports/program/2026-W30.md.",
    "files_changed": [
     "docs/ROADMAP.md",
     "reports/program/2026-W30.md",
@@ -334,7 +371,7 @@
   {
    "date": "2026-07-15",
    "hypothesis_id": "W29_PROGRAM_REVIEW",
-   "result": "PROGRAM_REVIEW \u2014 W29 first weekly review. Freeze confirmed. 3 owner decisions escalated. Report at reports/program/2026-W29.md.",
+   "result": "PROGRAM_REVIEW — W29 first weekly review. Freeze confirmed. 3 owner decisions escalated. Report at reports/program/2026-W29.md.",
    "files_changed": [
     "docs/ROADMAP.md",
     "reports/program/2026-W29.md",
@@ -344,23 +381,20 @@
   {
    "date": "2026-07-14",
    "hypothesis_id": "H5+H3",
-   "result": "IMPLEMENTED \u2014 needs_data_run for Sharpe/PF/drawdown/win-rate/n backtest on Railway",
-   "tests_status": "131 passed / 2 skipped (torch tests, skipif decorator added) / 0 failures",
-   "new_tests": 17,
+   "result": "IMPLEMENTED — needs_data_run for Sharpe/PF/drawdown/win-rate/n backtest on Railway",
+   "tests_status": "131 passed / 2 skipped (torch tests) / 0 failures",
    "files_changed": [
     "src/agents/signal_loop.py",
     "tests/unit/test_signal_loop.py",
     "agent_state.json"
    ],
-   "pr_number": 6,
-   "notes": "Railway endpoints HTTP 403 for 3rd consecutive day. Proceeded with codebase implementation."
+   "pr_number": 6
   },
   {
    "date": "2026-07-11",
    "hypothesis_id": "H2",
-   "result": "IMPLEMENTED \u2014 needs_data_run for Sharpe/PF/drawdown delta backtest",
-   "tests_status": "71 passed / 11 pre-existing sandbox failures (sqlalchemy/pydantic) / test_signal_loop.py excluded (torch)",
-   "new_tests": 19,
+   "result": "IMPLEMENTED — needs_data_run for Sharpe/PF/drawdown delta backtest",
+   "tests_status": "71 passed / 11 pre-existing sandbox failures (sqlalchemy/pydantic)",
    "files_changed": [
     "src/data/market_regime.py",
     "src/agents/signal_loop.py",
@@ -371,7 +405,7 @@
   {
    "date": "2026-07-10",
    "hypothesis_id": "H4",
-   "result": "IMPLEMENTED \u2014 needs_data_run for IC validation",
+   "result": "IMPLEMENTED — needs_data_run for IC validation",
    "tests_status": "63 passed / 1 collection error (torch missing in sandbox)",
    "files_changed": [
     "src/models/ensemble.py",
@@ -384,14 +418,17 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION \u2014 CRITICAL, WEEK 7] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion.",
-  "[OWNER ACTION \u2014 HIGH] Merge PR #31 or #32 (H13 halt-aware exits). v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
-  "[OWNER ACTION \u2014 MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
-  "[OWNER ACTION \u2014 MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",
-  "[OWNER ACTION \u2014 MEDIUM] Merge PR #33 (closed_with_null_exit sentinel check \u2014 zombie detection). Infra/monitoring, freeze-exempt.",
-  "[RESOLVED \u2705] Halt lifted \u2014 confirmed by first new entry GS Aug 6. No further action needed.",
-  "[RESOLVED \u2705] MSCI zombie (id 119) \u2014 closed Aug 10 via v0.6.2 max_hold exit (+$9.61). Sentinel clearing.",
-  "[CODE RED \u2014 INTEGRITY MET \u2705] Integrity criterion satisfied (Day 5/5, Jul 28). Remaining: hypothesis_at_data_run (Railway worker). Owner must set AGENT_WORKER_ENABLE=true to exit CODE RED.",
+  "[OWNER ACTION — CRITICAL, WEEK 8] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion. Outstanding 8 consecutive weeks since Jul 15.",
+  "[OWNER ACTION — HIGH] Merge PR #36 (H14: horizon-scaled ATR exits). FREEZE-EXEMPT correctness fix. All 37 v0.6.0 exits via max_hold because stops are 3.6× too wide. SL/trail/TP floors are currently dead code for 30-bar positions.",
+  "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT risk-control fix. Aug 10 had 15 trades vs cap=6. Trade cap is currently ineffective across deploys.",
+  "[OWNER ACTION — HIGH] Merge PR #31 or #32 (H13 halt-aware exits). Owner must choose variant. v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
+  "[OWNER ACTION — MEDIUM] Merge PR #25 (PROD_PARAMS backtest alignment, infra only, no strategy change). Required before Railway backtest runs.",
+  "[OWNER ACTION — MEDIUM] Merge PR #27 (H9 probe quality floor + H10 return reconciliation). Probe floor is low-risk noise guard; return-calc fix is infra.",
+  "[OWNER ACTION — MEDIUM] Merge PR #33 (closed_with_null_exit sentinel check — zombie detection). Infra/monitoring, freeze-exempt.",
+  "[MERGE ORDER] Merge chore/rnd-log-aug13 FIRST (canonical state update). PRs #35 and #36 modified agent_state.json from Aug 10 baseline — merging them after chore/rnd-log-aug13 avoids a 3-way conflict. Their code-only changes (signal_loop.py, risk_state_store.py, tests/) do not conflict with each other.",
+  "[RESOLVED ✅] Halt lifted — confirmed by first new entry GS Aug 6.",
+  "[RESOLVED ✅] MSCI zombie (id 119) — closed Aug 10 via v0.6.2 max_hold exit (+$9.61). Sentinel ALL GREEN.",
+  "[CODE RED — INTEGRITY MET ✅] Integrity criterion satisfied (Day 5/5, Jul 28). Remaining: hypothesis_at_data_run (Railway worker).",
   "[Railway worker] Run H0 baseline (priority 0): python scripts/research_backtest.py --phase all",
   "[Railway worker] Run H2 backtest (priority 1): --phase spy_ma",
   "[Railway worker] Run H11 backtest (priority 2): IC-block gate validation",
@@ -402,13 +439,14 @@
   "[Railway worker] Run H6 backtest (priority 7): --phase persistence",
   "[Railway worker] Run H7 backtest (priority 8, needs re-scope for 30-bar): --phase stagnation",
   "[Railway worker] Run H5 backtest (priority 9, needs re-scope for 30-bar horizon): --phase holdext",
-  "[DESK] H10 \u2014 mark formally SUPERSEDED in PR #27 merge notes (v0.6.0 incorporated max_hold=30)",
-  "[DESK] H5 + H7 \u2014 re-scope backtest phases for 30-bar horizon before Railway runs"
+  "[DESK] H10 — mark formally SUPERSEDED in PR #27 merge notes (v0.6.0 incorporated max_hold=30)",
+  "[DESK] H5 + H7 — re-scope backtest phases for 30-bar horizon before Railway runs",
+  "[DESK] JNJ anomaly (ID 163, BUY with ensemble_signal=-0.0238) — monitor for recurrence; H12 ensemble floor would block this class"
  ],
  "blocked_by_token_limit": false,
  "governance": {
   "deploy_mode": "PR_REVIEW_REQUIRED",
-  "freeze_status": "FROZEN at v0.6.0 since 2026-08-02. v0.4.4 freeze (Jul 13) superseded by v0.6.0 strategy change (governance-compliant: two OOS backtest windows). No strategy merges until M2 matures (n>=100 on v0.6.0) or walk-forward-validated backtest justifies exception. Bug fixes, infra, docs always exempt. v0.5.0 LGBM classification moot (M2 resets from v0.6.0); low-urgency to close formally.",
+  "freeze_status": "FROZEN at v0.6.0 since 2026-08-02. No strategy merges until M2 matures (n>=100 on v0.6.0) or walk-forward-validated backtest justifies exception. Bug fixes, infra, docs always exempt. H14 (ATR scale) and H15 (trade cap) are freeze-exempt correctness fixes. v0.5.0 LGBM classification moot (M2 resets from v0.6.0); low-urgency to close formally.",
   "note": "Per CLAUDE.md: no autonomous changes to live strategy/config. Agents research, implement, backtest, and open PRs; a human merges. Config staging: config/staging/."
  },
  "code_red": {
@@ -419,14 +457,14 @@
   "declaration": "reports/program/CODE-RED-2026-07-20.md",
   "priority_order": [
    "1. ledger/measurement integrity (Integrity Sentinel clean)",
-   "2. validation throughput (clear backtest queue \u2014 needs Railway worker)",
+   "2. validation throughput (clear backtest queue — needs Railway worker)",
    "3. new alpha work (QUEUED until exit criteria met)"
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (6 positions reconcile). Criterion 1 of 3 satisfied.",
-   "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok",
-   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (7 consecutive weeks outstanding). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12 validations."
+   "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
+   "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok. Kelly mode: normal, fraction=0.2349.",
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (8 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12 validations."
   }
  }
 }
