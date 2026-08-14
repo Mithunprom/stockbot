@@ -102,7 +102,7 @@ def _make_preds(n_entry_bars: int = 10, n_reversal_bars: int = 0,
     confirmed bearish bars, then a hold-until-max_hold.
 
     Base is set to 13:40 UTC = 09:40 ET so bar 0 lands inside the default
-    entry window (09:40–15:30 ET). Without this, base 09:40 UTC = 05:40 ET
+    entry window (09:40–15:28 ET, per H16 session-boundary fix). Without this, base 09:40 UTC = 05:40 ET
     means bar 0 is before market open and the entry signal is never seen.
     """
     et_tz = "America/New_York"

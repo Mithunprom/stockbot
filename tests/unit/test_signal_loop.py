@@ -1123,3 +1123,51 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ─── H16: Session-boundary entry cap ──────────────────────────────────────────
+
+def test_h16_entry_window_consistent_with_max_hold_and_session_close():
+    """ENTRY_WINDOW_ET upper bound + (SIZING_MAX_HOLD_BARS + 1) must equal SESSION_CLOSE_ET minute.
+
+    bars_held starts at 0 at entry and is incremented AFTER the exit check on each
+    tick, so max_hold fires on the (SIZING_MAX_HOLD_BARS + 1)-th tick. For a position
+    entered at ENTRY_WINDOW_ET upper bound to exit within the session, that tick must
+    land at or before SESSION_CLOSE_ET: end_minute + max_hold + 1 == close_minute.
+    """
+    from src.agents.signal_loop import ENTRY_WINDOW_ET, SESSION_CLOSE_ET, SIZING_MAX_HOLD_BARS
+    _, (end_h, end_m) = ENTRY_WINDOW_ET
+    close_h, close_m = SESSION_CLOSE_ET
+    assert end_h == close_h == 15, "entry window upper bound and session close must be in hour 15"
+    assert end_m + SIZING_MAX_HOLD_BARS + 1 == close_m, (
+        f"entry bound {end_m} + {SIZING_MAX_HOLD_BARS} (max_hold) + 1 (increment lag) "
+        f"must equal session close minute {close_m}"
+    )
+
+
+def test_h16_entry_window_excludes_old_unsafe_bound():
+    """Entry window upper bound must be strictly less than the old (15, 30) literal.
+
+    The old bound (15, 30) fired max_hold at 16:01, two minutes past the last market
+    bar (15:59). Any value >= 29 still results in exits past 15:59; the new bound
+    must be <= 28.
+    """
+    from src.agents.signal_loop import ENTRY_WINDOW_ET, SIZING_MAX_HOLD_BARS, SESSION_CLOSE_ET
+    _, (_, end_m) = ENTRY_WINDOW_ET
+    close_m = SESSION_CLOSE_ET[1]
+    # old bound was 30 — must be strictly smaller
+    assert end_m < 30, f"ENTRY_WINDOW_ET upper minute {end_m} must be < 30 (the old unsafe bound)"
+    # and must actually satisfy the session constraint
+    assert end_m + SIZING_MAX_HOLD_BARS + 1 <= close_m, (
+        f"entry at {end_m} would fire max_hold at {end_m + SIZING_MAX_HOLD_BARS + 1}, "
+        f"past session close at {close_m}"
+    )
+
+
+def test_h16_entry_window_start_unchanged():
+    """Morning open at 9:40 ET is not affected by the H16 session-boundary fix."""
+    from src.agents.signal_loop import ENTRY_WINDOW_ET
+    (start_h, start_m), _ = ENTRY_WINDOW_ET
+    assert start_h == 9 and start_m == 40, (
+        f"entry window start should remain (9, 40), got ({start_h}, {start_m})"
+    )
