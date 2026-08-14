@@ -87,7 +87,15 @@ MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sec
 # (no PDT, since 2026-06-12) same-day exits are free, and the backtest shows
 # all-day entries + short holds beat late-only in BOTH legs (Sharpe 17-22 vs
 # 5-6, PF >16 vs 1.7, max DD 0.08%).
-ENTRY_WINDOW_ET = ((9, 40), (15, 30))
+# ENTRY_WINDOW_ET upper bound is derived after SIZING_MAX_HOLD_BARS (see below).
+# DO NOT set a hard literal here — changing max_hold without updating this constant
+# silently re-introduces the overnight-hold bug (H16).
+# Defined at: SIZING_MAX_HOLD_BARS + SESSION_CLOSE_ET (search below).
+#
+# Historical note: the old literal (15, 30) was off by 2 minutes. bars_held starts
+# at 0 and is incremented AFTER the exit check, so max_hold fires on the
+# (SIZING_MAX_HOLD_BARS + 1)-th tick. A 15:30 entry exits at 16:01 (after market
+# close). Last safe entry is SESSION_CLOSE_ET[1] − (SIZING_MAX_HOLD_BARS + 1).
 
 # H3: Earnings-calendar blackout — no new entries within N calendar days before
 # OR after a ticker's earnings date. Gap risk on 1-day holds from surprise
@@ -175,6 +183,29 @@ SIZING_TAKE_PROFIT_CAP = 0.135     # 13.5% take profit cap (was 20% — unreacha
 # 15–195 collapsing to an identical ~333-bar realised hold). This setting is
 # calibrated for the current >$25k account; revisit if equity drops below it.
 SIZING_MAX_HOLD_BARS = 30          # == the model's validated 15–30m horizon
+
+# H16: Session-boundary entry cap — last entry time that guarantees max_hold fires
+# within the same trading session.
+#
+# Derivation: bars_held starts at 0 at entry and is incremented AFTER the exit
+# check on each tick, so max_hold (bars >= SIZING_MAX_HOLD_BARS) fires on the
+# (SIZING_MAX_HOLD_BARS + 1)-th tick after entry:
+#   entry at T → max_hold fires at T + (SIZING_MAX_HOLD_BARS + 1) minutes
+#
+# SESSION_CLOSE_ET is the last bar the loop processes (_is_market_hours boundary).
+# For max_hold to fire at or before SESSION_CLOSE_ET:
+#   T_entry + (SIZING_MAX_HOLD_BARS + 1) ≤ SESSION_CLOSE_ET[1]
+#   T_entry ≤ 59 − 31 = 28  →  last safe entry is (15, 28)
+#
+# The old literal (15, 30) allowed entries at 15:29–15:30 that fired at 16:00–16:01,
+# silently leaving positions open overnight when the server restarts before the
+# next morning's open (H15-style state loss would reset bars_held to 0).
+SESSION_CLOSE_ET = (15, 59)   # last bar _is_market_hours() permits
+ENTRY_WINDOW_ET = (
+    (9, 40),
+    (SESSION_CLOSE_ET[0], SESSION_CLOSE_ET[1] - (SIZING_MAX_HOLD_BARS + 1)),
+)  # upper bound: 59 - 31 = 28 → last safe entry is 15:28 ET
+
 # H5 extension DISABLED (2026-07-29: 2 → 0). It reset bars_held and granted up
 # to 2 more windows, so a 30-bar cap would really be 90 bars — back out to the
 # ~0.06 IC region and straight past the point of this change. It was also never
@@ -1634,7 +1665,7 @@ class SignalLoop:
 
         Gates:
           0. Data freshness — features must be recent (WebSocket may be down)
-          0b. Entry time window — skip open/close noise (9:40–15:30 ET)
+          0b. Entry time window — skip open/close noise (9:40–15:28 ET, H16)
           1. Daily trade cap not exceeded
           2. Per-ticker cooldown elapsed (prevents re-entry churn)
           3. Kelly governor — probation allows 1 small probe/day on a
