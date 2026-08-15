@@ -1114,6 +1114,12 @@ async def diagnostics() -> JSONResponse:
             probation_block = probation_active and not (
                 probe_budget_left and sig.ticker in probe_eligible
             )
+            # Phase 5 disables shorts. A negative pred_return would be blocked
+            # by `if direction < 0: return False` in _act_on_signal before any
+            # order reaches the broker, so surface it here to prevent the
+            # misleading would_trade:true on bearish signals (SMCI Aug-14 case).
+            direction = 1 if pred_ret > 0 else (-1 if pred_ret < 0 else 0)
+            short_blocked = direction < 0
 
             gate_analysis.append({
                 "ticker": sig.ticker,
@@ -1123,7 +1129,10 @@ async def diagnostics() -> JSONResponse:
                 "passes_pred_return_gate": passes_pred,
                 "passes_dir_prob_gate": passes_dir,
                 "passes_both_gates": passes_both,
-                "would_trade": passes_both and not cooldown_active and not probation_block,
+                "would_trade": (
+                    passes_both and not cooldown_active
+                    and not probation_block and not short_blocked
+                ),
                 "blocked_by": (
                     []
                     + (["pred_return_too_small"] if not passes_pred else [])
@@ -1131,6 +1140,7 @@ async def diagnostics() -> JSONResponse:
                     + (["ticker_cooldown"] if cooldown_active else [])
                     + (["kelly_probation"] if probation_block else [])
                     + (["managed_heat_too_high"] if summary.get("managed_heat", 0) >= 0.80 else [])
+                    + (["shorts_disabled_phase5"] if short_blocked else [])
                 ),
             })
 
