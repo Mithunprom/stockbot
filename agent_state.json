@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 10). BOT ACTIVE. v0.6.2 DEPLOYED. M2 v0.6.0 n=55 (PF=2.24, normalizing). PRs #35/#36/#38/#39 open (all freeze-exempt fixes). H9 implemented (PR #40). W34 program review complete 2026-08-17.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 10). BOT ACTIVE. v0.6.2 DEPLOYED. M2 v0.6.0 n=55 (PF=2.24, normalizing). PRs #22/#35/#36/#38/#39 open (all freeze-exempt fixes). H9 implemented (PR #22, DRAFT). W34 program review complete 2026-08-17.",
  "last_iteration_date": "2026-08-18",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=55 on ~10 trading days (Aug 6–17). PF=2.24 (normalizing from 2.33 at n=49). All 55 exits via max_hold=30 — H14 (PR #36) still unmerged, stops dead code. Aug 17 added 6 trades (IDs 183-188): 3W/3L, PF=1.33, net +$38.82. Kelly fraction improved to 0.3205 (was 0.2349), sample=50. ETA for n=100: ~9 more trading days. Trailing-30 (IDs 159-188): PF=2.57, WR=56.7%. H9 (PR #40) implemented tonight: probe quality floor for Kelly-probation entries.",
+ "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=55 on ~10 trading days (Aug 6–17). PF=2.24 (normalizing from 2.33 at n=49). All 55 exits via max_hold=30 — H14 (PR #36) still unmerged, stops dead code. Aug 17 added 6 trades (IDs 183-188): 3W/3L, PF=1.33, net +$38.82. Kelly fraction improved to 0.3205 (was 0.2349), sample=50. ETA for n=100: ~9 more trading days. Trailing-30 (IDs 159-188): PF=2.57, WR=56.7%. H9 (PR #22 DRAFT) implemented Aug 18: probe quality floor for Kelly-probation entries. Needs Railway backtest for variants before merging.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -263,11 +263,15 @@
    "id": "H9",
    "hypothesis": "Probe quality floor: during Kelly probation, require a minimum ensemble_signal >= 0.10 (and sentiment >= -0.50) for the daily probe entry. SNDK id=104 entered with ensemble=0.018 and sentiment=-0.90 — essentially pure noise.",
    "test": "python scripts/research_backtest.py --phase probe_floor (variants: min_signal ∈ {0.05, 0.10, 0.15} × min_sentiment ∈ {-0.50, 0.0}); acceptance = fewer noise entries, no reduction in Kelly IC recovery rate, improvement on BOTH tune AND hold-out legs",
-   "status": "proposed",
+   "status": "implemented — PR #22 (DRAFT) 2026-08-18",
    "added": "2026-07-22",
    "added_by": "Principal Skeptic / Integrity Sentinel review of SNDK probe id=104 (ensemble=0.018, sentiment=-0.90). Separate from CODE RED integrity work; needs dedicated backtest on Railway.",
    "pm_priority_note": "Low-risk guard. Does not change live strategy for non-probe paths. Safe to implement once Railway worker is enabled.",
-   "blocked_note": "needs_data_run on Railway; implement AFTER H0 baseline is established"
+   "implementation_date": "2026-08-18",
+   "pr_branch": "feat/rnd-H9-probe-quality-floor",
+   "pr_number": 22,
+   "pr_state": "DRAFT — held pending Railway backtest. Freeze-exempt (probation path only). 4 new tests + 2 updated; 56 pass, 4 pre-existing sandbox failures (pandas), 3 skipped.",
+   "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required). Variants: min_ensemble ∈ {0.05, 0.10, 0.15} × min_sentiment ∈ {-0.50, 0.0}. Kelly currently in normal mode (fraction=0.3205) — gate dormant."
   },
   {
    "id": "H10",
@@ -305,6 +309,16 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-18",
+   "hypothesis_id": "NIGHTLY_LOG_AUG18",
+   "result": "NIGHTLY R&D — Aug 18 2026. M2 v0.6.0: n=55 (PF=2.24, WR=50.9%, net +$1,787.66, exp +$32.50/trade). Aug 17 added 6 trades (IDs 183-188): 3W/3L, PF=1.33, net +$38.82. Trailing-30 (IDs 159-188): PF=2.57, WR=56.7%. Kelly=0.3205 (normal, sample=50). All 55 exits via max_hold=30 — H14 (PR #36) unmerged, stops dead code. Integrity Sentinel ALL GREEN Aug 17 21:25 UTC. Watchdog OK. H9 implemented (PR #22 DRAFT): probe quality floor for Kelly-probation entries. Gate blocks ensemble<0.10 or sentiment<-0.50 in probation mode. Freeze-exempt. Needs Railway backtest (variants: min_ensemble ∈ {0.05, 0.10, 0.15} × min_sentiment ∈ {-0.50, 0.0}). ETA n=100: ~9 trading days (~Sep 2). No strategy code merged — freeze intact.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-08-17",
    "hypothesis_id": "W34_PROGRAM_REVIEW",
