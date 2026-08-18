@@ -244,6 +244,8 @@ def test_kelly_probation_allows_single_probe():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.15   # H9: quality probe (clears the 0.10 floor)
+    sig.sentiment_index = 0.10   # H9: positive sentiment (clears the −0.50 floor)
 
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
@@ -279,6 +281,8 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.15   # H9: quality probe
+    sig.sentiment_index = 0.10   # H9: positive sentiment
 
     # 7d block cache full & positive, but probe cache empty → still blocked
     loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
@@ -288,6 +292,116 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     # Once the 30d probe cache clears the bar, the probe fires
     loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
     assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_blocks_weak_ensemble():
+    """H9: probe with near-zero ensemble (SNDK id=104 pattern) is rejected."""
+    from src.agents.signal_loop import (
+        KELLY_MIN_TRADES, KELLY_PROBE_MIN_ENSEMBLE, TICKER_IC_MIN_N,
+    )
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+    loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.018   # SNDK id=104 observed value — below 0.10 floor
+    sig.sentiment_index = 0.10
+
+    assert not loop._sizing_entry_gate_open(sig), (
+        f"Expected probe blocked: ensemble={sig.ensemble_signal} < "
+        f"KELLY_PROBE_MIN_ENSEMBLE={KELLY_PROBE_MIN_ENSEMBLE}"
+    )
+
+
+def test_h9_probe_blocks_bad_sentiment():
+    """H9: probe with strongly negative sentiment (SNDK id=104 pattern) is rejected."""
+    from src.agents.signal_loop import (
+        KELLY_MIN_TRADES, KELLY_PROBE_MIN_SENTIMENT, TICKER_IC_MIN_N,
+    )
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+    loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.15    # clears ensemble floor
+    sig.sentiment_index = -0.90   # SNDK id=104 observed value — below −0.50 floor
+
+    assert not loop._sizing_entry_gate_open(sig), (
+        f"Expected probe blocked: sentiment={sig.sentiment_index} < "
+        f"KELLY_PROBE_MIN_SENTIMENT={KELLY_PROBE_MIN_SENTIMENT}"
+    )
+
+
+def test_h9_probe_allows_quality_signal():
+    """H9: probe that clears both ensemble and sentiment floors is accepted."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+    loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.20   # above 0.10 floor
+    sig.sentiment_index = 0.05   # above −0.50 floor
+
+    assert loop._sizing_entry_gate_open(sig), (
+        "Expected probe allowed: ensemble and sentiment both clear H9 floors"
+    )
+
+
+def test_h9_normal_mode_unaffected():
+    """H9 gates only apply during probation — normal-mode entries are unaffected."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    # Mix of wins/losses that yields a positive Kelly fraction → normal mode.
+    # Kelly = (p*b − q)/b; with p=7/12, b=avg_win/avg_loss=0.02/0.01=2:
+    # kelly = (0.583*2 − 0.417)/2 = 0.375 > 0 → "normal"
+    loop._sizing_recent_outcomes = (
+        [(_stamp(1), +0.02)] * 7
+        + [(_stamp(1), -0.01)] * 5
+    )
+    loop._update_kelly()
+    assert loop._kelly_mode() == "normal", (
+        f"Expected normal mode but got {loop._kelly_mode()} "
+        f"(kelly={loop._kelly_fraction:.4f})"
+    )
+    loop._ticker_ic = {"AAPL": (0.10, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.018   # would be blocked in probation, not in normal mode
+    sig.sentiment_index = -0.90   # would be blocked in probation, not in normal mode
+
+    # Normal mode skips the probation gate entirely — entry proceeds to signal gate
+    assert loop._sizing_entry_gate_open(sig), (
+        "H9 floors must NOT affect normal-mode entries"
+    )
 
 
 def test_ticker_ic_gate_blocks_proven_negative():
