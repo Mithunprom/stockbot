@@ -228,6 +228,14 @@ TICKER_IC_MIN_ENTRY = 0.0          # live IC must exceed this to enter (n≥MIN_
 # block gate keeps the 7d + `since` behavior (judging only the live incarnation).
 KELLY_PROBE_IC_WINDOW_DAYS = 30
 
+# H9: Probe quality floor — during Kelly probation the daily probe must clear
+# a minimum ensemble and sentiment bar. Without this gate, a near-zero composite
+# (e.g. SNDK id=104: ensemble=0.018, sentiment=−0.90) can still consume the
+# one-probe-per-day budget and refresh the Kelly window on a noise trade.
+# Backtest variants: min_ensemble ∈ {0.05, 0.10, 0.15} × min_sentiment ∈ {−0.50, 0.0}.
+KELLY_PROBE_MIN_ENSEMBLE = 0.10    # composite ensemble signal floor for probes
+KELLY_PROBE_MIN_SENTIMENT = -0.50  # sentiment index floor for probes
+
 # PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades
 # per rolling 5 business days. A same-day round trip is a day trade, so the
 # default plan is to hold overnight; the day-trade budget is reserved for
@@ -1694,10 +1702,15 @@ class SignalLoop:
         # deadlocked the governor (2026-06-26 → 06-30 halt).
         if self._kelly_mode() == "probation":
             ic, n = self._ticker_ic_probe.get(ticker, (0.0, 0))
+            # H9: also require minimum composite signal quality on probes.
+            # A near-zero ensemble (e.g. SNDK id=104: 0.018) or very negative
+            # sentiment (−0.90) wastes the single daily probe budget on noise.
             probe_ok = (
                 self._probation_entries_today < 1
                 and n >= TICKER_IC_MIN_N
                 and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                and sig.ensemble_signal >= KELLY_PROBE_MIN_ENSEMBLE
+                and sig.sentiment_index >= KELLY_PROBE_MIN_SENTIMENT
             )
             if not probe_ok:
                 logger.debug(
@@ -1706,6 +1719,8 @@ class SignalLoop:
                     kelly=round(self._kelly_fraction, 4),
                     probes_used=self._probation_entries_today,
                     ticker_ic=round(ic, 3),
+                    ensemble_signal=round(sig.ensemble_signal, 4),
+                    sentiment_index=round(sig.sentiment_index, 4),
                 )
                 return False
 
