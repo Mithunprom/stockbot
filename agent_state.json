@@ -100,8 +100,8 @@
    "added": "2026-08-19",
    "added_by": "nightly desk — JNJ id=163 root-cause analysis",
    "pr_branch": "feat/rnd-H18-ensemble-direction-gate",
-   "pr_number": null,
-   "pr_state": "PENDING — PR not yet opened this run",
+   "pr_number": 41,
+   "pr_state": "OPEN — PR #41 opened 2026-08-19. CI triage in progress.",
    "tests": "4 unit tests pass: test_h18_negative_ensemble_blocks_long_entry, test_h18_zero_ensemble_is_allowed, test_h18_positive_ensemble_passes, test_h18_strongly_negative_ensemble_blocks",
    "freeze_classification": "FREEZE-EXEMPT correctness fix — blocks manifestly contradictory entries (composite < 0 on long), no change to entry timing, universe, sizing, or direction logic for non-contradictory signals. Complements H12 (min positive floor, still in DRAFT). Strict-negative gate only; zero ensemble allowed.",
    "priority": "HIGH — correctness fix, open PR ASAP"
@@ -474,7 +474,7 @@
   }
  ],
  "pending_tasks": [
-  "[DESK — IMMEDIATE] Open PR for H18 (Gate 5c: ensemble direction gate). Branch: feat/rnd-H18-ensemble-direction-gate. Freeze-exempt correctness fix. 4 tests pass.",
+  "[OWNER ACTION — HIGH] Merge PR #41 (H18: Gate 5c ensemble direction gate). Freeze-exempt correctness fix. 4 tests pass. CI triage in progress.",
   "[OWNER ACTION — CRITICAL, WEEK 10] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion. Outstanding 10 consecutive weeks since Jul 15.",
   "[OWNER ACTION — HIGH] Merge PR #36 (H14: horizon-scaled ATR exits). FREEZE-EXEMPT correctness fix. All 37 v0.6.0 exits via max_hold because stops are 3.6× too wide. SL/trail/TP floors are currently dead code for 30-bar positions.",
   "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT risk-control fix. Aug 10 had 15 trades vs cap=6. Trade cap is currently ineffective across deploys.",
