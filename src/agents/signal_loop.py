@@ -1641,6 +1641,8 @@ class SignalLoop:
              positive-IC ticker instead of blocking everything forever
           4. Per-ticker live IC — never enter names the model is wrong on
           5. Position-count cap + portfolio heat ceiling + sector cap
+          5c. Ensemble direction consistency: ensemble_signal must be > 0
+              for long entries (prevents contradictory-direction entries)
           6. Signal quality: pred_return above cost, dir_prob outside dead zone
         """
         ticker = sig.ticker
@@ -1727,6 +1729,25 @@ class SignalLoop:
                 "sizing_sector_position_cap",
                 ticker=ticker,
                 sector=SECTOR_MAP.get(ticker, "other"),
+            )
+            return False
+
+        # Gate 5c: Ensemble direction consistency — block entries where the
+        # composite model output is strictly negative. A negative ensemble on a
+        # long entry means the weighted aggregate of all models is bearish, even
+        # if lgbm_pred_return alone is bullish. Executing a long under that
+        # condition contradicts our own model output.
+        # Root event: JNJ id=163 (Aug 12) — ensemble_signal=-0.0238 on a BUY.
+        # LGBM was positive; sentiment=-0.78 dragged the composite negative.
+        # The trade won via max_hold luck, but a net-bearish composite is not a
+        # valid long-entry basis.
+        # NOTE: ensemble_signal==0.0 (neutral) is allowed to pass; strict
+        # negative only. H12 (draft PR #29) adds a positive magnitude floor.
+        if sig.ensemble_signal < 0:
+            logger.debug(
+                "sizing_entry_blocked_ensemble_direction",
+                ticker=ticker,
+                ensemble_signal=round(float(sig.ensemble_signal), 4),
             )
             return False
 

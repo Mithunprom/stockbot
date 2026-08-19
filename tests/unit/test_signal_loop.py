@@ -1123,3 +1123,77 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ─── H18: Ensemble direction consistency gate ─────────────────────────────────
+
+def _h18_make_loop() -> "SignalLoop":
+    """Create a SignalLoop with mocked settings for the H18 gate tests."""
+    from unittest.mock import MagicMock, patch
+
+    mock_settings = MagicMock()
+    mock_settings.alpaca_mode = "paper"
+    mock_settings.alpaca_api_key = "test"
+    mock_settings.alpaca_secret_key = "test"
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
+
+    with patch("src.config.get_settings", return_value=mock_settings):
+        loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    return loop
+
+
+def _h18_sig(ticker: str, ensemble: float, pred_ret: float = 0.009,
+             dir_prob: float = 0.65) -> "EnsembleSignal":
+    sig = EnsembleSignal(ticker=ticker, timestamp=_stamp(0))
+    sig.ensemble_signal = ensemble
+    sig.lgbm_pred_return = pred_ret
+    sig.lgbm_dir_prob = dir_prob
+    return sig
+
+
+def test_h18_negative_ensemble_blocks_long_entry():
+    """Gate 5c: entry blocked when ensemble_signal < 0 (JNJ id=163 pattern).
+
+    Root event: JNJ id=163 (Aug 12) entered long with ensemble_signal=-0.0238.
+    LGBM pred_return was positive but the weighted composite was bearish.
+    The gate must now block this before entry rather than relying on max_hold
+    luck to recover.
+    """
+    loop = _h18_make_loop()
+    sig = _h18_sig("JNJ", ensemble=-0.0238, pred_ret=0.009, dir_prob=0.65)
+    assert not loop._sizing_entry_gate_open(sig), (
+        "negative ensemble_signal must block long entry (H18 Gate 5c)"
+    )
+
+
+def test_h18_zero_ensemble_is_allowed():
+    """Gate 5c allows neutral (zero) ensemble — strict-negative gate only.
+
+    ensemble_signal=0.0 is the EnsembleSignal default when the composite score
+    is exactly neutral. This is not a contradictory direction, so it passes
+    Gate 5c. H12 (draft PR #29) adds a positive magnitude floor on top.
+    """
+    loop = _h18_make_loop()
+    sig = _h18_sig("AAPL", ensemble=0.0, pred_ret=0.009, dir_prob=0.65)
+    assert loop._sizing_entry_gate_open(sig), (
+        "neutral ensemble_signal=0.0 must NOT be blocked by Gate 5c"
+    )
+
+
+def test_h18_positive_ensemble_passes():
+    """Gate 5c is transparent to normal (positive) ensemble_signal values."""
+    loop = _h18_make_loop()
+    for ens in (0.001, 0.20, 0.50, 0.95):
+        sig = _h18_sig("MSFT", ensemble=ens, pred_ret=0.009, dir_prob=0.65)
+        assert loop._sizing_entry_gate_open(sig), (
+            f"ensemble_signal={ens} must not be blocked by Gate 5c"
+        )
+
+
+def test_h18_strongly_negative_ensemble_blocks():
+    """Large negative composite (sentiment=-0.9 dragging aggregate negative) blocked."""
+    loop = _h18_make_loop()
+    sig = _h18_sig("PLTR", ensemble=-0.35, pred_ret=0.005, dir_prob=0.70)
+    assert not loop._sizing_entry_gate_open(sig)
