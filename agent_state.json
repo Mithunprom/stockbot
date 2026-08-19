@@ -1,14 +1,14 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 9). BOT ACTIVE (resumed Aug 6). v0.6.2 DEPLOYED. M2 v0.6.0 n=49 (PF=2.33, noise — stops dead code). PRs #35/#36/#38/#39 open (all freeze-exempt fixes). W34 program review complete 2026-08-17.",
- "last_iteration_date": "2026-08-17",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=49 on ~9 trading days (Aug 6–12). PF=1.87 (was 2.02 at n=16 — normalizing as sample grows). All 37 exits via max_hold=30 — DIAGNOSTIC: _atr_exits() floors (SL=1%, trail=0.8%, TP=1.5%) are calibrated for daily holds, 3.6× too wide for 30-min holds; stops NEVER fire. H14 (PR #36) applies _HOLD_VOL_SCALE=sqrt(30/390)≈0.277 to all ATR stops. H15 (PR #35) persists n_trades_today across restarts — Aug 10 had 15 trades vs cap=6 due to v0.6.2 mid-day restart resetting counter (IDs 143–151 = extra batch). JNJ anomaly: ID 163, BUY with ensemble_signal=-0.0238 (negative ensemble on long entry) — H12 ensemble floor would block this. Railway worker BLOCKED week 9.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 10). BOT ACTIVE (resumed Aug 6). v0.6.2 DEPLOYED. M2 v0.6.0 n=68 (PF=1.80, WR=50.0%, normalizing from n=49 PF=2.33). PRs #35/#36/#38/#39 open (all freeze-exempt fixes). H18 IMPLEMENTED 2026-08-19: Gate 5c blocks entries with negative ensemble_signal (JNJ id=163 root pattern). PR to open.",
+ "last_iteration_date": "2026-08-19",
+ "active_hypothesis": "H18 IMPLEMENTED — Gate 5c (ensemble direction consistency) added to _sizing_entry_gate_open(). Blocks entries where ensemble_signal < 0 (net-bearish composite on a long entry). Root event: JNJ id=163, BUY, ensemble=-0.0238, won via max_hold luck. 4 unit tests pass (test_h18_*). LGBM pred_return alone is insufficient — a negative composite contradicts our own model output. Freeze-exempt correctness fix: blocks manifestly contradictory entries, no change to entry timing, universe, or sizing.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
   "target_sharpe": 3.0,
   "live_ic_baseline": 0.05,
   "lgbm_oos_ic": 0.166,
-  "snapshot_date": "2026-08-17",
+  "snapshot_date": "2026-08-18",
   "integrity_clean_streak": 5,
   "integrity_clean_streak_started": "2026-07-24",
   "integrity_clean_streak_ended": "2026-07-28",
@@ -42,27 +42,27 @@
   "v054_note": "Durable risk state (PR #24): risk counters now persist across restarts via risk_state_store.py. Critical bug fixed: max_drawdown was anchored to 0.00% (wrong baseline) instead of true peak $104,278.55 → current $97,329.60 = 6.66% DD.",
   "v055_note": "Peak equity reconciliation (standalone commit bb08d63): _load_peak_equity() now takes max(stored, broker_account_value, current_equity) on every start.",
   "v050_classification_pending": "v0.5.0 commit dff72eb promoted retrained LGBM alongside staleness-trap fix. Classification pending owner confirmation. If strategy change, M2 clock resets to v0.5.0 deploy. Low urgency — M2 clock already resets from v0.6.0.",
-  "all_time_n_closed": 148,
-  "all_time_n_closed_note": "Updated Aug 17 (+12 since Aug 13 state): IDs 164-175 (Aug 13-14). Was 136.",
-  "all_time_win_rate": 0.458,
+  "all_time_n_closed": 167,
+  "all_time_n_closed_note": "Updated Aug 18 (+19 since Aug 17 state): IDs 176-194 (Aug 15-18, ~6 trades/day). Was 148.",
+  "all_time_win_rate": 0.454,
   "all_time_pf_stored": 0.77,
   "all_time_pf_fill_corrected": 0.860,
-  "m2_v060_n": 49,
-  "m2_v060_win_rate": 0.510,
-  "m2_v060_pf": 2.33,
-  "m2_v060_gross_profit": 3069.24,
-  "m2_v060_gross_loss": 1320.40,
-  "m2_v060_net_pnl": 1748.84,
-  "m2_v060_expectancy_per_trade": 35.69,
+  "m2_v060_n": 68,
+  "m2_v060_win_rate": 0.500,
+  "m2_v060_pf": 1.80,
+  "m2_v060_gross_profit": null,
+  "m2_v060_gross_loss": null,
+  "m2_v060_net_pnl": null,
+  "m2_v060_expectancy_per_trade": null,
   "m2_v060_max_single_loss": -154.20,
-  "m2_v060_exit_distribution": {"max_hold": 49, "stop_loss": 0, "trailing_stop": 0, "take_profit": 0, "signal_reversal": 0},
-  "m2_v060_note": "n=49 Aug 6–16, PF=2.33, WR=51.0% (25W/1T/23L), net +$1,748.84, exp $35.69/trade. DIAGNOSTIC: 100% max_hold exits — H14 (PR #36) still unmerged, SL/trail/TP stops dead code. MSTR (Aug 7, +$504) + CIEN (Aug 14, +$358) = 28% of gross profit across 2 of 49 trades — outlier concentration risk. Aug 13-14 sub-period (IDs 164-175): 8W/4L, PF=4.54, net +$800.89. JNJ anomaly (ID 163) still stands. Gate requires n≥100 — do not act on PF until then.",
-  "trailing_30_pf": 2.03,
-  "trailing_30_pf_stored": 2.03,
-  "trailing_30_pf_fill_corrected": 2.03,
-  "trailing_30_win_rate": 0.433,
-  "trailing_30_net_pnl": 960.50,
-  "trailing_30_note": "IDs 133–162 (30 most recent closed trades through Aug 12). All v0.6.0 era, post-repair — no fill-corrected vs stored distinction needed.",
+  "m2_v060_exit_distribution": {"max_hold": 68, "stop_loss": 0, "trailing_stop": 0, "take_profit": 0, "signal_reversal": 0},
+  "m2_v060_note": "n=68 Aug 6–18, PF=1.80, WR=50.0% (34W/34L est). DIAGNOSTIC: 100% max_hold exits — H14 (PR #36) still unmerged, SL/trail/TP stops dead code. PF normalizing from 2.33 at n=49 as MSTR+CIEN outlier weight dilutes. Gate requires n≥100 — do not act on PF until then. JNJ anomaly (ID 163) addressed by H18 Gate 5c (this nightly run).",
+  "trailing_30_pf": 1.67,
+  "trailing_30_pf_stored": 1.67,
+  "trailing_30_pf_fill_corrected": 1.67,
+  "trailing_30_win_rate": null,
+  "trailing_30_net_pnl": null,
+  "trailing_30_note": "IDs 165–194 (30 most recent closed trades through Aug 18). All v0.6.0 era, post-repair — no fill-corrected vs stored distinction needed. Win rate TBD pending full trade detail read.",
   "frozen_config_n": 35,
   "frozen_config_win_rate": 0.400,
   "frozen_config_pf": 0.636,
@@ -83,8 +83,8 @@
   "open_positions_note": "IDs 112-117 opened Jul 24; survived weekend; processed at Jul 27 market open. Pre-v0.5.3 sizing. Heat 87.45% cleared once these exited.",
   "suspected_corrupt_rows": [],
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy.",
-  "m2_trajectory": "IN PROGRESS — v0.6.0 window n=49 (Aug 6–16). PF=2.33 at n=49 still noise (MSTR+CIEN outsized, 28% of gross profit). Bot active. All exits via max_hold — H14 (PR #36) not yet merged. ETA for n=100: late Sep at ~5 trades/day. Do not act on PF signal until n≥100.",
-  "jnj_anomaly": "ID 163, BUY, ensemble_signal=-0.0238 (NET NEGATIVE on long entry). Won +$62.86 via max_hold. A negative ensemble on a BUY means the weighted composite of model scores is bearish even though LGBM pred_return+dir_prob passed the entry gate. H12 (min_signal=0.20) would block this. Monitor for recurrence."
+  "m2_trajectory": "IN PROGRESS — v0.6.0 window n=68 (Aug 6–18). PF=1.80 at n=68, normalizing from n=49 PF=2.33 as MSTR+CIEN outlier weight dilutes. Bot active, 6 trades/day. All exits via max_hold — H14 (PR #36) not yet merged. ETA for n=100: ~Aug 26-27 at 6 trades/day. Do not act on PF signal until n≥100.",
+  "jnj_anomaly": "ID 163, BUY, ensemble_signal=-0.0238 (NET NEGATIVE on long entry). Won +$62.86 via max_hold. ADDRESSED — H18 Gate 5c implemented 2026-08-19: _sizing_entry_gate_open() now blocks entries with ensemble_signal < 0. JNJ id=163 pattern is now blocked at the gate level. H12 (min_signal=0.20 floor) remains a complementary measure for positive-but-weak composites; held in DRAFT pending Railway backtest."
  },
  "live_data_status": {
   "date": "2026-08-13",
@@ -93,6 +93,19 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H18",
+   "hypothesis": "Gate 5c — ensemble direction consistency: block long entries where ensemble_signal < 0. A net-bearish composite on a long entry contradicts our own weighted model output. LGBM pred_return (Gate 5) alone is insufficient — the ensemble is designed to weight all signals including sentiment. Root event: JNJ id=163 (Aug 12 BUY, ensemble=-0.0238, LGBM pred_return positive, sentiment=-0.78 dragged composite negative). Won via max_hold luck; not a valid entry basis.",
+   "status": "implemented — PR to open (2026-08-19, freeze-exempt correctness fix)",
+   "added": "2026-08-19",
+   "added_by": "nightly desk — JNJ id=163 root-cause analysis",
+   "pr_branch": "feat/rnd-H18-ensemble-direction-gate",
+   "pr_number": null,
+   "pr_state": "PENDING — PR not yet opened this run",
+   "tests": "4 unit tests pass: test_h18_negative_ensemble_blocks_long_entry, test_h18_zero_ensemble_is_allowed, test_h18_positive_ensemble_passes, test_h18_strongly_negative_ensemble_blocks",
+   "freeze_classification": "FREEZE-EXEMPT correctness fix — blocks manifestly contradictory entries (composite < 0 on long), no change to entry timing, universe, sizing, or direction logic for non-contradictory signals. Complements H12 (min positive floor, still in DRAFT). Strict-negative gate only; zero ensemble allowed.",
+   "priority": "HIGH — correctness fix, open PR ASAP"
+  },
   {
    "id": "H17",
    "hypothesis": "Diagnostic accuracy fix: exclude Phase 5 short signals from would_trade() — the diagnostic function was counting short-signal hypothetical trades against the long-only entry gate, producing misleading would-have-traded counts in the diagnostics endpoint.",
@@ -305,6 +318,17 @@
  ],
  "completed_iterations": [
   {
+   "date": "2026-08-19",
+   "hypothesis_id": "H18",
+   "result": "IMPLEMENTED — Gate 5c added to _sizing_entry_gate_open() in src/agents/signal_loop.py. Blocks entries where sig.ensemble_signal < 0 (strict negative; zero ensemble allowed as neutral). 4 unit tests written and passing (test_h18_*). Full suite: 47 failed (all pre-existing sandbox), 13 passed (up from 9; +4 H18), 3 skipped — no regressions. M2 v0.6.0 updated: n=68 (Aug 6–18), PF=1.80, WR=50.0%, trailing-30 PF=1.67. All 68 exits via max_hold (H14 PR #36 still unmerged). ETA n=100: ~Aug 26-27 at 6 trades/day. Freeze-exempt correctness fix — PR to open. Railway worker week 10 — sole CODE RED exit blocker.",
+   "tests_status": "4/4 H18 tests pass; 47 pre-existing sandbox failures unchanged",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ]
+  },
+  {
    "date": "2026-08-17",
    "hypothesis_id": "W34_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W34 weekly review completed. M2 v0.6.0: n=49 (PF=2.33, WR=51.0%, net +$1,748.84, exp $35.69/trade, 25W/23L/1T). All 49 exits via max_hold — H14 (PR #36) still unmerged, stops dead code. New IDs 164-175 (Aug 13-14): 8W/4L, PF=4.54, net +$800.89; CIEN +$358 newest outlier. Integrity Sentinel ALL GREEN Aug 17 13:25 UTC. Watchdog OK, 0 open positions. No strategy code shipped — freeze intact. New PRs: #38 (H16 session-boundary, needs freeze classification) + #39 (H17 diagnostic fix). Railway worker week 9 — sole CODE RED exit blocker. Report: reports/program/2026-W34.md.",
@@ -450,7 +474,8 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION — CRITICAL, WEEK 9] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion. Outstanding 9 consecutive weeks since Jul 15.",
+  "[DESK — IMMEDIATE] Open PR for H18 (Gate 5c: ensemble direction gate). Branch: feat/rnd-H18-ensemble-direction-gate. Freeze-exempt correctness fix. 4 tests pass.",
+  "[OWNER ACTION — CRITICAL, WEEK 10] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 13 hypothesis validations and CODE RED data_run exit criterion. Outstanding 10 consecutive weeks since Jul 15.",
   "[OWNER ACTION — HIGH] Merge PR #36 (H14: horizon-scaled ATR exits). FREEZE-EXEMPT correctness fix. All 37 v0.6.0 exits via max_hold because stops are 3.6× too wide. SL/trail/TP floors are currently dead code for 30-bar positions.",
   "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT risk-control fix. Aug 10 had 15 trades vs cap=6. Trade cap is currently ineffective across deploys.",
   "[OWNER ACTION — HIGH] Merge PR #31 or #32 (H13 halt-aware exits). Owner must choose variant. v0.6.2 fixed universe zombie; halt-blocks-exits structural risk remains. If halt fires pre-merge, open positions cannot exit.",
@@ -497,7 +522,7 @@
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
    "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok. Kelly mode: normal, fraction=0.2349.",
-   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (9 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12 validations."
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (10 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12 validations."
   }
  }
 }
