@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.execution.position_sizer import (
-    SmartPositionSizer, _MAX_NOTIONAL_PCT,
+    SmartPositionSizer, _MAX_NOTIONAL_PCT, _SECTOR_CAP_PCT, SECTOR_MAP,
 )
 
 
@@ -57,3 +57,69 @@ def test_heat_ceiling_blocks_new_size():
     # 60-75% band: half size, not blocked
     r_half = _size("AAPL", dir_prob=0.72, pred_return=0.009, atr_pct=0.0006, heat=0.65)
     assert r_half is not None
+
+
+# ── H19 tests: SECTOR_MAP completeness (2026-08-20) ─────────────────────────
+# Root event: INTC + KLAC entered 2026-08-19 as "other" (not in SECTOR_MAP)
+# while MU + WDC already filled the "semis" cap. Result: 4 correlated
+# semiconductor positions open simultaneously, net -$919.
+
+def test_h19_semiconductor_missing_tickers_now_in_semis():
+    """INTC, KLAC, AMAT, LRCX, TER, STX must be in 'semis' — not 'other'."""
+    for ticker in ("INTC", "KLAC", "AMAT", "LRCX", "TER", "STX"):
+        assert SECTOR_MAP.get(ticker) == "semis", (
+            f"{ticker} maps to {SECTOR_MAP.get(ticker, 'other')!r}, expected 'semis'"
+        )
+
+
+def test_h19_intc_blocked_by_sector_cap_when_two_semis_deployed():
+    """Sizer stage 4b: INTC must be blocked when 'semis' notional = 40% of portfolio.
+    Before H19 fix, INTC was 'other' and stage 4b looked up sector_notionals['other']
+    (empty), returning a full-sized position despite 2 semis already deployed."""
+    pv = 98_000.0
+    sector_notionals_full = {"semis": pv * _SECTOR_CAP_PCT}  # semis at cap
+    result = SmartPositionSizer(mode="paper").compute(
+        ticker="INTC", dir_prob=0.75, pred_return=0.009, atr_pct=0.0007,
+        price=35.0, portfolio_value=pv, portfolio_heat=0.40,
+        sector_notionals=sector_notionals_full, kelly_fraction=0.20,
+    )
+    assert result is None, "INTC must be blocked when semis notional is at sector cap"
+
+
+def test_h19_seed_universe_equities_have_explicit_sector():
+    """All equity tickers from the active seed universe must be in SECTOR_MAP.
+    Any ticker not in the map falls into 'other', sharing a single cap slot with
+    all other unmapped names — effectively no sector limit on the group."""
+    equities = {
+        # tech
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD",
+        "ORCL", "CRM", "SNOW", "DDOG", "ARM", "AVGO",
+        # growth
+        "PLTR", "SMCI", "MSTR", "COIN", "HOOD", "UBER", "ABNB", "RIVN",
+        # defense
+        "LMT", "NOC", "RTX", "BA", "GD", "LHX", "KTOS", "HII", "LDOS",
+        # finance
+        "JPM", "GS", "V", "MA", "BAC", "BLK", "C", "WFC", "SCHW",
+        # health
+        "LLY", "NVO", "ABBV", "MRK", "PFE", "GILD", "AMGN", "REGN", "ISRG", "MRNA",
+        # energy
+        "XOM", "CVX", "OXY", "SLB", "COP", "PSX",
+        # consumer
+        "COST", "WMT", "HD", "NKE", "MCD", "SBUX", "TGT",
+        # crypto-adjacent
+        "MARA", "RIOT", "HUT", "CLSK",
+    }
+    missing = sorted(t for t in equities if t not in SECTOR_MAP)
+    assert not missing, f"Tickers fall through to 'other' (no sector cap): {missing}"
+
+
+def test_h19_defense_sector_cap_enforced():
+    """LMT + RTX filling 'defense' at 40% should block a third defense entry (NOC)."""
+    pv = 98_000.0
+    sector_notionals_full = {"defense": pv * _SECTOR_CAP_PCT}
+    result = SmartPositionSizer(mode="paper").compute(
+        ticker="NOC", dir_prob=0.73, pred_return=0.008, atr_pct=0.0006,
+        price=250.0, portfolio_value=pv, portfolio_heat=0.40,
+        sector_notionals=sector_notionals_full, kelly_fraction=0.20,
+    )
+    assert result is None, "NOC must be blocked when defense sector cap is full"

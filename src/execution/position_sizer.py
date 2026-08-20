@@ -60,6 +60,88 @@ SECTOR_MAP: dict[str, str] = {
     # Healthcare
     "LLY": "healthcare",
     "UNH": "healthcare",
+
+    # H19 (2026-08-20): Full active-universe coverage — ensures
+    # MAX_POSITIONS_PER_SECTOR=2 (signal_loop) and _SECTOR_CAP_PCT=40%
+    # (sizer stage 4b) both fire on every traded name. Tickers absent from
+    # this map fall into "other" and share a single cap slot, bypassing
+    # per-sector limits. Root event: INTC + KLAC entered as "other" on
+    # 2026-08-19 while MU + WDC already filled the "semis" cap → 4
+    # correlated semiconductor positions, net -$919 in one session.
+
+    # Semiconductor / equipment (active universe, previously unmapped)
+    "INTC": "semis",
+    "KLAC": "semis",
+    "AMAT": "semis",
+    "LRCX": "semis",
+    "TER":  "semis",
+    "STX":  "semis",
+    # Tech — active universe (previously unmapped)
+    "META": "tech",
+    "ORCL": "tech",
+    "CRM":  "tech",
+    "SNOW": "tech",
+    "DDOG": "tech",
+    "ANET": "tech",
+    "NOW":  "tech",
+    "DELL": "tech",
+    "TTD":  "tech",
+    "ZBRA": "tech",
+    "FLEX": "tech",
+    "CIEN": "tech",
+    # Financials — active universe (previously unmapped)
+    "GS":   "financials",
+    "WFC":  "financials",
+    "BAC":  "financials",
+    "BLK":  "financials",
+    "C":    "financials",
+    "SCHW": "financials",
+    "MSCI": "financials",
+    # Healthcare — active universe (previously unmapped)
+    "ABBV": "healthcare",
+    "PFE":  "healthcare",
+    "MRK":  "healthcare",
+    "GILD": "healthcare",
+    "AMGN": "healthcare",
+    "REGN": "healthcare",
+    "ISRG": "healthcare",
+    "MRNA": "healthcare",
+    "NVO":  "healthcare",
+    # Energy — active universe (previously unmapped)
+    "COP":  "energy",
+    "OXY":  "energy",
+    "SLB":  "energy",
+    "PSX":  "energy",
+    # Consumer — active universe (previously unmapped)
+    "WMT":  "consumer",
+    "HD":   "consumer",
+    "NKE":  "consumer",
+    "MCD":  "consumer",
+    "SBUX": "consumer",
+    "TGT":  "consumer",
+    "GRMN": "consumer",
+    "APTV": "consumer",
+    "UBER": "consumer",
+    "ABNB": "consumer",
+    "RIVN": "consumer",
+    # Defense (new sector group — caps correlated defense names)
+    "LMT":  "defense",
+    "NOC":  "defense",
+    "RTX":  "defense",
+    "BA":   "defense",
+    "GD":   "defense",
+    "LHX":  "defense",
+    "KTOS": "defense",
+    "HII":  "defense",
+    "LDOS": "defense",
+    "RKLB": "defense",
+    # Crypto-adjacent equities (new sector group)
+    "COIN": "crypto",
+    "MARA": "crypto",
+    "RIOT": "crypto",
+    "HUT":  "crypto",
+    "CLSK": "crypto",
+    "HOOD": "crypto",
 }
 
 # ─── Pipeline configuration ─────────────────────────────────────────────────
