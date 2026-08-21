@@ -1677,6 +1677,23 @@ class SignalLoop:
         except Exception:
             pass
 
+        # Gate 0e: H18 — SPY intraday session-return gate.
+        # Blocks ALL new long entries when SPY has dropped > 0.5% from the
+        # session open price. Addresses Aug-19-2026: 5/6 losses on macro down day.
+        # Fail-open: spy_session_block defaults to False until MarketRegimeMonitor polls.
+        try:
+            from src.data.market_regime import get_market_regime as _get_regime
+            _snap = _get_regime()
+            if _snap.spy_session_block:
+                logger.info(
+                    "entry_blocked_spy_session_down",
+                    ticker=ticker,
+                    spy_session_return=round(_snap.spy_session_return, 4),
+                )
+                return False
+        except Exception:
+            pass
+
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
             logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)

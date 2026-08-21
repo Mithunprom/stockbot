@@ -43,6 +43,10 @@ class MarketRegimeSnapshot:
     spy_ma20: float = 0.0              # SPY 20-day simple MA
     spy_above_20d_ma: bool = True      # True → market in up-trend; deploy full heat
     market_regime_scalar: float = 1.0  # 1.0 when above MA, 0.5 when below
+    # H18: SPY intraday session-return gate.
+    # Defaults to 0.0 / False so fetch failures never block entries (fail-open).
+    spy_session_return: float = 0.0    # SPY return from today's first 1m bar to now
+    spy_session_block: bool = False    # True → block new long entries this session
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +63,8 @@ class MarketRegimeSnapshot:
             "spy_ma20": round(self.spy_ma20, 2),
             "spy_above_20d_ma": self.spy_above_20d_ma,
             "market_regime_scalar": self.market_regime_scalar,
+            "spy_session_return": round(self.spy_session_return, 6),
+            "spy_session_block": self.spy_session_block,
         }
 
 
@@ -69,6 +75,68 @@ class MarketRegimeSnapshot:
 MA20_BELOW_SCALAR: float = 0.5
 MA20_LOOKBACK_DAYS: int = 20
 MA20_MIN_BARS: int = 21  # need ≥21 daily bars to compute a valid 20d MA
+
+# H18: SPY intraday session-return gate.
+# Block new long entries when SPY falls more than this threshold from the
+# first 1-minute bar of the session. Evidence: Aug-19 2026 — 5 of 6 slots
+# lost (WDC -3.1%, INTC -3.0%, KLAC -2.6%, MU -1.8%, TSLA -0.1%) during
+# a macro selloff with no stop-loss protection (H14 unmerged). The gate
+# addresses correlated long-only losses on down-tape sessions.
+# Fail-open: when SPY 1m data is unavailable, spy_session_block=False.
+# Needs Railway backtest for threshold calibration — 0.5% is a conservative
+# starting value; the true optimal is likely 0.3%–0.8% (needs data run).
+SPY_SESSION_BLOCK_THRESHOLD: float = 0.005  # 0.5% intraday drop from session open
+SPY_SESSION_MIN_BARS: int = 2               # need ≥2 1m bars to compute session return
+
+
+def _compute_spy_session_block(
+    session_return: float,
+    threshold: float = SPY_SESSION_BLOCK_THRESHOLD,
+) -> bool:
+    """Return True when SPY's intraday return warrants blocking new long entries.
+
+    Pure function — safe to unit-test without any IO or mocking.
+    Fails open: NaN / Inf inputs return False (never block on bad data).
+
+    Args:
+        session_return: SPY return from session open to now (e.g. -0.007 = -0.7%).
+        threshold: Magnitude of down-move that triggers the block (positive float).
+
+    Returns:
+        True when session_return < -threshold (market meaningfully down from open).
+    """
+    import math
+    if not math.isfinite(session_return):
+        return False
+    return session_return < -abs(threshold)
+
+
+def _fetch_spy_session_return() -> float:
+    """Fetch SPY's return from today's first 1-minute bar to the latest bar.
+
+    Uses yfinance 1m data for the current trading day. Returns 0.0 on any
+    error so the gate always fails open when data is unavailable.
+    """
+    try:
+        import yfinance as yf
+
+        df = yf.download("SPY", period="1d", interval="1m", progress=False,
+                         auto_adjust=True)
+        if df is None or df.empty:
+            return 0.0
+
+        closes = df["Close"].dropna()
+        if len(closes) < SPY_SESSION_MIN_BARS:
+            return 0.0
+
+        session_open_close = float(closes.iloc[0])
+        current_close = float(closes.iloc[-1])
+        if session_open_close <= 0:
+            return 0.0
+        return (current_close - session_open_close) / session_open_close
+    except Exception as exc:
+        logger.warning("spy_session_return_fetch_error", error=str(exc))
+        return 0.0
 
 
 def _fetch_spy_ma20() -> dict[str, float | bool]:
@@ -318,10 +386,11 @@ class MarketRegimeMonitor:
 
         loop = asyncio.get_event_loop()
 
-        # Fetch VIX and SPY MA in parallel (both sync — run in thread executor)
-        vix_data, ma_data = await asyncio.gather(
+        # Fetch VIX, SPY MA, and SPY session return in parallel (all sync — thread executor)
+        vix_data, ma_data, spy_session_ret = await asyncio.gather(
             loop.run_in_executor(None, _fetch_vix),
             loop.run_in_executor(None, _fetch_spy_ma20),
+            loop.run_in_executor(None, _fetch_spy_session_return),
         )
 
         # Fetch SPY/QQQ short-term returns from DB
@@ -335,6 +404,9 @@ class MarketRegimeMonitor:
             spy_ret_15=spy_qqq["spy_return_15m"],
             qqq_spread=spy_qqq["qqq_vs_spy_spread"],
         )
+
+        # H18: compute session block flag
+        session_block = _compute_spy_session_block(spy_session_ret)
 
         snapshot = MarketRegimeSnapshot(
             vix=vix_data["vix"],
@@ -350,6 +422,8 @@ class MarketRegimeMonitor:
             spy_ma20=float(ma_data["spy_ma20"]),
             spy_above_20d_ma=bool(ma_data["spy_above_20d_ma"]),
             market_regime_scalar=float(ma_data["market_regime_scalar"]),
+            spy_session_return=float(spy_session_ret),
+            spy_session_block=session_block,
         )
 
         _latest = snapshot
@@ -362,5 +436,7 @@ class MarketRegimeMonitor:
             spy_price=round(snapshot.spy_price, 2),
             spy_ma20=round(snapshot.spy_ma20, 2),
             market_regime_scalar=snapshot.market_regime_scalar,
+            spy_session_return=round(snapshot.spy_session_return, 4),
+            spy_session_block=snapshot.spy_session_block,
         )
         return snapshot
