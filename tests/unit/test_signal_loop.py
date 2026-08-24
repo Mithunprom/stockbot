@@ -1123,3 +1123,73 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ── H18: Kelly window by-day breakdown ───────────────────────────────────────
+
+def test_h18_kelly_window_by_day_empty():
+    """No Kelly outcomes → empty list; no crash."""
+    loop = _make_loop()
+    assert loop._kelly_window_by_day() == []
+
+
+def test_h18_kelly_window_by_day_groups_by_date():
+    """Outcomes on the same UTC date are grouped; different days are separate rows."""
+    from datetime import datetime, timezone as tz
+
+    loop = _make_loop()
+    t1 = datetime(2026, 8, 20, 14, 0, tzinfo=tz.utc)
+    t2 = datetime(2026, 8, 20, 15, 0, tzinfo=tz.utc)
+    t3 = datetime(2026, 8, 21, 14, 0, tzinfo=tz.utc)
+    loop._sizing_recent_outcomes = [(t1, 0.01), (t2, -0.005), (t3, -0.008)]
+
+    rows = loop._kelly_window_by_day()
+    assert len(rows) == 2
+    # newest first
+    assert rows[0]["date"] == "2026-08-21"
+    assert rows[1]["date"] == "2026-08-20"
+    assert rows[1]["n"] == 2
+    assert rows[1]["wins"] == 1
+    assert rows[1]["losses"] == 1
+
+
+def test_h18_kelly_window_by_day_pf_and_net():
+    """PF and net_pnl_pct are computed correctly; all-win day has pf=None."""
+    from datetime import datetime, timezone as tz
+
+    loop = _make_loop()
+    t_mixed = datetime(2026, 8, 20, 14, 0, tzinfo=tz.utc)
+    t_all_win = datetime(2026, 8, 21, 14, 0, tzinfo=tz.utc)
+    # Mixed day: 1 win +2%, 2 losses -1% each → PF = 2/2 = 1.0, net ≈ 0
+    loop._sizing_recent_outcomes = [
+        (t_mixed, 0.02), (t_mixed, -0.01), (t_mixed, -0.01),
+        (t_all_win, 0.01), (t_all_win, 0.02),
+    ]
+    rows = loop._kelly_window_by_day()
+    assert len(rows) == 2
+
+    all_win_row = rows[0]   # 2026-08-21 (newest first)
+    assert all_win_row["wins"] == 2
+    assert all_win_row["losses"] == 0
+    assert all_win_row["pf"] is None  # no losses → pf undefined
+
+    mixed_row = rows[1]     # 2026-08-20
+    assert abs(mixed_row["pf"] - 1.0) < 0.01
+    assert abs(mixed_row["net_pnl_pct"]) < 0.01
+
+
+def test_h18_portfolio_summary_includes_kelly_window_by_day():
+    """get_portfolio_summary() exposes kelly_window_by_day as a list."""
+    from datetime import datetime, timezone as tz
+
+    loop = _make_loop()
+    t = datetime(2026, 8, 21, 14, 0, tzinfo=tz.utc)
+    loop._sizing_recent_outcomes = [(t, 0.01), (t, -0.005)]
+
+    summary = loop.get_portfolio_summary()
+    assert "kelly_window_by_day" in summary
+    rows = summary["kelly_window_by_day"]
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["date"] == "2026-08-21"
+    assert rows[0]["n"] == 2
