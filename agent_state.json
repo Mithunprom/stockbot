@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 11). BOT IN KELLY PROBATION. v0.6.2 DEPLOYED. M2 v0.6.0 n=86 STALLED — no new trades Aug 22–25 (bot in probation). PF=1.152 BELOW 1.2 GATE. Kelly recovery ETA ~Aug 30/Sep 1. PRs #35/#36/#38–#44 + #45 (H20) open.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 11). BOT IN KELLY PROBATION. v0.6.2 DEPLOYED. M2 v0.6.0 n=86 STALLED — no new trades Aug 22–25 (bot in probation). PF=1.152 BELOW 1.2 GATE. Kelly recovery ETA ~Aug 30/Sep 1. PRs #35/#36/#38–#44 + #46 (H20) open.",
  "last_iteration_date": "2026-08-25",
- "active_hypothesis": "KELLY PROBATION MONITORING. Kelly mode flipped to 'probation' (fraction=-0.2841) since W35 PF=0.535 pushed Kelly negative. tickers_probe_eligible=[] means NO probes can fire — bot completely stopped Aug 22–25 (3+ trading days). Recovery ETA: ~Aug 30 when Aug 17-21 trades roll out of the 10-day window (n drops from 37 to ~6, below KELLY_MIN_TRADES=10 → mode becomes 'inactive' → full entries resume). M2 n still 86 — gate call delayed. H20 (PR #45) adds kelly_probation_recovery_eta to diagnostics endpoint (freeze-exempt). Railway worker BLOCKED week 11.",
+ "active_hypothesis": "KELLY PROBATION MONITORING. Kelly mode flipped to 'probation' (fraction=-0.2841) since W35 PF=0.535 pushed Kelly negative. tickers_probe_eligible=[] means NO probes can fire — bot completely stopped Aug 22–25 (3+ trading days). Recovery ETA: ~Aug 30 when Aug 17-21 trades roll out of the 10-day window (n drops from 37 to ~6, below KELLY_MIN_TRADES=10 → mode becomes 'inactive' → full entries resume). M2 n still 86 — gate call delayed. H20 (PR #46) adds kelly_probation_recovery_eta to diagnostics endpoint (freeze-exempt). Railway worker BLOCKED week 11.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -100,11 +100,11 @@
   {
    "id": "H20",
    "hypothesis": "Kelly probation recovery ETA in diagnostics: add kelly_probation_recovery_eta field to the diagnostics endpoint when Kelly is in probation mode, showing the earliest_recovery_date (when n-in-window drops below KELLY_MIN_TRADES=10), n_current (trades in window), and by_date rolloff schedule. Lets the owner see exactly when trading is expected to resume without needing to read code.",
-   "status": "implemented — PR #45 open (freeze-exempt diagnostics, Aug 25)",
+   "status": "implemented — PR #46 open (freeze-exempt diagnostics, Aug 25)",
    "added": "2026-08-25",
    "added_by": "nightly desk — motivated by Kelly probation with tickers_probe_eligible=[] (bot stopped 3+ days with no visibility into recovery timeline)",
    "pr_branch": "feat/rnd-H20-kelly-probation-recovery-eta",
-   "pr_number": 45,
+   "pr_number": 46,
    "pr_state": "OPEN — freeze-exempt: diagnostics endpoint only, no change to trading logic, entry gating, or sizing. 7 unit tests pass (test_h20_kelly_recovery_eta.py).",
    "priority": "MEDIUM — helps owner understand when bot resumes trading",
    "tests": "7 tests pass: test_returns_none_when_not_in_probation, test_returns_none_when_inactive_below_min_trades, test_recovery_eta_with_aug19_selloff_scenario (canonical Aug 30 ETA), test_old_trades_outside_window_excluded, test_single_date_cluster_rolloff, test_no_recovery_date_when_window_never_clears, test_probation_with_exact_min_trades"
@@ -368,13 +368,13 @@
   {
    "date": "2026-08-25",
    "hypothesis_id": "H20_NIGHTLY_AUG25",
-   "result": "NIGHTLY REVIEW + H20 IMPLEMENTED — Critical finding: Kelly mode flipped to 'probation' (fraction=-0.2841) since W35 PF=0.535 pushed Kelly negative. tickers_probe_eligible=[] means NO probes can fire — bot completely stopped Aug 22-25 (3 trading days, 0 new trades). M2 n=86 unchanged. Integrity ALL GREEN (2026-08-24T21:25 UTC). Watchdog OK (2026-08-24T21:52 UTC). H20 implemented: kelly_probation_recovery_eta added to diagnostics endpoint (freeze-exempt). Recovery ETA per H20: Aug 30 (when Aug 20 W35 trades roll off 10-day window, n drops from 37→6 < KELLY_MIN_TRADES=10). 7 H20 tests pass. Test suite: 135 passed (7 new), 15 pre-existing failures unchanged. PR #45 opened (feat/rnd-H20-kelly-probation-recovery-eta).",
+   "result": "NIGHTLY REVIEW + H20 IMPLEMENTED — Critical finding: Kelly mode flipped to 'probation' (fraction=-0.2841) since W35 PF=0.535 pushed Kelly negative. tickers_probe_eligible=[] means NO probes can fire — bot completely stopped Aug 22-25 (3 trading days, 0 new trades). M2 n=86 unchanged. Integrity ALL GREEN (2026-08-24T21:25 UTC). Watchdog OK (2026-08-24T21:52 UTC). H20 implemented: kelly_probation_recovery_eta added to diagnostics endpoint (freeze-exempt). Recovery ETA per H20: Aug 30 (when Aug 20 W35 trades roll off 10-day window, n drops from 37→6 < KELLY_MIN_TRADES=10). 7 H20 tests pass. Test suite: 135 passed (7 new), 15 pre-existing failures unchanged. PR #46 opened (feat/rnd-H20-kelly-probation-recovery-eta).",
    "files_changed": [
     "src/agents/signal_loop.py",
     "tests/unit/test_h20_kelly_recovery_eta.py",
     "agent_state.json"
    ],
-   "pr_number": 45
+   "pr_number": 46
   },
   {
    "date": "2026-08-24",
