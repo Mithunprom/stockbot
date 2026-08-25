@@ -876,6 +876,7 @@ class SignalLoop:
             "kelly_entries_blocked": False,  # probation replaces hard block
             "kelly_n_trades": len(self._sizing_recent_outcomes),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
+            "kelly_probation_recovery_eta": self._kelly_probation_recovery_eta(),
             "probation_entries_today": self._probation_entries_today,
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
             "max_open_positions": MAX_OPEN_POSITIONS,
@@ -1537,6 +1538,45 @@ class SignalLoop:
         if len(self._sizing_recent_outcomes) < self._kelly_min_trades:
             return "inactive"
         return "normal" if self._kelly_fraction > 0 else "probation"
+
+    def _kelly_probation_recovery_eta(self) -> "dict | None":
+        """Estimate when enough old trades roll out of the Kelly window.
+
+        Returns None when not in probation.  When in probation returns:
+          earliest_recovery_date — ISO date when n-in-window drops below
+                                   KELLY_MIN_TRADES and Kelly becomes 'inactive'
+                                   (full-size entries re-allowed without a probe).
+          n_current              — trades currently in the window.
+          by_date                — {YYYY-MM-DD: count} rolloff schedule.
+
+        This is a pure read; it does not mutate any state.
+        """
+        if self._kelly_mode() != "probation":
+            return None
+        from datetime import timedelta
+        self._prune_kelly_window()
+        outcomes = self._sizing_recent_outcomes
+        n_current = len(outcomes)
+        by_date: dict[str, int] = {}
+        for ts, _ in outcomes:
+            d = ts.strftime("%Y-%m-%d")
+            by_date[d] = by_date.get(d, 0) + 1
+        remaining = n_current
+        recovery_date: "str | None" = None
+        for date_str in sorted(by_date.keys()):
+            # Use noon UTC as the canonical timestamp for that date's trades;
+            # actual rollout is date + KELLY_LOOKBACK_DAYS.
+            trade_ts = datetime.fromisoformat(date_str + "T12:00:00").replace(tzinfo=timezone.utc)
+            rollout = trade_ts + timedelta(days=KELLY_LOOKBACK_DAYS)
+            remaining -= by_date[date_str]
+            if remaining < self._kelly_min_trades:
+                recovery_date = rollout.strftime("%Y-%m-%d")
+                break
+        return {
+            "earliest_recovery_date": recovery_date,
+            "n_current": n_current,
+            "by_date": by_date,
+        }
 
     def _prune_kelly_window(self) -> None:
         """Drop outcomes older than the lookback window."""
