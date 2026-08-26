@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-08-24 W35 program review (v0.6.2 deployed; M2 n=86 PF=1.152 GATE AT RISK; PRs #35/#36/#38–#44 open; Railway worker week 10).
+Last updated: 2026-08-26 W36 nightly desk (Kelly probation fraction=-0.2841; bot idle since Aug 21; recovery ETA Aug 30; M2 stalled n=86 ETA Sep 3-4; H21 probe_ic_debug PR #47; PRs #35/#36/#38–#47 open; Railway worker week 10).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -16,8 +16,8 @@ second, new alpha queued.
 
 | Criterion | Status |
 |-----------|--------|
-| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 24 13:25 UTC. |
-| Kelly window verified sane | ✅ OK — kelly_seed_sanity confirmed; mode: normal, fraction=0.2349 |
+| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 25 21:25 UTC. |
+| Kelly window verified sane | ✅ OK — kelly_seed_sanity confirmed; probation is a correct risk response (fraction=-0.2841, W35 PF=0.535). Recovery ETA Aug 30. |
 | ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (10 consecutive weeks since Jul 15) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
@@ -34,19 +34,20 @@ change (research: IC at 390 bars = 0.004, edge gone; backtest PF@30 = 4.55 vs 0.
 Prior M2 stats (PF=0.636@n=35) measured a broken strategy and are retired. New M2 window
 starts from v0.6.0 deploy. Bot resumed Aug 6.
 
-**M2 status (Aug 24):** n=86, PF=1.152, WR=46.5% (40W/1T/45L), net +$583.24, exp $6.78/trade.
-⚠️ PF BELOW GATE (1.2). ETA n=100: ≈Aug 25–26 (gate call IMMINENT — ≈14 trades remaining).
+**M2 status (Aug 26):** n=86, PF=1.152, WR=46.5% (40W/1T/45L), net +$583.24, exp $6.78/trade.
+⚠️ PF BELOW GATE (1.2). STALLED — bot in Kelly probation, not trading since Aug 21.
+ETA n=100 REVISED ≈Sep 3–4 (bot resumes ~Aug 30 when Aug 17-20 trades roll off Kelly window).
 All 86 exits via max_hold — stops remain dead code for 30-bar horizon (H14 PR #36 unmerged).
+**URGENT: merge H14 before Aug 30** so stops fire when the bot resumes trading.
 W35 (Aug 17-21, 37 trades, IDs 176-212): 15W/22L, PF=0.535, net -$1,165.60. Aug 19 sector
 selloff (INTC -$371, KLAC -$328, WDC -$318, MU -$220) = -$1,222 in one day; no stop protection.
-Ex-Aug 19 the week was approximately breakeven (+$56).
 
 ## Milestones
 
 | ID | Milestone | Gate | Status |
 |----|-----------|------|--------|
 | M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~45 days (Jul 10–Aug 24); watchdog clean; no outages |
-| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🟡 IN PROGRESS — n=86, PF=1.152 ⚠️ BELOW GATE. ETA n=100 ≈ Aug 25–26 (IMMINENT). Stops still dead code. |
+| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🟡 STALLED — n=86, PF=1.152 ⚠️ BELOW GATE. Bot in Kelly probation; not trading. ETA n=100 ≈ Sep 3–4. Stops still dead code — merge H14 before Aug 30. |
 | M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 10. |
 | M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — Railway worker not enabled. 13+ hypotheses total blocked. Week 10. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M2 |
@@ -97,8 +98,8 @@ block). PR #43 (H18 SPY session gate) requires freeze classification before merg
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
 | Railway worker not running — CODE RED exit + 15+ hypothesis validations blocked | **CRITICAL** | Week 10; ~10 min owner action in Railway dashboard |
-| M2 PF=1.152 at n=86 — gate at risk (need PF≥1.2@n≥100, ETA ≈Aug 25–26) | **HIGH** | NEW — W35 decay: 2.33→1.152. Gate call imminent. Merge H14 for post-gate protection. |
-| PR #36 (H14) not merged — SL/trail/TP stops dead code for all 30-bar positions | **HIGH** | All 86 exits via max_hold; Aug 19 -$1,222 loss had no stop protection; merge PR #36 |
+| Kelly probation — bot idle since Aug 21, M2 stalled (ETA Sep 3-4) | **HIGH** | Correct protective behavior. Recovery Aug 30. Merge H14/H15 before then so safety controls are live at resumption. |
+| PR #36 (H14) not merged — SL/trail/TP stops dead code for all 30-bar positions | **HIGH** | **DEADLINE: merge before Aug 30** when bot resumes. All 86 exits via max_hold; Aug 19 -$1,222 had no stop protection. |
 | PR #35 (H15) not merged — daily trade cap reset on every redeploy | **HIGH** | Active structural gap; merge PR #35 |
 | Halt-aware exits not merged (PRs #31/#32) — halt could block exits if CB fires again | **HIGH** | Owner: choose #31 or #32 and merge; unchanged 3 weeks |
 | PR #43 (H18 SPY session gate) freeze classification outstanding | **HIGH** | NEW — adds new entry condition; likely strategy change; must not merge until classified |
@@ -112,6 +113,7 @@ block). PR #43 (H18 SPY session gate) requires freeze classification before merg
 
 ## Decision Log
 
+- 2026-08-26: W36 nightly desk — CRITICAL: bot entered Kelly probation (fraction=-0.2841, trailing 37-trade window PF=0.535 from Aug 19 sector selloff). Bot idle since Aug 21 (4 trading days). Recovery ETA Aug 30 when n drops below KELLY_MIN_TRADES=10. M2 stalled at n=86/100, ETA ≈Sep 3-4. H21 (probe_ic_debug) implemented: surfaces per-ticker n/IC/blocked_by during probation so owner can distinguish insufficient_predictions vs ic_below_threshold. 4 tests pass. PR #46 (H20 Kelly ETA) and #47 (H21 probe_ic_debug) open. Integrity Sentinel ALL GREEN Aug 25 21:25 UTC. No strategy code shipped — freeze intact at v0.6.2. Railway worker week 10 — sole CODE RED exit blocker. Report: reports/program/2026-W36.md.
 - 2026-08-24: W35 program review — M2 v0.6.0: n=86 (PF=1.152 ⚠️ BELOW GATE, WR=46.5% 40W/1T/45L, net +$583.24, exp $6.78/trade). W35 (IDs 176-212, 37 trades): 15W/22L, PF=0.535, net -$1,165.60. Aug 19 sector selloff: INTC -$371/KLAC -$328/WDC -$318/MU -$220 = -$1,222 in one day, all max_hold exits. Ex-Aug 19, W35 ≈ breakeven (+$56). Integrity Sentinel ALL GREEN Aug 24 13:25 UTC. Watchdog OK, 0 open positions. No strategy code shipped — freeze intact at v0.6.2. New PRs #41 (Gate 5c/H18 ensemble), #42 (H19 SECTOR_MAP), #43 (H18 SPY session gate — FREEZE CLASSIFICATION NEEDED), #44 (H18 Kelly diagnostics). PR #43 requires freeze classification before merge (strategy change candidate). Railway worker week 10 — sole CODE RED exit blocker. M2 gate IMMINENT: ≈14 trades remaining, ETA Aug 25–26.
 - 2026-08-17: W34 program review — M2 v0.6.0: n=49 (PF=2.33, WR=51.0%, net +$1,748.84, exp $35.69/trade, 25W/23L/1T). All 49 exits via max_hold — H14 (PR #36) still unmerged, stops dead code. New trades IDs 164–175 (Aug 13–14): 8W/4L, net +$800.89, PF=4.54; CIEN +$358 (35% sub-period gross). Integrity Sentinel ALL GREEN Aug 17 13:25 UTC. Watchdog OK, 0 open positions. New PRs: #38 (H16 session-boundary cap, needs freeze classification), #39 (H17 diagnostic fix). No strategy code shipped — freeze intact. Railway worker week 9 — sole CODE RED exit blocker. All 13 hypotheses blocked.
 - 2026-08-13: Nightly review — M2 v0.6.0: n=37 (PF=1.87, WR=47.2%, net +$947.95). All 37 exits via max_hold — root cause: SL/trail/TP floors are 3.6× too wide for 30-bar holds (H14 in PR #36 addresses). Trailing-30: PF=2.03, WR=43.3%. Integrity Sentinel ALL GREEN Aug 12. Kelly mode: normal, fraction=0.2349. JNJ anomaly: ID 163 BUY with ensemble_signal=-0.0238. PRs #35 (H15) and #36 (H14) open, freeze-exempt. Merge order: chore/rnd-log-aug13 first (avoids conflict), then #35/#36. Railway worker week 8 — sole CODE RED exit blocker.
