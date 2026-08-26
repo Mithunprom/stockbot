@@ -895,6 +895,33 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic_probe.items()
                 if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
+            # When in probation and probe_eligible is empty, shows the top-5
+            # candidate tickers by IC with their n and blocked_by reason so the
+            # owner can distinguish "model underperforming (ic<0.05)" from
+            # "IC not yet accumulated (n<300)". Null when not in probation.
+            "probe_ic_debug": (
+                sorted(
+                    [
+                        {
+                            "ticker": t,
+                            "n": n,
+                            "ic": round(ic, 4),
+                            "blocked_by": (
+                                ["insufficient_predictions"]
+                                if n < TICKER_IC_MIN_N
+                                else ["ic_below_threshold"]
+                                if ic < KELLY_PROBATION_MIN_TICKER_IC
+                                else []
+                            ),
+                        }
+                        for t, (ic, n) in self._ticker_ic_probe.items()
+                    ],
+                    key=lambda x: x["ic"],
+                    reverse=True,
+                )[:5]
+                if self._kelly_mode() == "probation" and self._ticker_ic_probe
+                else None
+            ),
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
