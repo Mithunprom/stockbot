@@ -70,3 +70,4 @@ docs/stock_docs/course2/
 
 # Runtime artifacts — rewritten continuously, never track
 reports/watchdog/
+reports/integrity/repair_backup_*.json
