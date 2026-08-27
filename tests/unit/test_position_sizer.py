@@ -57,3 +57,19 @@ def test_heat_ceiling_blocks_new_size():
     # 60-75% band: half size, not blocked
     r_half = _size("AAPL", dir_prob=0.72, pred_return=0.009, atr_pct=0.0006, heat=0.65)
     assert r_half is not None
+
+
+def test_h22_mnst_classifies_as_consumer():
+    """H22: MNST maps to the 'consumer' sector (was absent → 'other', bypassed cap)."""
+    from src.execution.position_sizer import SECTOR_MAP
+    assert SECTOR_MAP.get("MNST") == "consumer"
+
+
+def test_h22_mnst_blocked_by_sector_cap_when_two_consumers_deployed():
+    """H22: a third consumer entry is blocked when AMZN+TSLA already fill the sector cap."""
+    from src.execution.position_sizer import _SECTOR_CAP_PCT
+    pv = 98_000.0
+    # AMZN + TSLA together at exactly the 40% sector cap — MNST must be rejected
+    r = _size("MNST", dir_prob=0.72, pred_return=0.009, atr_pct=0.0006,
+              sector_notionals={"consumer": pv * _SECTOR_CAP_PCT})
+    assert r is None
