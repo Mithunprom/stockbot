@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 10). BOT ACTIVE. v0.6.2 DEPLOYED. M2 v0.6.0 n=86 (PF=1.152 BELOW 1.2 GATE — gate call IMMINENT ≈Aug 25-26). PRs #35/#36/#38–#44 open. W35 program review complete 2026-08-24.",
- "last_iteration_date": "2026-08-24",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=86 (Aug 6–Aug 21). PF=1.152 — BELOW 1.2 GATE with ~14 trades remaining. W35 (IDs 176-212, 37 trades): 15W/22L, PF=0.535, net -$1,165.60. Aug 19 sector selloff: INTC -$371/KLAC -$328/WDC -$318/MU -$220 = -$1,222 in one day; all exits via max_hold (no stop protection). Ex-Aug 19, W35 ≈ breakeven (+$56). All 86 exits via max_hold — H14 (PR #36) still unmerged, stops remain dead code. Railway worker BLOCKED week 10.",
+ "current_phase": "CODE RED — BOT IN KELLY PROBATION (fraction≈-0.28; recovery ETA Aug 30). M2 v0.6.0 n=86 (PF=1.152 BELOW 1.2 GATE — STALLED; ETA n=100 ≈Sep 3-4). PRs #35/#36/#38–#47 open. CRITICAL: merge H14 (PR #36) + H19 (PR #42) BEFORE Aug 30 bot resumption.",
+ "last_iteration_date": "2026-08-27",
+ "active_hypothesis": "KELLY PROBATION — no live trades since Aug 21. Probation entered ~Aug 22 after W35 rolling 37-trade PF=0.535. Fraction≈-0.2841 (Aug 25). Recovery ETA: Aug 30 (Aug 20 trades roll off → window n<KELLY_MIN_TRADES=10 → inactive mode → normal trading resumes). Probe starvation: tickers_probe_eligible=[] since Aug 22 (no ticker meets IC≥0.05 + n≥300). H20 (PR #46, Aug 25): Kelly recovery ETA diagnostics. H21 (PR #47, Aug 26): probe_ic_debug field. H22 (Aug 27): MNST added to SECTOR_MAP consumer sector (was 'other', bypassed sector cap; live signals_passing listed MNST). Aug 30 DEADLINE: merge PR #36 (H14 horizon-scaled exits) + PR #42 (H19 SECTOR_MAP) before bot resumes.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,14 +14,14 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-24T13:25:00Z",
-  "integrity_sentinel_status": "ALL GREEN Aug 24 13:25 UTC — all 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows (0 zombie rows, 0 open positions), kelly_seed_sanity, db_vs_broker",
+  "integrity_sentinel_last_run": "2026-08-26T23:25:00Z",
+  "integrity_sentinel_status": "ALL GREEN Aug 26 23:25 UTC — all 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows (0 zombie rows, 0 open positions), kelly_seed_sanity, db_vs_broker (0 orphans — NVDA id=111 broker orphan from repair backup resolved)",
   "integrity_sentinel_critical_since": null,
   "integrity_sentinel_critical_check": null,
   "integrity_sentinel_stale_rows": [],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
   "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
-  "watchdog_status": "OK — last tick 2026-08-24T13:44:00Z, 0 tick errors, no halt, signal loop active, 75 tickers in universe, last_exit_at 2026-08-21T14:17:09Z",
+  "watchdog_status": "OK — last tick 2026-08-26T23:55:00Z, 0 tick errors, no halt, signal loop active, 75 tickers in universe, last_exit_at 2026-08-21T14:17:09Z (no new exits since Aug 21 — Kelly probation)",
   "deployed_version": "0.6.2",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
@@ -35,7 +35,13 @@
   "n_open_positions_aug10": 0,
   "n_open_positions_jul31": 6,
   "open_positions_jul31": ["AVGO (id 126, +sentiment=0.60)", "INTC (id 125, sentiment=0.27)", "PLTR (id 124, sentiment=-0.97 ⚠)", "TSLA (id 122, ensemble=0.162 weak)", "AMAT (id 120)", "MSCI (id 119)"],
-  "kelly_mode": "normal",
+  "kelly_mode": "probation",
+  "kelly_mode_entered": "~2026-08-22 (after W35 trailing 37-trade PF=0.535)",
+  "kelly_probation_recovery_eta": "2026-08-30 (Aug 20 trades roll off → n_window < KELLY_MIN_TRADES=10 → inactive mode → normal trading resumes)",
+  "kelly_fraction_aug25": -0.2841,
+  "kelly_n_trades_aug25": 37,
+  "kelly_rolloff_schedule": "Aug 27: Aug 17 trades (10) roll off → n≈27; Aug 28: Aug 18 (9) → n≈18; Aug 29: Aug 19 (6) → n≈12; Aug 30: Aug 20 (6) → n≈6 < KELLY_MIN_TRADES=10 → INACTIVE MODE",
+  "kelly_probe_starvation": "tickers_probe_eligible=[] since Aug 22 — no ticker meets IC≥0.05 AND n≥300 in 30d window. Self-resolves Aug 30 (inactive mode skips probe gate entirely).",
   "kelly_fraction_aug12": 0.2349,
   "kelly_fraction_jul31": -0.0464,
   "v053_note": "TP mult 3.0→1.5, TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling). 206 tests pass.",
@@ -93,6 +99,16 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H22",
+   "hypothesis": "SECTOR_MAP gap — MNST (Monster Beverage): appeared in live signals_passing (diagnostics 2026-08-26) but was absent from SECTOR_MAP. Defaulted to 'other' sector, bypassing the 40% sector cap. This is the same structural defect that caused INTC/KLAC to enter as 'other' alongside MU+WDC on Aug 19, producing 4 correlated semiconductor positions and -$919 loss. Fix: add MNST to 'consumer' sector in position_sizer.py SECTOR_MAP.",
+   "status": "implemented — PR open (freeze-exempt structural fix, Aug 27)",
+   "added": "2026-08-27",
+   "added_by": "nightly desk — MNST observed in signals_passing with sector='other'",
+   "pr_branch": "feat/rnd-H22-sector-map-mnst-consumer",
+   "pr_state": "OPEN — freeze-exempt: identical in nature to H19 (PR #42); adds a single missing ticker to SECTOR_MAP to prevent sector cap bypass. 2 unit tests: test_h22_mnst_classifies_as_consumer, test_h22_mnst_blocked_by_sector_cap_when_two_consumers_deployed. Does not change entry logic, sizing logic, or strategy parameters.",
+   "priority": "MEDIUM — safe to merge; complements H19"
+  },
   {
    "id": "H19",
    "hypothesis": "SECTOR_MAP completeness: unmapped tickers bypass sector heat caps because the code defaults to an empty-string sector with its own per-sector cap slot. Adding every live universe ticker to SECTOR_MAP prevents this silent cap bypass.",
@@ -350,6 +366,17 @@
  ],
  "completed_iterations": [
   {
+   "date": "2026-08-27",
+   "hypothesis_id": "H22",
+   "result": "IMPLEMENTED — H22: MNST added to SECTOR_MAP consumer sector. MNST (Monster Beverage) appeared in live signals_passing (diagnostics 2026-08-26) but was absent from SECTOR_MAP → classified as 'other' → bypassed 40% sector cap. Same structural defect as INTC/KLAC gap that caused Aug 19 -$919 loss. Fix: 1 line in position_sizer.py, 2 unit tests added (test_h22_mnst_classifies_as_consumer PASS, test_h22_mnst_blocked_by_sector_cap_when_two_consumers_deployed PASS). Freeze-exempt: structural correctness fix, no strategy change. Live status: 0 new trades (Kelly probation, day 2 of rolloff: Aug 17 trades rolled off → n≈27 in window). Integrity sentinel ALL GREEN Aug 26 23:25 UTC. M2 v0.6.0 stalled at n=86 (PF=1.152 below 1.2 gate). Bot resumption ETA Aug 30 (Kelly exits probation → inactive mode). PRs #46 (H20) + #47 (H21) open from Aug 25-26. CRITICAL deadline: merge PR #36 (H14) + PR #42 (H19) before Aug 30.",
+   "tests_status": "130 passed, 15 pre-existing sandbox failures (missing env deps: sqlalchemy, torch, SMTP), 0 regressions introduced",
+   "files_changed": [
+    "src/execution/position_sizer.py",
+    "tests/unit/test_position_sizer.py",
+    "agent_state.json"
+   ]
+  },
+  {
    "date": "2026-08-24",
    "hypothesis_id": "W35_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W35 weekly review completed. M2 v0.6.0: n=86 (PF=1.152 ⚠️ BELOW 1.2 GATE, WR=46.5% 40W/1T/45L, net +$583.24, exp $6.78/trade). W35 (IDs 176-212, 37 trades, Aug 17-21): 15W/22L, PF=0.535, net -$1,165.60. Aug 19 sector selloff: INTC -$371/KLAC -$328/WDC -$318/MU -$220 = -$1,222 in 6 trades; all via max_hold. Ex-Aug 19, W35 ≈ breakeven (+$56). All 86 exits via max_hold — H14 (PR #36) still unmerged. Integrity Sentinel ALL GREEN Aug 24 13:25 UTC. Watchdog OK, 0 open positions. No strategy code shipped — freeze intact. New PRs: #41 (H18a Gate 5c), #42 (H19 SECTOR_MAP fix), #43 (H18b SPY session gate — FREEZE CLASSIFICATION NEEDED), #44 (H18c Kelly diagnostics). Railway worker week 10 — sole CODE RED exit blocker. M2 gate IMMINENT: ≈14 trades remaining, ETA Aug 25-26. Report: reports/program/2026-W35.md.",
@@ -505,8 +532,9 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION — CRITICAL, WEEK 10] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. Outstanding 10 consecutive weeks since Jul 15.",
-  "[OWNER ACTION — URGENT — M2 gate imminent] Merge PR #36 (H14: horizon-scaled ATR exits). FREEZE-EXEMPT correctness fix. All 86 v0.6.0 exits via max_hold; Aug 19 -$1,222 loss had zero stop protection. ETA n=100 ≈ Aug 25-26.",
+  "[OWNER ACTION — CRITICAL, WEEK 11] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. Outstanding 11 consecutive weeks since Jul 15.",
+  "[OWNER ACTION — CRITICAL DEADLINE AUG 30] Merge PR #36 (H14: horizon-scaled ATR exits) BEFORE Aug 30. Bot exits Kelly probation Aug 30 and resumes normal trading — stops remain dead code until H14 is merged. All 86 v0.6.0 exits via max_hold with no stop protection.",
+  "[OWNER ACTION — CRITICAL DEADLINE AUG 30] Merge PR #42 (H19: SECTOR_MAP completeness) BEFORE Aug 30. Sector cap bypass risk persists until merged. H22 (tonight's PR) is a complementary fix for MNST specifically.",
   "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT risk-control fix. Trade cap circumvented on every redeploy.",
   "[OWNER ACTION — HIGH] Merge PR #31 or #32 (H13 halt-aware exits). Owner must choose variant. Structural risk unchanged since W32.",
   "[OWNER ACTION — HIGH] Classify PR #43 (H18b: SPY intraday session gate). Likely a STRATEGY CHANGE (new entry condition). Must not merge during M2 freeze unless owner reclassifies as safety fix. Motivated by single bad day (Aug 19) — backtest required.",
@@ -552,7 +580,7 @@
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
-   "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok. Kelly mode: normal, fraction=0.2349.",
+   "kelly_window_sane": "✅ OK — sentinel confirmed kelly_seed_sanity ok. Kelly mode: probation (fraction≈-0.2841 Aug 25) — probation is the CORRECT protective response to W35 PF=0.535, not a measurement defect. Recovery ETA Aug 30.",
    "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (10 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
   }
  }

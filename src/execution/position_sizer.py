@@ -54,6 +54,7 @@ SECTOR_MAP: dict[str, str] = {
     "TSLA": "consumer",
     "COST": "consumer",
     "NFLX": "consumer",
+    "MNST": "consumer",    # Monster Beverage — was "other", bypassed sector cap
     # Energy
     "XOM": "energy",
     "CVX": "energy",
