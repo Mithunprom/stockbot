@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 10). BOT ACTIVE. v0.6.2 DEPLOYED. M2 v0.6.0 n=86 (PF=1.152 BELOW 1.2 GATE — gate call IMMINENT ≈Aug 25-26). PRs #35/#36/#38–#44 open. W35 program review complete 2026-08-24.",
- "last_iteration_date": "2026-08-24",
- "active_hypothesis": "MONITORING M2 v0.6.0 accumulation. n=86 (Aug 6–Aug 21). PF=1.152 — BELOW 1.2 GATE with ~14 trades remaining. W35 (IDs 176-212, 37 trades): 15W/22L, PF=0.535, net -$1,165.60. Aug 19 sector selloff: INTC -$371/KLAC -$328/WDC -$318/MU -$220 = -$1,222 in one day; all exits via max_hold (no stop protection). Ex-Aug 19, W35 ≈ breakeven (+$56). All 86 exits via max_hold — H14 (PR #36) still unmerged, stops remain dead code. Railway worker BLOCKED week 10.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 11). BOT ACTIVE. v0.6.2 DEPLOYED. M2 v0.6.0 n≈90 (PF≈1.1 BELOW 1.2 GATE — no new trades Aug 25-28 due to Kelly probation deadlock). KELLY PROBATION DEADLOCK: kelly_fraction=-0.7343, all 5 probe IC gates blocked, 0 trades since Aug 21. Aug 19 losses dominate 10-day window, expected to age off ~Sep 2. PRs #35/#36/#38–#44 open + #48 (H22). H23 (Kelly rolloff diagnostics) implemented Aug 29.",
+ "last_iteration_date": "2026-08-29",
+ "active_hypothesis": "H23 IMPLEMENTED — Kelly window loss-rolloff diagnostics. Added _compute_kelly_rolloff() to signal_loop.py (module-level, freeze-exempt) and wired into get_portfolio_summary(). Exposes kelly_window_negative_count, kelly_probation_clears_earliest, kelly_probation_clears_latest. Tells owner exactly when probation will lift. 3 unit tests added, all green (63 passed total). Kelly=-0.7343, probation deadlock: all 5 probe IC gates blocked. Aug 19 losses (INTC-$371/KLAC-$328/WDC-$318/MU-$220) age off ~Sep 2. M2 n≈90, ~10 trades remaining to gate.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -14,8 +14,8 @@
   "integrity_clean_streak_ended": "2026-07-28",
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
-  "integrity_sentinel_last_run": "2026-08-24T13:25:00Z",
-  "integrity_sentinel_status": "ALL GREEN Aug 24 13:25 UTC — all 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows (0 zombie rows, 0 open positions), kelly_seed_sanity, db_vs_broker",
+  "integrity_sentinel_last_run": "2026-08-28T22:25:00Z",
+  "integrity_sentinel_status": "ALL GREEN Aug 28 22:25 UTC — all 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows (0 zombie rows, 0 open positions), kelly_seed_sanity, db_vs_broker",
   "integrity_sentinel_critical_since": null,
   "integrity_sentinel_critical_check": null,
   "integrity_sentinel_stale_rows": [],
@@ -35,7 +35,8 @@
   "n_open_positions_aug10": 0,
   "n_open_positions_jul31": 6,
   "open_positions_jul31": ["AVGO (id 126, +sentiment=0.60)", "INTC (id 125, sentiment=0.27)", "PLTR (id 124, sentiment=-0.97 ⚠)", "TSLA (id 122, ensemble=0.162 weak)", "AMAT (id 120)", "MSCI (id 119)"],
-  "kelly_mode": "normal",
+  "kelly_mode": "probation",
+  "kelly_fraction_aug28": -0.7343,
   "kelly_fraction_aug12": 0.2349,
   "kelly_fraction_jul31": -0.0464,
   "v053_note": "TP mult 3.0→1.5, TP floor 2%→1.5%, TP cap 20%→13.5%, max_notional_pct 0.15→0.125 (6 slots × 12.5% = 75% heat ceiling). 206 tests pass.",
@@ -93,6 +94,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H23",
+   "hypothesis": "Kelly window loss-rolloff diagnostics: add _compute_kelly_rolloff() module-level function to signal_loop.py. Exposes kelly_window_negative_count, kelly_probation_clears_earliest, kelly_probation_clears_latest in get_portfolio_summary(). Tells owner exactly when the negative outcomes in the 10-day Kelly window will age off, answering 'when will probation lift?'",
+   "status": "implemented — PR TBD (freeze-exempt diagnostics, Aug 29)",
+   "added": "2026-08-29",
+   "added_by": "nightly desk — Kelly probation deadlock: kelly_fraction=-0.7343, all 5 probe IC gates blocked, 0 trades Aug 25-28. Aug 19 losses dominate window, expected rolloff ~Sep 2.",
+   "pr_branch": "feat/rnd-H23-kelly-rolloff-diagnostics",
+   "tests": "3 unit tests: test_h23_kelly_rolloff_all_positive, test_h23_kelly_rolloff_single_loss, test_h23_kelly_rolloff_multiple_losses — all green (63 passed total in unit suite)",
+   "freeze_status": "freeze-exempt: pure diagnostics, zero trading impact, no entry/exit path changes",
+   "priority": "LOW urgency — HIGH diagnostic value during current probation deadlock"
+  },
   {
    "id": "H19",
    "hypothesis": "SECTOR_MAP completeness: unmapped tickers bypass sector heat caps because the code defaults to an empty-string sector with its own per-sector cap slot. Adding every live universe ticker to SECTOR_MAP prevents this silent cap bypass.",
@@ -349,6 +361,18 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-08-29",
+   "hypothesis_id": "H23",
+   "result": "IMPLEMENTED — H23 Kelly window loss-rolloff diagnostics. Added _compute_kelly_rolloff() to src/agents/signal_loop.py (module-level, freeze-exempt). Wired into get_portfolio_summary() via **_compute_kelly_rolloff(...) spread. 3 unit tests added to tests/unit/test_signal_loop.py — all green (63 passed, 3 skipped, 0 failures in full unit suite). Context: Kelly=-0.7343, mode=probation, all 5 probe IC gates blocked (IC < 0.05 in 30d window for all tickers). No trades since Aug 21 (IDs 1-212). Aug 19 semiconductor selloff losses dominate Kelly window; expected rolloff ~Sep 2 (INTC loss oldest, MU loss newest). M2 n≈90, ~10 trades remaining to 1.2 PF gate, accumulation halted by probation deadlock. Integrity Sentinel ALL GREEN Aug 28 22:25 UTC. Watchdog OK. Strategy freeze intact (Aug 2).",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json",
+    "docs/ROADMAP.md",
+    "reports/program/2026-W36-nightly-aug29.md"
+   ]
+  },
   {
    "date": "2026-08-24",
    "hypothesis_id": "W35_PROGRAM_REVIEW",
