@@ -16,9 +16,9 @@ second, new alpha queued.
 
 | Criterion | Status |
 |-----------|--------|
-| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 24 13:25 UTC. |
-| Kelly window verified sane | ✅ OK — kelly_seed_sanity confirmed; mode: normal, fraction=0.2349 |
-| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (10 consecutive weeks since Jul 15) |
+| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 28 22:25 UTC. |
+| Kelly window verified sane | ⚠️ kelly_seed_sanity check passes, but mode=PROBATION, fraction=-0.7343. Aug 19 losses dominate 10d window. Expected rolloff ~Sep 2. |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (11 consecutive weeks since Jul 15) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
 Fill-corrected T30 PF = 0.864 (was 0.60 stored). Integrity criterion **MET** as of Jul 28.
@@ -41,6 +41,7 @@ All 86 exits via max_hold — stops remain dead code for 30-bar horizon (H14 PR 
 W35 (Aug 17-21, 37 trades, IDs 176-212): 15W/22L, PF=0.535, net -$1,165.60. Aug 19 sector
 selloff (INTC -$371, KLAC -$328, WDC -$318, MU -$220) = -$1,222 in one day drove Kelly negative.
 W36 (Aug 25-31): 0 trades — Kelly probation deadlock. Probes also blocked (H21 PR #47 open).
+H23 (Kelly rolloff diagnostics, PR #49 open) exposes rolloff schedule in diagnostics endpoint.
 
 ## Milestones
 
@@ -48,8 +49,8 @@ W36 (Aug 25-31): 0 trades — Kelly probation deadlock. Probes also blocked (H21
 |----|-----------|------|--------|
 | M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~52 days (Jul 10–Aug 31); watchdog clean; no outages |
 | M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🟡 IN PROGRESS — n=86, PF=1.152 ⚠️ BELOW GATE. STALLED — Kelly probation -0.7343, 0 trades W36. ETA n=100 ~Sep 8-10. Stops still dead code. |
-| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 10. |
-| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — Railway worker not enabled. 13+ hypotheses total blocked. Week 10. |
+| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 11. |
+| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — Railway worker not enabled. 13+ hypotheses total blocked. Week 11. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M2 |
 | M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
