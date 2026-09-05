@@ -670,6 +670,9 @@ class SignalLoop:
         if same_day:
             self._daily_start_value = snap.daily_start_value
             self._last_reset_date = date.fromisoformat(snap.daily_start_date)
+            # H24: restore probe counter so mid-day restarts can't grant an
+            # extra free probe. Safe default is 0 for old snapshots that lack it.
+            self._probation_entries_today = snap.probation_entries_today
 
         self._consecutive_losses = snap.consecutive_losses
 
@@ -747,6 +750,7 @@ class SignalLoop:
             halted=self._cb.is_halted,
             halt_reason=self._cb.halt_reason,
             halt_time=halt_time.isoformat() if halt_time else None,
+            probation_entries_today=self._probation_entries_today,  # H24
         ))
 
     def get_latest_signals(self) -> list[dict[str, Any]]:
