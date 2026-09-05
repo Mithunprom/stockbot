@@ -109,11 +109,11 @@
   {
    "id": "H24",
    "hypothesis": "Persist probation_entries_today across restarts: RiskStateSnapshot gains a probation_entries_today field. On same-day restore the counter is re-applied, preventing mid-day service restarts from granting additional free probes. Root event: Aug 31 2026 — estimated 5-6 service restarts each reset the counter to 0, allowing 6 probes in PM despite the daily quota being spent.",
-   "status": "implemented — PR #51 open (freeze-exempt risk-control fix, Sep 5)",
+   "status": "implemented — PR #54 open (freeze-exempt risk-control fix, Sep 5)",
    "added": "2026-09-05",
    "added_by": "nightly desk — root cause of Aug 31 12-trade session (6 extra PM probes from restart resets)",
    "pr_branch": "feat/rnd-H24-persist-probation-entries",
-   "pr_number": 51,
+   "pr_number": 54,
    "pr_state": "OPEN — 4 unit tests pass (roundtrip, same_day_restore, overnight_reset, old_snapshot_compat). Freeze-exempt: risk-control enforcement fix (probe cap was circumvented by restarts). Companion to H15 (PR #35 — n_trades_today persistence). Both must be merged before Kelly recovery (~Sep 10) to prevent repeat.",
    "priority": "CRITICAL — merge ASAP alongside H15 (PR #35). Both bugs interacted on Aug 31."
   },
@@ -428,7 +428,7 @@
     "tests/unit/test_risk_state_persistence.py",
     "agent_state.json"
    ],
-   "pr_number": 51
+   "pr_number": 54
   },
   {
    "date": "2026-08-31",
