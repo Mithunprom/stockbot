@@ -290,6 +290,60 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     assert loop._sizing_entry_gate_open(sig)
 
 
+def test_h24_kelly_rolloff_stays_probation():
+    """Regression H24: window-rolloff after a losing streak must NOT re-enable
+    full sizing.  When all recent trades age out of the 10-day window, the mode
+    was returning 'inactive' (full sizing permitted).  The fix: if the stored
+    kelly_fraction is still negative, stay in 'probation' so the first recovery
+    day fires only probe-sized trades.
+
+    Root event 2026-08-31: W35 losses rolled off, mode flipped to 'inactive',
+    12 full-sized positions fired on a down day → net -$937, re-poisoning the
+    Kelly window and extending the deadlock by 10 calendar days.
+    """
+    from src.agents.signal_loop import KELLY_LOOKBACK_DAYS, KELLY_MIN_TRADES
+    loop = _make_loop()
+
+    # Seed with a mix producing negative Kelly (mirrors 2026-08-31:
+    # 2 wins at +0.001 vs 10 losses at -0.02 → avg_win/avg_loss ≈ 0.05,
+    # Kelly = p*b - q = 0.167*0.05 - 0.833 < 0).
+    wins = [(_stamp(1), 0.001)] * 2
+    losses = [(_stamp(1), -0.02)] * (KELLY_MIN_TRADES)  # 10 losses
+    loop._sizing_recent_outcomes = wins + losses
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+    assert loop._kelly_fraction < 0, (
+        f"Expected negative Kelly fraction, got {loop._kelly_fraction}"
+    )
+
+    # Now those trades age out (all outside lookback window) — simulates
+    # the moment the losing-streak window clears naturally via rolloff
+    loop._sizing_recent_outcomes = [
+        (_stamp(KELLY_LOOKBACK_DAYS + 1), pnl) for (_, pnl) in wins + losses
+    ]
+    # Must stay probation, NOT inactive — full sizing must not silently re-enable
+    assert loop._kelly_mode() == "probation", (
+        "Kelly rolloff should keep 'probation' when last fraction was negative, "
+        "not reset to 'inactive' (the Aug-31-2026 bug)"
+    )
+
+
+def test_h24_kelly_startup_inactive_unaffected():
+    """Startup case (kelly_fraction == 0.0 initial) must still return 'inactive'
+    so the bot can accumulate initial history with full sizing.  H24 only catches
+    the rolloff-from-negative case.
+    """
+    from src.agents.signal_loop import KELLY_LOOKBACK_DAYS, KELLY_MIN_TRADES
+    loop = _make_loop()
+    # kelly_fraction starts at 0.0; fewer than MIN_TRADES in window
+    loop._sizing_recent_outcomes = [
+        (_stamp(KELLY_LOOKBACK_DAYS + 1), 0.01) for _ in range(KELLY_MIN_TRADES - 1)
+    ]
+    # All outside window — window empties, fraction stays 0.0
+    assert loop._kelly_fraction == 0.0
+    assert loop._kelly_mode() == "inactive"   # startup behaviour preserved
+
+
 def test_ticker_ic_gate_blocks_proven_negative():
     """Tickers the model is provably wrong on (e.g. JPM −0.32) are skipped."""
     from src.agents.signal_loop import TICKER_IC_MIN_N
