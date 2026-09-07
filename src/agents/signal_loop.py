@@ -77,6 +77,12 @@ SIZING_REVERSAL_BARS = 45
 # 6 slots × 15% cap = 90% gross capacity, gated by the 75% heat ceiling, so the
 # book can actually deploy ~75% at full conviction instead of stalling at ~20%.
 SIZING_MAX_TRADES_PER_DAY = 6       # swing cadence: supports 6 position slots
+# H24: Intraday session loss guard — if realized PnL from sizing exits today
+# drops below this threshold, block further sizing entries for the rest of the
+# session. Guards against double-batch exploits (H15 bug) and runaway down days.
+# Does NOT affect the probe path (probation probes still fire 1/day).
+# Resets at the daily 09:30 boundary with all other session counters.
+SESSION_LOSS_ENTRY_HALT_USD = 400.0  # ~0.4% of a $100k account
 SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
 MAX_OPEN_POSITIONS = 6              # hard cap on concurrent positions
@@ -444,6 +450,7 @@ class SignalLoop:
         # Rolling Kelly window: (exit_time_utc, pnl_pct) — only recent trades count
         self._sizing_recent_outcomes: list[tuple[datetime, float]] = []
         self._sizing_n_trades_today: int = 0
+        self._session_entry_pnl_today: float = 0.0   # H24: running realized PnL from sizing exits today
         self._ticker_cooldown: dict[str, int] = {}  # ticker → bars remaining
         self._exit_fail_cooldown: dict[str, int] = {}  # ticker → bars before exit retry
 
@@ -864,6 +871,8 @@ class SignalLoop:
             "drawdown_pct": round(pm.drawdown * 100, 3),
             "n_open_positions": len(pm._positions),
             "n_trades_today": self._sizing_n_trades_today,
+            "session_entry_pnl_today": round(self._session_entry_pnl_today, 2),
+            "session_loss_halt_threshold": -SESSION_LOSS_ENTRY_HALT_USD,
             "consecutive_losses": self._consecutive_losses,
             "halted": self._cb.is_halted,
             "halt_reason": self._cb.halt_reason,
@@ -1635,7 +1644,10 @@ class SignalLoop:
         Gates:
           0. Data freshness — features must be recent (WebSocket may be down)
           0b. Entry time window — skip open/close noise (9:40–15:30 ET)
+          0c. Earnings blackout (H3)
+          0d. Macro news risk
           1. Daily trade cap not exceeded
+          1b. Session realized-loss halt (H24) — today's sizing exits >$400 loss
           2. Per-ticker cooldown elapsed (prevents re-entry churn)
           3. Kelly governor — probation allows 1 small probe/day on a
              positive-IC ticker instead of blocking everything forever
@@ -1680,6 +1692,19 @@ class SignalLoop:
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
             logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)
+            return False
+
+        # Gate 1b (H24): Session realized-loss halt.
+        # If today's cumulative realized PnL from sizing exits is worse than
+        # -SESSION_LOSS_ENTRY_HALT_USD, block all further sizing entries for
+        # the rest of the session. Probe-path (Kelly probation) is unaffected.
+        # Resets at the 09:30 daily boundary with all other session counters.
+        if self._session_entry_pnl_today < -SESSION_LOSS_ENTRY_HALT_USD:
+            logger.debug(
+                "sizing_session_loss_halt",
+                session_pnl=round(self._session_entry_pnl_today, 2),
+                threshold=-SESSION_LOSS_ENTRY_HALT_USD,
+            )
             return False
 
         # Gate 2: Per-ticker cooldown
@@ -2364,6 +2389,8 @@ class SignalLoop:
                     if len(self._sizing_recent_outcomes) > 50:
                         self._sizing_recent_outcomes = self._sizing_recent_outcomes[-50:]
                     self._update_kelly()
+                    # H24: Accumulate realized PnL for the session loss gate
+                    self._session_entry_pnl_today += pnl
                     self._clear_sizing_state(ticker)
                 await self._write_trade_exit(
                     ticker=ticker,
@@ -2710,6 +2737,7 @@ class SignalLoop:
             self._last_reset_date = today
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
+            self._session_entry_pnl_today = 0.0
             self._probation_entries_today = 0
             self._ticker_cooldown.clear()
             self._pdt_deferred_logged.clear()

@@ -421,6 +421,25 @@
    ]
   },
   {
+   "date": "2026-09-04",
+   "hypothesis_id": "H24_SESSION_LOSS_GUARD",
+   "result": "IMPLEMENTED — H24: Intraday session realized-loss entry halt. Discovered 12 trades (IDs 213-224) on Aug 31 not in W36 state (W36 state captured 12:25 UTC, trades ran 13:40-19:19 UTC). H15 bug replay: 2 batches of 6 trades, 2W/10L, net -$937.85. Kelly now at -5.3731 (was -0.7343). M2 PF regressed to 0.926 (was 1.152) on n=98. H24 adds Gate 1b in _sizing_entry_gate_open(): blocks sizing entries when session realized PnL < -$400. Probe path unaffected. Resets at 09:30. 5 unit tests pass. PR #51 opened (freeze-exempt). PushNotification sent to owner.",
+   "key_findings": [
+    "12 trades IDs 213-224 on Aug 31 missed by W36 state (timing gap)",
+    "H15 bug replay: 2 batches of 6 vs SIZING_MAX_TRADES_PER_DAY=6 — redeploy reset counter",
+    "M2 PF: 1.152 → 0.926 (BELOW 1.0). n=86 → 98",
+    "Kelly: -0.7343 → -5.3731 (recovery ETA ~Sep 10)",
+    "Integrity Sentinel: ALL GREEN (all 5 checks pass)",
+    "H24 implemented: -$400 session loss guard (PR #51)"
+   ],
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 51
+  },
+  {
    "date": "2026-08-31",
    "hypothesis_id": "W36_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W36 weekly review completed. M2 v0.6.0: n=86 UNCHANGED (0 new trades W36, Aug 25-31). KELLY PROBATION DEADLOCK: Kelly fraction -0.7343 (inactive, was +0.2349) blocked ALL entries for 7 consecutive trading days. Probes also blocked per H21 diagnostic (PR #47). Kelly window rolloff expected ~Sep 4–5; gate ETA revised to ~Sep 8–10. Integrity Sentinel ALL GREEN Aug 31 12:25 UTC. Watchdog OK, v0.6.2, signal_loop_active, 0 errors, 0 open positions. Diagnostics: 5 would-trade tickers (CRM/WDAY/ARM/AMD/COIN), Kelly inactive (-0.7343). No strategy code shipped — freeze intact. New PRs: #46 (H20 Kelly ETA), #47 (H21 probe_ic_debug), #48 (H22 MNST sector fix), #49 (H23 Kelly rolloff schedule). Total open PRs: 20. Railway worker week 11 — sole CODE RED exit blocker. PR #36 (H14) upgraded to CRITICAL — must be live before trades resume. Report: reports/program/2026-W36.md.",
