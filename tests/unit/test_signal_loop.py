@@ -1123,3 +1123,50 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ─── H23: Kelly window loss-rolloff diagnostics ───────────────────────────────
+
+def test_h23_kelly_rolloff_all_positive():
+    """No negative outcomes → rolloff fields are zero/None."""
+    from src.agents.signal_loop import _compute_kelly_rolloff, KELLY_LOOKBACK_DAYS
+    from datetime import datetime, timezone, timedelta
+    outcomes = [
+        (datetime.now(timezone.utc) - timedelta(days=d), 0.01)
+        for d in range(5)
+    ]
+    result = _compute_kelly_rolloff(outcomes, KELLY_LOOKBACK_DAYS)
+    assert result["kelly_window_negative_count"] == 0
+    assert result["kelly_probation_clears_earliest"] is None
+    assert result["kelly_probation_clears_latest"] is None
+
+
+def test_h23_kelly_rolloff_single_loss():
+    """A single loss ages off exactly KELLY_LOOKBACK_DAYS from its timestamp."""
+    from src.agents.signal_loop import _compute_kelly_rolloff, KELLY_LOOKBACK_DAYS
+    from datetime import datetime, timezone, timedelta
+    loss_ts = datetime(2026, 8, 19, 13, 30, tzinfo=timezone.utc)
+    outcomes = [(loss_ts, -0.083)]
+    result = _compute_kelly_rolloff(outcomes, KELLY_LOOKBACK_DAYS)
+    assert result["kelly_window_negative_count"] == 1
+    expected = (loss_ts + timedelta(days=KELLY_LOOKBACK_DAYS)).isoformat()
+    assert result["kelly_probation_clears_earliest"] == expected
+    assert result["kelly_probation_clears_latest"] == expected
+
+
+def test_h23_kelly_rolloff_multiple_losses():
+    """Earliest rolloff is from oldest loss; latest rolloff from newest loss."""
+    from src.agents.signal_loop import _compute_kelly_rolloff, KELLY_LOOKBACK_DAYS
+    from datetime import datetime, timezone, timedelta
+    old_ts = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+    new_ts = datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
+    outcomes = [
+        (old_ts, -0.083),
+        (new_ts, -0.032),
+        (datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc), 0.012),
+    ]
+    result = _compute_kelly_rolloff(outcomes, KELLY_LOOKBACK_DAYS)
+    assert result["kelly_window_negative_count"] == 2
+    delta = timedelta(days=KELLY_LOOKBACK_DAYS)
+    assert result["kelly_probation_clears_earliest"] == (old_ts + delta).isoformat()
+    assert result["kelly_probation_clears_latest"] == (new_ts + delta).isoformat()

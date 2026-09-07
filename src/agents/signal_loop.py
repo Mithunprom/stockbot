@@ -262,6 +262,34 @@ def _atr_exits(daily_vol: float) -> tuple[float, float, float]:
     return sl, ts, tp
 
 
+def _compute_kelly_rolloff(
+    outcomes: list[tuple[datetime, float]],
+    lookback_days: int,
+) -> dict[str, Any]:
+    """Kelly window loss-rolloff schedule for diagnostics.
+
+    Computes when the oldest and newest negative outcomes age out of the
+    lookback window so the owner knows when probation is expected to clear.
+    Pure computation — no side effects, no trading impact. Freeze-exempt.
+    """
+    from datetime import timedelta
+
+    neg_entries = [(ts, p) for ts, p in outcomes if p < 0.0 and ts is not None]
+    if not neg_entries:
+        return {
+            "kelly_window_negative_count": 0,
+            "kelly_probation_clears_earliest": None,
+            "kelly_probation_clears_latest": None,
+        }
+    delta = timedelta(days=lookback_days)
+    timestamps = [ts for ts, _ in neg_entries]
+    return {
+        "kelly_window_negative_count": len(neg_entries),
+        "kelly_probation_clears_earliest": (min(timestamps) + delta).isoformat(),
+        "kelly_probation_clears_latest": (max(timestamps) + delta).isoformat(),
+    }
+
+
 def _compute_daily_vols(tickers: list[str]) -> dict[str, float]:
     """Daily ATR(14)/price per ticker from daily bars (yfinance, batched).
 
@@ -911,6 +939,7 @@ class SignalLoop:
                 "take_profit": SIZING_TAKE_PROFIT_FLOOR,
             },
             "ticker_atr": {t: round(a, 4) for t, a in self._ticker_atr.items()},
+            **_compute_kelly_rolloff(self._sizing_recent_outcomes, KELLY_LOOKBACK_DAYS),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
