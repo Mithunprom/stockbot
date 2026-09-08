@@ -198,6 +198,11 @@ DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-mi
 # so the window keeps refreshing and size must be re-earned, never bricked.
 KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
+# H25: with 30-bar intraday holds, up to 6 trades/day can be clustered in a
+# single macro session (Aug 31 2026: 12 trades, 2W/10L, all one afternoon).
+# Requiring ≥N *distinct* trading days prevents a single bad session from
+# satisfying KELLY_MIN_TRADES and activating normal sizing on unrepresentative data.
+KELLY_MIN_UNIQUE_DAYS = 5          # window must span ≥N distinct calendar days
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
 
@@ -875,6 +880,7 @@ class SignalLoop:
             "kelly_gate_active": self._kelly_mode() != "inactive",
             "kelly_entries_blocked": False,  # probation replaces hard block
             "kelly_n_trades": len(self._sizing_recent_outcomes),
+            "kelly_unique_days": len({ts.date() for ts, _ in self._sizing_recent_outcomes}),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
@@ -1535,6 +1541,13 @@ class SignalLoop:
         """Current Kelly governor mode: inactive / normal / probation."""
         self._prune_kelly_window()
         if len(self._sizing_recent_outcomes) < self._kelly_min_trades:
+            return "inactive"
+        # H25: require ≥ KELLY_MIN_UNIQUE_DAYS distinct trading days so that a
+        # single-session cluster (e.g. Aug 31 2026: 12 intraday trades from one
+        # afternoon) cannot unilaterally satisfy KELLY_MIN_TRADES and activate
+        # normal sizing on a statistically unrepresentative sample.
+        unique_days = len({ts.date() for ts, _ in self._sizing_recent_outcomes})
+        if unique_days < KELLY_MIN_UNIQUE_DAYS:
             return "inactive"
         return "normal" if self._kelly_fraction > 0 else "probation"
 

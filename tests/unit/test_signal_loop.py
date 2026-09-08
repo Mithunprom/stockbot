@@ -231,12 +231,15 @@ def test_kelly_window_prunes_stale_trades():
 
 def test_kelly_probation_allows_single_probe():
     """Negative recent expectancy degrades to probation, not a permanent block."""
-    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_MIN_UNIQUE_DAYS, TICKER_IC_MIN_N
     loop = _make_loop()
     loop._in_entry_window = lambda: True
     loop._data_fresh = True
+    # H25: spread across KELLY_MIN_UNIQUE_DAYS distinct days so unique-days
+    # threshold is satisfied and the mode reaches "probation" (not "inactive").
+    n = KELLY_MIN_TRADES + 2
     loop._sizing_recent_outcomes = [
-        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+        (_stamp(float(i % KELLY_MIN_UNIQUE_DAYS + 1)), -0.01) for i in range(n)
     ]
     loop._update_kelly()
     assert loop._kelly_mode() == "probation"
@@ -266,12 +269,14 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     at ~250 (< TICKER_IC_MIN_N=300), so probation could never release. The probe
     now reads only the 30d cache; a populated 7d cache alone leaves it blocked.
     """
-    from src.agents.signal_loop import KELLY_MIN_TRADES, TICKER_IC_MIN_N
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_MIN_UNIQUE_DAYS, TICKER_IC_MIN_N
     loop = _make_loop()
     loop._in_entry_window = lambda: True
     loop._data_fresh = True
+    # H25: spread across KELLY_MIN_UNIQUE_DAYS distinct days (see probation test above)
+    n = KELLY_MIN_TRADES + 2
     loop._sizing_recent_outcomes = [
-        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+        (_stamp(float(i % KELLY_MIN_UNIQUE_DAYS + 1)), -0.01) for i in range(n)
     ]
     loop._update_kelly()
     assert loop._kelly_mode() == "probation"
@@ -288,6 +293,85 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     # Once the 30d probe cache clears the bar, the probe fires
     loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
     assert loop._sizing_entry_gate_open(sig)
+
+
+# ─── H25: Kelly minimum unique trading days guard ──────────────────────────────
+
+def test_h25_inactive_when_all_trades_same_day():
+    """10+ trades from a single session must NOT activate normal sizing.
+
+    Root event: Aug 31 2026 — 12 intraday entries fired on one afternoon
+    (2W/10L, -$937.85).  All 12 shared the same macro session.  With the
+    unique-days guard they remain 'inactive', not 'normal'.
+    """
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_MIN_UNIQUE_DAYS
+    loop = _make_loop()
+    today = _stamp(0)
+    # All KELLY_MIN_TRADES + 2 outcomes share the *same* timestamp → same day
+    loop._sizing_recent_outcomes = [
+        (today, 0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "inactive", (
+        "Single-day cluster must stay inactive regardless of trade count"
+    )
+
+
+def test_h25_normal_when_trades_span_required_days():
+    """Window spanning ≥ KELLY_MIN_UNIQUE_DAYS days with positive Kelly → normal."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_MIN_UNIQUE_DAYS
+    loop = _make_loop()
+    # Mixed sample with positive Kelly fraction: 70% win rate, wins 2× losses.
+    # Distribute 2 trades per day across KELLY_MIN_UNIQUE_DAYS days.
+    n_days = KELLY_MIN_UNIQUE_DAYS
+    outcomes = []
+    for d in range(n_days):
+        outcomes.append((_stamp(float(n_days - d)), +0.02))   # win
+        outcomes.append((_stamp(float(n_days - d)), +0.02))   # win
+    # Add more wins so n >= KELLY_MIN_TRADES and Kelly stays positive
+    while len(outcomes) < KELLY_MIN_TRADES:
+        outcomes.append((_stamp(1.0), +0.02))
+    # Add at least one loss so _update_kelly doesn't short-circuit (needs both)
+    outcomes.append((_stamp(2.0), -0.005))
+    loop._sizing_recent_outcomes = outcomes
+    loop._update_kelly()
+    # f* > 0: high win rate + win > loss → normal mode
+    assert loop._kelly_fraction > 0, f"Expected positive Kelly, got {loop._kelly_fraction}"
+    assert loop._kelly_mode() == "normal"
+
+
+def test_h25_probation_when_diverse_but_negative_fraction():
+    """Diverse window with negative Kelly → probation (not inactive)."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_MIN_UNIQUE_DAYS
+    loop = _make_loop()
+    n_days = KELLY_MIN_UNIQUE_DAYS
+    outcomes = []
+    for d in range(n_days):
+        for _ in range(2):
+            outcomes.append((_stamp(n_days - d), -0.01))   # all losses → f* < 0
+    while len(outcomes) < KELLY_MIN_TRADES:
+        outcomes.append((_stamp(1), -0.01))
+    loop._sizing_recent_outcomes = outcomes
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+
+def test_h25_inactive_when_n_below_min_trades_despite_many_days():
+    """Trade count < KELLY_MIN_TRADES → inactive even with diverse days."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_MIN_UNIQUE_DAYS
+    loop = _make_loop()
+    # One trade per day for KELLY_MIN_UNIQUE_DAYS days (diverse but too few trades)
+    outcomes = [(_stamp(float(d)), 0.01) for d in range(KELLY_MIN_UNIQUE_DAYS)]
+    assert len(outcomes) < KELLY_MIN_TRADES   # confirm precondition
+    loop._sizing_recent_outcomes = outcomes
+    loop._update_kelly()
+    assert loop._kelly_mode() == "inactive"
+
+
+def test_h25_constant_value_is_5():
+    """KELLY_MIN_UNIQUE_DAYS must equal 5 — the agreed calibration value."""
+    from src.agents.signal_loop import KELLY_MIN_UNIQUE_DAYS
+    assert KELLY_MIN_UNIQUE_DAYS == 5
 
 
 def test_ticker_ic_gate_blocks_proven_negative():
