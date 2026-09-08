@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 12). BOT ACTIVE BUT IDLE. v0.6.2 DEPLOYED. M2 v0.6.0 n=98 GATE MISSED (PF=0.926 BELOW 1.0 — structural defect Aug 31 fired 12 trades 2W/10L net -$937.85; Kelly crashed to -5.3731 deep probation; 0 new trades Sep 1–5). H24 cluster PRs #51–#54 ready, must merge before ~Sep 12. PRs #35/#36/#38–#54 open (30 total). W37 program review complete 2026-09-07.",
- "last_iteration_date": "2026-09-07",
- "active_hypothesis": "🚨 M2 GATE MISSED. Aug 31 structural defect: Kelly window-empty condition (n<10 trades in lookback) triggered 12 full-size entries in two batches of 6 (H15 daily-cap-reset signature; PR #35 unmerged). All 12 exited via max_hold (H14 stops unmerged, PR #36). Result: 2W/10L, net -$937.85. M2 PF collapsed from 1.152 to 0.926 (now BELOW 1.0). T30 PF=0.182 (8W/22L, IDs 195–224) — worst on record. Kelly crashed to -5.3731 (deep probation). 0 new trades Sep 1–5 (7 days idle). Kelly window rolls off Aug 31 losses ~Sep 12; H24 PRs #51–#54 must be merged before then to prevent structural defect recurrence. Owner decision needed on M2 gate posture: gate cannot be met at n=100. Railway worker BLOCKED week 12.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 13). BOT ACTIVE BUT IDLE. v0.6.2 DEPLOYED. M2 v0.6.0 n=98 GATE MISSED (PF=0.926 BELOW 1.0 — structural defect Aug 31 fired 12 trades 2W/10L net -$937.85; Kelly crashed to -5.3731 deep probation; 0 new trades Sep 1–7). H24 cluster PRs #51–#54 ready, must merge before ~Sep 12. H25 PR #56 (new tonight). PRs #35/#36/#38–#56 open (31 total). W37 program review complete 2026-09-07.",
+ "last_iteration_date": "2026-09-08",
+ "active_hypothesis": "H25: Kelly minimum unique trading days guard. Adds KELLY_MIN_UNIQUE_DAYS=5 second threshold to _kelly_mode(): window must span ≥5 distinct calendar days before activating normal sizing. Root event: Aug 31 2026 — 12 intraday trades from one afternoon satisfied KELLY_MIN_TRADES=10 but represented only 1 macro environment; Kelly fraction -5.37 was computed on a statistically unrepresentative sample. PR #56 open (freeze-exempt risk control fix). 5 new tests + 2 updated tests, 236 passed.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -95,6 +95,19 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H25",
+   "hypothesis": "Kelly minimum unique trading days guard: add KELLY_MIN_UNIQUE_DAYS=5 as a second activation threshold in _kelly_mode(). The 10-trade count threshold alone (KELLY_MIN_TRADES=10) can be satisfied by a single intraday session (Aug 31 2026: 12 trades, all one afternoon). These 12 correlated observations share one macro environment and produce a severely biased Kelly estimate (-5.37). Requiring ≥5 distinct calendar trading days ensures the Kelly fraction is computed from at least 5 independent market sessions, reducing single-session volatility.",
+   "status": "implemented — PR #56 open (freeze-exempt risk control fix, Sep 8)",
+   "added": "2026-09-08",
+   "added_by": "nightly desk — desk task: analyze Kelly window fit for 30-bar intraday horizon",
+   "pr_branch": "feat/rnd-H25-kelly-unique-days-guard",
+   "pr_number": 56,
+   "pr_state": "OPEN — 5 new tests + 2 updated existing tests. 236 passed, 3 skipped. Freeze-exempt: changes only the Kelly governor activation condition (more conservative direction), not entry/exit strategy.",
+   "priority": "HIGH — freeze-exempt risk control. Complements H24 cluster: H24 limits damage at activation boundary; H25 raises the activation bar to require diverse observations. Merge before Sep 12 alongside H24.",
+   "principal_skeptic_note": "Aug 31 trades verified: all 12 shared one afternoon session. Kelly -5.37 computed from 2W/10L all same day. H25 would have kept kelly_mode='inactive' (unique_days=1 < 5) throughout Aug 31 — preventing the full-sizing cascade H24 also targets but from a different angle.",
+   "pm_priority": 0
+  },
   {
    "id": "H24",
    "hypothesis": "Kelly window boundary risk mitigation: a cluster of 4 structural fixes for the defect where transitioning out of Kelly probation (window rolling to n<10 trades) triggered full-size or large entries without adequate guards. Root event: Aug 31 2026 — 12 full-size entries fired in 2 batches of 6 (double-batch = H15 cap-reset signature + H24 window-empty guard missing). Result: 2W/10L, net -$937.85, Kelly -5.3731.",
@@ -411,6 +424,18 @@
  ],
  "completed_iterations": [
   {
+   "date": "2026-09-08",
+   "hypothesis_id": "H25",
+   "result": "IMPLEMENTED — Kelly minimum unique trading days guard. Added KELLY_MIN_UNIQUE_DAYS=5 to signal_loop.py; _kelly_mode() now requires ≥5 distinct calendar days in window (alongside existing KELLY_MIN_TRADES=10) before activating normal sizing. Diagnostics endpoint updated: kelly_unique_days field added. Live snapshot fetched: watchdog OK 2026-09-07T21:38 UTC, 0 tick errors, Kelly -5.3731 probation, 0 open positions, 0 trades Sep 1–7. 100-trade PF=0.976 (44W/55L), T30 PF=0.182. H24 PRs #51-54 confirmed open, no CI failures blocking them. 5 new H25 tests + 2 existing probation tests updated for new threshold. 236 passed, 3 skipped (torch). PR #56 opened.",
+   "tests_status": "236 passed, 3 skipped (torch), 0 failures",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 56
+  },
+  {
    "date": "2026-09-07",
    "hypothesis_id": "W37_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W37 weekly review complete. 🚨 M2 GATE MISSED. Aug 31 structural defect: Kelly window-empty (n<10) triggered 12 full-size entries in 2 batches of 6 (H15 daily-cap-reset + H24 boundary-guard missing). 2W/10L, net -$937.85. M2 PF 1.152→0.926 (below 1.0), net +$583→-$354, T30 PF=0.182 (8W/22L, worst on record). Kelly -0.7343→-5.3731 (deep probation). Sep 1–5: 0 new trades. Watchdog OK Sep 7 11:46 UTC, fresh ticks, 0 errors. H24 cluster: 4 PRs (#51–#54) ready, must merge before ~Sep 12 window reset. Total open PRs: 30 (was 20). PR #35/#36 now 26d stale — their absence caused real Aug 31 harm. Railway worker week 12. Owner decisions needed: (1) H24 merge before Sep 12, (2) PR #35/#36 merge before Sep 8, (3) M2 gate posture decision. Report: reports/program/2026-W37.md.",
@@ -610,7 +635,7 @@
   "[Railway worker] Run H7 backtest (priority 8, needs re-scope for 30-bar): --phase stagnation",
   "[Railway worker] Run H5 backtest (priority 9, needs re-scope for 30-bar horizon): --phase holdext",
   "[DESK] H5 + H7 — re-scope backtest phases for 30-bar horizon before Railway runs",
-  "[DESK] Analyze Kelly window fit for 30-bar intraday trades — one bad macro day drove fraction from +0.23 to -5.37; 10-day window may be too reactive for intraday horizon"
+  "[DESK ✅ DONE] Kelly window fit analysis complete — H25 implemented (PR #56). Unique-days guard added: KELLY_MIN_UNIQUE_DAYS=5. Root cause confirmed: 12 Aug 31 trades from one session (unique_days=1) satisfied KELLY_MIN_TRADES=10 but produced biased Kelly estimate. H25 prevents recurrence from a complementary angle to H24."
  ],
  "blocked_by_token_limit": false,
  "governance": {
