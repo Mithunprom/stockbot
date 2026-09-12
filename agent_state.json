@@ -99,11 +99,11 @@
   {
    "id": "H25",
    "hypothesis": "Kelly cluster-day cap: add KELLY_CLUSTER_DAY_CAP=6 to _update_kelly so any single calendar day contributes at most 6 outcomes to the Kelly window estimate. Prevents a burst cluster-fire event (structural defect or bad macro day firing many trades) from dominating the rolling Kelly fraction and stalling the bot for 10+ days. Set to SIZING_MAX_TRADES_PER_DAY so normal sessions (≤6 trades/day) are unaffected.",
-   "status": "implemented — PR #55 open (freeze-classification-needed, Sep 12)",
+   "status": "implemented — PR #57 open (freeze-classification-needed, Sep 12)",
    "added": "2026-09-12",
    "added_by": "nightly desk — Sep 12 analysis of Aug 31 cluster-fire postmortem + Kelly window dynamics",
    "pr_branch": "feat/rnd-H25-kelly-cluster-day-cap",
-   "pr_number": 55,
+   "pr_number": 57,
    "pr_state": "OPEN — 3 unit tests pass (test_h25_cluster_day_cap_constant_equals_max_trades_per_day, test_h25_cluster_fire_cannot_dominate_kelly, test_h25_cap_no_effect_on_normal_daily_trades). FREEZE CLASSIFICATION NEEDED: changes Kelly magnitude in normal mode (strategy-change flavor) but primarily affects probation recovery speed (risk-control-improvement flavor). Owner must classify. Desk recommendation: freeze-exempt as defense-in-depth against cluster-fire structural defects.",
    "priority": "HIGH — defense-in-depth against cluster-fire Kelly poisoning; complements H24",
    "pm_priority": 0,
@@ -433,7 +433,7 @@
     "tests/unit/test_signal_loop.py",
     "agent_state.json"
    ],
-   "pr_number": 55
+   "pr_number": 57
   },
   {
    "date": "2026-09-07",
@@ -611,7 +611,7 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION — CRITICAL — BEFORE SEP 15 OPEN] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary risk mitigation). All freeze-exempt. Aug 31 structural defect: window-empty (n<10) triggered 12 full-size entries without guard. UPDATED DEADLINE: Sep 16 is the next window-rolloff risk day (Aug 31 losses are 10+ calendar days old, rolling off; Sep 11 trades may not be enough to keep kelly_n_trades≥10). PR #52 (rolloff guard) is the most critical. ALSO classify PR #55 (H25 cluster-day cap) as freeze-exempt companion fix.",
+  "[OWNER ACTION — CRITICAL — BEFORE SEP 15 OPEN] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary risk mitigation). All freeze-exempt. Aug 31 structural defect: window-empty (n<10) triggered 12 full-size entries without guard. UPDATED DEADLINE: Sep 16 is the next window-rolloff risk day (Aug 31 losses are 10+ calendar days old, rolling off; Sep 11 trades may not be enough to keep kelly_n_trades≥10). PR #52 (rolloff guard) is the most critical. ALSO classify PR #57 (H25 cluster-day cap) as freeze-exempt companion fix.",
   "[OWNER ACTION — CRITICAL — BEFORE SEP 8 OPEN] Merge PR #36 (H14: horizon-scaled ATR stops). FREEZE-EXEMPT. All 98 M2 exits via max_hold; Aug 31 -$937.85 with zero stop protection. 26 days stale. Stops must be live before next trading session.",
   "[OWNER ACTION — CRITICAL — BEFORE SEP 8 OPEN] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT. Aug 31 fired 12 trades vs cap=6 in two batches of 6 — classic mid-day restart signature. 26 days stale.",
   "[OWNER ACTION — CRITICAL, WEEK 12] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 12 consecutive weeks outstanding since Jul 15.",
