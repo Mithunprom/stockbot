@@ -1,0 +1,12 @@
+{
+  "divergent_pnl_pct": [],
+  "stale_open_rows": [],
+  "fill_corrupt_pnl": [],
+  "broker_orphans": [
+    {
+      "id": 111,
+      "ticker": "NVDA",
+      "entry_time": "2026-07-23T14:15"
+    }
+  ]
+}
