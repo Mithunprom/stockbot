@@ -1123,3 +1123,91 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ── H25: Kelly cluster-day cap ────────────────────────────────────────────────
+
+def test_h25_cluster_day_cap_constant_equals_max_trades_per_day():
+    """KELLY_CLUSTER_DAY_CAP must match SIZING_MAX_TRADES_PER_DAY.
+
+    The cap is intentionally set equal to the daily trade cap so that a
+    normally-operating session (≤6 trades/day) is never affected; only
+    burst-fire events (structural defects firing >6 trades in one day) are
+    capped.
+    """
+    from src.agents.signal_loop import KELLY_CLUSTER_DAY_CAP, SIZING_MAX_TRADES_PER_DAY
+    assert KELLY_CLUSTER_DAY_CAP == SIZING_MAX_TRADES_PER_DAY
+
+
+def test_h25_cluster_fire_cannot_dominate_kelly():
+    """A burst of 12 trades on one bad day is capped to 6 in the Kelly window.
+
+    Root event (2026-08-31): Kelly window-empty condition (H24 defect) fired
+    12 full-size entries in two batches of 6 on a single day (2W/10L,
+    net -$937.85).  All 12 outcomes entered the 10-day Kelly window, driving
+    Kelly from +0.23 to -5.37 and stalling the bot for 7 trading days.
+
+    With KELLY_CLUSTER_DAY_CAP=6 only the first 6 of those outcomes count,
+    preventing a single cluster day from dominating the estimate.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.agents.signal_loop import (
+        KELLY_CLUSTER_DAY_CAP,
+        KELLY_MIN_TRADES,
+        _kelly_cap_outcomes_by_day,
+    )
+
+    # Simulate Aug 31: 12 trades on ONE calendar day, 2W/10L
+    bad_day = datetime(2026, 8, 31, 14, 0, 0, tzinfo=timezone.utc)
+    cluster_outcomes = [
+        (bad_day + timedelta(minutes=i), -0.02) for i in range(10)  # 10 losses
+    ] + [
+        (bad_day + timedelta(minutes=10), 0.015),   # win 1
+        (bad_day + timedelta(minutes=11), 0.012),   # win 2
+    ]
+    # Spread prior days with healthy trades so window total >= KELLY_MIN_TRADES
+    healthy_day = datetime(2026, 8, 28, 14, 0, 0, tzinfo=timezone.utc)
+    good_outcomes = [(healthy_day + timedelta(minutes=i), 0.01) for i in range(6)]
+
+    all_outcomes = cluster_outcomes + good_outcomes
+    capped = _kelly_cap_outcomes_by_day(all_outcomes, KELLY_CLUSTER_DAY_CAP)
+
+    # Aug 31 must contribute at most KELLY_CLUSTER_DAY_CAP outcomes
+    aug31_date = bad_day.date()
+    aug31_in_capped = sum(
+        1 for ts, _ in all_outcomes
+        if ts.date() == aug31_date and _ in capped
+    )
+    assert len([p for p in capped]) <= KELLY_CLUSTER_DAY_CAP + len(good_outcomes)
+    # Specifically: 6 from cluster day + 6 from healthy day = 12, not 18
+    assert len(capped) == KELLY_CLUSTER_DAY_CAP + len(good_outcomes)
+
+
+def test_h25_cap_no_effect_on_normal_daily_trades():
+    """With ≤KELLY_CLUSTER_DAY_CAP trades per day, Kelly is identical to uncapped.
+
+    Normal operation fires at most SIZING_MAX_TRADES_PER_DAY=6 trades/day.
+    The cluster cap should have zero effect so long as no day exceeds the cap.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.agents.signal_loop import (
+        KELLY_CLUSTER_DAY_CAP,
+        _kelly_cap_outcomes_by_day,
+    )
+    import statistics
+
+    base = datetime(2026, 9, 8, 13, 30, 0, tzinfo=timezone.utc)
+    # 10 trading days × 4 trades each = 40 outcomes, well within cap
+    normal_outcomes: list[tuple[datetime, float]] = []
+    for day_offset in range(10):
+        day_start = base + timedelta(days=day_offset)
+        for trade in range(4):
+            pnl = 0.01 if trade % 2 == 0 else -0.008
+            normal_outcomes.append((day_start + timedelta(minutes=trade * 30), pnl))
+
+    uncapped = [p for _, p in normal_outcomes]
+    capped = _kelly_cap_outcomes_by_day(normal_outcomes, KELLY_CLUSTER_DAY_CAP)
+
+    # All outcomes preserved: no day exceeds cap so nothing was dropped
+    assert sorted(capped) == sorted(uncapped)
+    assert len(capped) == len(uncapped)

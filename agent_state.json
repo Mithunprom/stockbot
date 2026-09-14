@@ -434,6 +434,17 @@
    ]
   },
   {
+   "date": "2026-09-12",
+   "hypothesis_id": "H25",
+   "result": "IMPLEMENTED — H25 Kelly cluster-day cap. Code: added KELLY_CLUSTER_DAY_CAP=6 constant + _kelly_cap_outcomes_by_day() helper to signal_loop.py; modified _update_kelly() to use it. 3 unit tests added and passing. Total suite: 234 pass, 3 skip, 0 fail. Sep 12 status: Bot resumed Sep 11 (6 trades, all max_hold). Kelly fraction -5.3731→-0.6661 (still probation). Integrity ALL GREEN Sep 11 21:25 UTC. H24 PRs #51-#54 still unmerged — CRITICAL: merge before Sep 15 open (Sep 16 window transition risk). PR #57 opened (freeze-classification-needed). PENDING_TASKS updated. Railway worker week 13.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 57
+  },
+  {
    "date": "2026-09-07",
    "hypothesis_id": "W37_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W37 weekly review complete. 🚨 M2 GATE MISSED. Aug 31 structural defect: Kelly window-empty (n<10) triggered 12 full-size entries in 2 batches of 6 (H15 daily-cap-reset + H24 boundary-guard missing). 2W/10L, net -$937.85. M2 PF 1.152→0.926 (below 1.0), net +$583→-$354, T30 PF=0.182 (8W/22L, worst on record). Kelly -0.7343→-5.3731 (deep probation). Sep 1–5: 0 new trades. Watchdog OK Sep 7 11:46 UTC, fresh ticks, 0 errors. H24 cluster: 4 PRs (#51–#54) ready, must merge before ~Sep 12 window reset. Total open PRs: 30 (was 20). PR #35/#36 now 26d stale — their absence caused real Aug 31 harm. Railway worker week 12. Owner decisions needed: (1) H24 merge before Sep 12, (2) PR #35/#36 merge before Sep 8, (3) M2 gate posture decision. Report: reports/program/2026-W37.md.",

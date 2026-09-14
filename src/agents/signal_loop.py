@@ -200,6 +200,12 @@ KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
+# H25: cap outcomes from any single calendar day in the Kelly window.
+# Prevents a cluster-fire event (structural defect firing many trades on one bad
+# day) from dominating the rolling Kelly estimate and stalling the bot for
+# multiple lookback windows. Set equal to SIZING_MAX_TRADES_PER_DAY so normal
+# sessions (≤6 trades/day) are never affected; only burst-fire days are capped.
+KELLY_CLUSTER_DAY_CAP = 6         # max outcomes per calendar day counted in Kelly
 
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
@@ -241,6 +247,26 @@ logger = structlog.get_logger(__name__)
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(value, hi))
+
+
+def _kelly_cap_outcomes_by_day(
+    outcomes: list[tuple[datetime, float]],
+    cap: int,
+) -> list[float]:
+    """Return pnl_pct values capped to at most `cap` entries per calendar day.
+
+    Trades within each day are kept in chronological order; only the first
+    `cap` are retained. A None timestamp is treated as its own day bucket.
+    """
+    from collections import defaultdict
+    by_day: dict[object, list[float]] = defaultdict(list)
+    for ts, pnl in outcomes:
+        key = ts.date() if ts is not None else None
+        by_day[key].append(pnl)
+    capped: list[float] = []
+    for day_pnls in by_day.values():
+        capped.extend(day_pnls[:cap])
+    return capped
 
 
 def _atr_exits(daily_vol: float) -> tuple[float, float, float]:
@@ -1745,9 +1771,11 @@ class SignalLoop:
         where p = win rate, b = avg_win/avg_loss, q = 1-p
 
         Outcomes are pnl_pct (scale-invariant) within KELLY_LOOKBACK_DAYS.
+        Per-day cap (KELLY_CLUSTER_DAY_CAP) prevents a single burst-fire day
+        from dominating the estimate.
         """
         self._prune_kelly_window()
-        outcomes = [p for _, p in self._sizing_recent_outcomes]
+        outcomes = _kelly_cap_outcomes_by_day(self._sizing_recent_outcomes, KELLY_CLUSTER_DAY_CAP)
         if len(outcomes) < self._kelly_min_trades:
             return
 
