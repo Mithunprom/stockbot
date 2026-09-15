@@ -290,6 +290,79 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     assert loop._sizing_entry_gate_open(sig)
 
 
+# ─── H26: Kelly window intraday calibration (10→20 days) ─────────────────────
+
+def test_h26_kelly_lookback_days_is_20():
+    """H26: KELLY_LOOKBACK_DAYS must be 20 — calibrated for 30-bar intraday holds."""
+    from src.agents.signal_loop import KELLY_LOOKBACK_DAYS
+    assert KELLY_LOOKBACK_DAYS == 20, (
+        "KELLY_LOOKBACK_DAYS was widened from 10→20 in H26 to match the 30-bar "
+        "intraday horizon. Reverting to 10 re-exposes the Aug 31 cluster-day "
+        "dominance defect (12 trades = 43% of window)."
+    )
+
+
+def test_h26_single_bad_day_weight_reduced():
+    """H26: a 12-trade bad day weighs less in a 20-day window than a 10-day window.
+
+    Aug 31 scenario: 12 losing trades from 12 days ago are inside the 20-day
+    window but would have been outside the old 10-day window. Verifies that with
+    KELLY_LOOKBACK_DAYS=20, a bad-day cluster of 12 trades is always a minority
+    of the retained window when surrounding normal trades exist.
+    """
+    from src.agents.signal_loop import KELLY_LOOKBACK_DAYS
+    from unittest.mock import MagicMock, patch
+
+    mock_settings = MagicMock()
+    mock_settings.alpaca_mode = "paper"
+    with patch("src.config.get_settings", return_value=mock_settings):
+        loop = _make_loop()
+
+    # Aug 31-like cluster: 12 losing trades from 12 days ago (inside 20d window)
+    bad_day_trades = [(_stamp(12), -0.035) for _ in range(12)]
+    # Normal surrounding trades: 2 per day across 9 surrounding days
+    normal_trades = [(_stamp(d), 0.005 if i % 2 == 0 else -0.003)
+                     for i, d in enumerate(range(3, 12)) for _ in range(2)]
+
+    loop._sizing_recent_outcomes = bad_day_trades + normal_trades
+    loop._prune_kelly_window()
+
+    n_retained = len(loop._sizing_recent_outcomes)
+    # All 30 trades within 20d window should be retained
+    assert n_retained >= 25, f"Expected >=25 trades in 20d window, got {n_retained}"
+
+    bad_day_fraction = 12 / n_retained
+    assert bad_day_fraction < 0.50, (
+        f"Bad-day cluster is {bad_day_fraction:.1%} of window — single day still "
+        f"dominates. KELLY_LOOKBACK_DAYS={KELLY_LOOKBACK_DAYS}"
+    )
+
+
+def test_h26_20d_window_prunes_only_stale_beyond_20d():
+    """H26: trades from day 19 are kept; trades from day 21 are pruned."""
+    from unittest.mock import MagicMock, patch
+
+    mock_settings = MagicMock()
+    mock_settings.alpaca_mode = "paper"
+    with patch("src.config.get_settings", return_value=mock_settings):
+        loop = _make_loop()
+
+    recent = _stamp(5)      # 5 days ago — inside 20d window
+    borderline = _stamp(19) # 19 days ago — inside 20d window
+    stale = _stamp(21)      # 21 days ago — outside 20d window, must be pruned
+
+    loop._sizing_recent_outcomes = [
+        (recent, 0.01),
+        (borderline, -0.005),
+        (stale, -0.02),
+    ]
+    loop._prune_kelly_window()
+
+    timestamps = [ts for ts, _ in loop._sizing_recent_outcomes]
+    assert len(timestamps) == 2, "Trade from day 21 should have been pruned"
+    assert stale not in timestamps
+
+
 def test_ticker_ic_gate_blocks_proven_negative():
     """Tickers the model is provably wrong on (e.g. JPM −0.32) are skipped."""
     from src.agents.signal_loop import TICKER_IC_MIN_N
