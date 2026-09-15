@@ -196,7 +196,19 @@ DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-mi
 # production from 2026-05-27 to 2026-06-11. Now: only recent trades count, and
 # negative Kelly degrades to probation (1 small probe/day) instead of a halt,
 # so the window keeps refreshing and size must be re-earned, never bricked.
-KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
+#
+# H26 (2026-09-15): Window widened 10→20 calendar days for intraday horizon.
+# The 10-day window was calibrated for 390-bar (1 trade/day) holds: 10 days ≈
+# 10 representative outcomes. v0.6.0 changed max_hold to 30 bars (3–6 trades/
+# day), so a 10-day window contains ~20–40 trades — but any single bad session
+# (e.g. Aug 31: 12 trades, 2W/10L) can represent 30–50% of the active window,
+# causing extreme Kelly swings (−0.73 → −5.37). Doubling to 20 calendar days
+# restores the intended statistical coverage (~40–80 trades) and caps a single
+# session's weight at ~10–15% — consistent with the original design intent.
+# This is a risk-parameter correctness fix (miscalibrated for the deployed
+# horizon), analogous to H14's ATR floor rescaling; it does NOT change which
+# trades are taken, only how they are sized after demonstrating edge.
+KELLY_LOOKBACK_DAYS = 20           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works

@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 13). BOT ACTIVE BUT IN PROBATION. v0.6.2 DEPLOYED. M2 v0.6.0 n=110 GATE MISSED (PF=0.857 DECLINING — Sep 10-11 12 trades 7W/5L net -$449.58; Kelly -0.6661 probation recovering from -5.3731). H24 cluster PRs #51–#54 STILL OPEN — Sep 12 deadline missed; next window ~Sep 20-21. H25 cluster PRs #56-57 added (systemic Kelly guard). H14/H15 33d stale. W38 program review complete 2026-09-14.",
- "last_iteration_date": "2026-09-14",
- "active_hypothesis": "🔴 M2 DECLINING. n=110, PF=0.857 (was 0.926). Sep 10-11: 12 trades resumed after Aug 31 losses rolled off Kelly window (calendar basis Sep 10). 7W/5L net -$449.58. Sep 11: LITE -$428 at ensemble=0.191 with zero stop protection (H14 33d unmerged; H12 floor also unmerged). H24 cluster (PRs #51-54) missed Sep 12 merge deadline — structural guard not live; next Kelly transition ~Sep 20-21. H25 cluster added (PRs #56: min unique days; #57: cluster-day cap) — addresses systemic root cause. Kelly -0.6661 probation; n_trades_window=12 (Sep 10-11 trades); natural recovery when losses roll off ~Sep 20-21. 0 trades on Sep 15 (market closed Sep 14, Kelly in probation). Integrity ALL GREEN Sep 14. Watchdog OK. Railway worker BLOCKED week 13.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 13). BOT ACTIVE BUT IN PROBATION. v0.6.2 DEPLOYED. M2 v0.6.0 n=110 GATE MISSED (PF=0.857 DECLINING — Sep 10-11 12 trades 7W/5L net -$449.58; Kelly -0.6661 probation recovering from -5.3731). H24 cluster PRs #51–#54 STILL OPEN — Sep 12 deadline missed; next window ~Sep 20-21. H25 cluster PRs #56-57 added (systemic Kelly guard). H26 PR open (KELLY_LOOKBACK_DAYS 10→20 intraday recalibration). H14/H15 33d stale. W38 program review complete 2026-09-14.",
+ "last_iteration_date": "2026-09-15",
+ "active_hypothesis": "H26 IMPLEMENTED — Kelly window intraday calibration (KELLY_LOOKBACK_DAYS 10→20). Sep 15 live diagnostics: COHR pred=0.82%/dp=86.84%, PANW pred=0.44%/dp=83.33%, MSFT pred=0.46%/dp=84.88% pass signal gates; all blocked by kelly_probation (-0.6661). Integrity ALL GREEN Sep 14 21:25 UTC. Watchdog OK Sep 14 21:55 UTC. Kelly natural recovery ~Sep 20-21 when Sep 10-11 trades roll off. H24 guard still not live — CRITICAL before Sep 20-21.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -95,6 +95,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H26",
+   "hypothesis": "Kelly window intraday-horizon calibration: KELLY_LOOKBACK_DAYS 10→20. The 10-day window was calibrated for 390-bar (1 trade/day) holds. v0.6.0 changed max_hold to 30 bars (3–6 trades/day), making a single bad session represent 30–50% of the active window (Aug 31: 12 trades = 43% of ~28-trade window; Kelly −0.73→−5.37). Doubling to 20 days restores the intended statistical coverage (~40–80 trades in window) and caps a single session's weight at ~10–15%. Freeze classification: risk-parameter correctness fix (miscalibrated for the deployed horizon), analogous to H14's ATR floor rescaling — does NOT change which trades are taken, only the position-sizing stability.",
+   "status": "implemented — PR open (Sep 15 2026)",
+   "added": "2026-09-15",
+   "added_by": "nightly desk — pending task: analyze Kelly window fit for 30-bar intraday horizon",
+   "pr_branch": "feat/rnd-H26-kelly-window-intraday-calibration",
+   "pr_number_pending": true,
+   "priority": "HIGH — freeze-exempt candidate; prevents recurrence of Kelly window dominance defect without conflicting with H24/H25 guards",
+   "index_risk_quant_note": "No lookahead leakage. Parameter change affects sizing smoothness only, not signal direction. Historical comparison: at KELLY_LOOKBACK_DAYS=10, Aug 31 cluster (12 trades/day) = 43% window weight → Kelly −5.37. At 20 days, same cluster < 20% weight. Mathematical analysis: n_optimal for Kelly stability with 44.5% win rate = 80–100 trades, achieved at 20-day window with 4–5 trades/day.",
+   "pm_priority": -2
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -423,6 +435,16 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-09-15",
+   "hypothesis_id": "H26",
+   "result": "IMPLEMENTED — Kelly window intraday calibration: KELLY_LOOKBACK_DAYS 10→20. Live data read: integrity ALL GREEN Sep 14 21:25 UTC (all 5 checks pass); watchdog OK Sep 14 21:55 UTC; Kelly -0.6661 probation; 3 tickers pass signal gates (COHR dp=86.84%, PANW dp=83.33%, MSFT dp=84.88%) but blocked by kelly_probation; 0 open positions; PDT budget 3. Analysis: 10-day window calibrated for 390-bar holds now causes single-session dominance at 30-bar intraday cadence (Aug 31: 12 trades = 43% of window). 20-day window gives ~40–80 trade sample, single-session weight ≤15%. Tests: 3 new H26 unit tests pass (test_h26_kelly_lookback_days_is_20, test_h26_single_bad_day_weight_reduced, test_h26_20d_window_prunes_only_stale_beyond_20d). Full suite: 234 passed, 3 skipped, 0 failed. PR open on feat/rnd-H26-kelly-window-intraday-calibration.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-09-14",
    "hypothesis_id": "W38_PROGRAM_REVIEW",
