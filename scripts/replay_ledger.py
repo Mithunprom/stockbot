@@ -705,25 +705,65 @@ def cmd_sectors(m2: list[Fill]) -> None:
           f"diversification credit.")
 
 
+def replay_shipped_exits(fills: Sequence[Fill], vol: DailyVolLookup) -> BarrierScan:
+    """Score the ACTUAL `_atr_exits` production function, floors and caps included.
+
+    The sigma scan below is idealized — it ignores the clamps. This runs the
+    shipped code path per trade so the reported fire rate is what the deployed
+    configuration would really have produced.
+
+    Args:
+        fills: Fills to score.
+        vol: Point-in-time volatility source.
+
+    Returns:
+        A BarrierScan built from the live stop distances.
+    """
+    from src.agents.signal_loop import _atr_exits
+
+    fires = 0
+    delta = 0.0
+    adjusted: list[float] = []
+    distances: list[float] = []
+    for fill in fills:
+        daily = vol.daily_vol(fill.ticker, fill.entry_time.date())
+        stop_pct, _trail, _tp = _atr_exits(daily)
+        distances.append(stop_pct)
+        if fill.trade_return < -stop_pct:
+            fires += 1
+            capped = -stop_pct * fill.notional
+            delta += capped - fill.pnl
+            adjusted.append(capped)
+        else:
+            adjusted.append(fill.pnl)
+
+    wins = sum(p for p in adjusted if p > 0)
+    loss = -sum(p for p in adjusted if p < 0)
+    distances.sort()
+    return BarrierScan(
+        sigma_mult=float("nan"),
+        fires=fires,
+        fire_rate=fires / len(fills) if fills else 0.0,
+        pnl_delta=delta,
+        net_after=sum(adjusted),
+        profit_factor_after=wins / loss if loss > 0 else (math.inf if wins > 0 else 0.0),
+        median_stop_pct=distances[len(distances) // 2] if distances else 0.0,
+    )
+
+
 def cmd_exits(m2: list[Fill], vol: DailyVolLookup) -> None:
     """Scan candidate stop levels in sigmas of the holding window."""
-    from src.agents.signal_loop import (
-        SIZING_MAX_HOLD_BARS, SIZING_STOP_LOSS_DVOL_MULT,
-        SIZING_TRAILING_DVOL_MULT, SIZING_TAKE_PROFIT_DVOL_MULT,
-    )
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
 
     hold_bars = SIZING_MAX_HOLD_BARS
     print("== Exit barrier calibration (H14) ==")
     print(f"Hold window = {hold_bars} bars; sqrt({hold_bars}/390) = "
           f"{math.sqrt(hold_bars / BARS_PER_SESSION):.3f} of a session sigma")
     print()
-    print("Unit mismatch — barriers quoted in DAILY sigma vs the hold window:")
-    for name, mult in (
-        ("stop", SIZING_STOP_LOSS_DVOL_MULT),
-        ("trail", SIZING_TRAILING_DVOL_MULT),
-        ("take_profit", SIZING_TAKE_PROFIT_DVOL_MULT),
-    ):
-        print(f"  {name:<12} nominal {mult:.1f}d-sigma -> "
+    print("The pre-fix defect — multiples quoted in DAILY sigma, applied to a "
+          f"{hold_bars}-bar hold:")
+    for name, mult in (("stop", 1.1), ("trail", 1.2), ("take_profit", 1.5)):
+        print(f"  {name:<12} {mult:.1f} daily-sigma -> "
               f"{effective_sigma_multiple(mult, hold_bars):.2f} sigma of the hold window")
     print()
 
@@ -731,6 +771,7 @@ def cmd_exits(m2: list[Fill], vol: DailyVolLookup) -> None:
     median_abs = realized[len(realized) // 2]
     print(f"Median |realized return| at exit: {median_abs * 100:.3f}%")
     print()
+    print("Idealized stop scan (no floors/caps):")
     print(f"{'stop':>6} {'median dist':>12} {'fires':>6} {'fire rate':>10} "
           f"{'P&L delta':>11} {'net after':>11} {'PF after':>9}")
     for mult in (0.75, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5, 3.97):
@@ -744,6 +785,18 @@ def cmd_exits(m2: list[Fill], vol: DailyVolLookup) -> None:
     worst = min(m2, key=lambda f: f.pnl)
     print(f"Worst single M2 loss: {worst.ticker} {worst.pnl:+.2f} "
           f"({worst.pnl_pct * 100:+.2f}%) on {worst.exit_time:%Y-%m-%d}")
+    print()
+
+    shipped = replay_shipped_exits(m2, vol)
+    print("SHIPPED configuration, via the real _atr_exits (floors/caps applied):")
+    print(f"  median stop distance : {shipped.median_stop_pct * 100:.3f}%")
+    print(f"  fires                : {shipped.fires} / {len(m2)} "
+          f"({shipped.fire_rate * 100:.1f}%)")
+    print(f"  P&L delta            : ${shipped.pnl_delta:+.2f}")
+    print(f"  net / PF after       : ${shipped.net_after:+.2f} / "
+          f"{shipped.profit_factor_after:.2f}")
+    print("  The stop is tail insurance: near-zero fire rate, near-zero measured")
+    print("  P&L effect. It does not and cannot make this book profitable.")
 
 
 def cmd_bursts(m2: list[Fill]) -> None:

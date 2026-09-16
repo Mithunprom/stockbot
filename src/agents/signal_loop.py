@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Coroutine
 
@@ -108,45 +109,100 @@ EARNINGS_BLACKOUT_DAYS = 2         # days before + after earnings to block entri
 # Data freshness gate — skip new entries when features are stale
 DATA_FRESHNESS_MAX_MINUTES = 5      # max age of latest feature row before gating entries
 
-# Exit thresholds — scaled to DAILY volatility (swing horizon, 1–3 day holds).
-# The exit engine consumes a TRUE daily-vol estimate (daily ATR% from daily
-# bars, via _daily_vol_for). The old path scaled a 1-minute ATR by sqrt(390),
-# which badly UNDER-estimates vol for gappy names (SNDK ~9% real daily vs ~4%
-# from the 1-min proxy — overnight gaps aren't in intraday bars). That, plus
-# stop/TP caps calibrated for calm large-caps, forced volatile names into a
-# 2.5% stop and got them knocked out on ordinary noise (the WDC −6.3% / AMD
-# −5.3% gap-throughs on 06-25 that broke Kelly). DAILY_VOL_SQRT_BARS is kept
-# only as the fallback conversion when a true daily-vol figure isn't cached yet.
+# Exit thresholds. The vol INPUT is a true daily estimate (daily ATR% from
+# daily bars, via _daily_vol_for). The old path scaled a 1-minute ATR by
+# sqrt(390), which badly UNDER-estimates vol for gappy names (SNDK ~9% real
+# daily vs ~4% from the 1-min proxy — overnight gaps aren't in intraday bars).
+# DAILY_VOL_SQRT_BARS is kept only as the fallback conversion when a true
+# daily-vol figure isn't cached yet.
+_BARS_PER_SESSION = 390            # 1-minute bars in a regular session
 DAILY_VOL_SQRT_BARS = 19.75        # sqrt(390) — fallback: 1m ATR → daily proxy
 DAILY_VOL_FLOOR = 0.005            # 0.5% min daily vol (keeps calm names sane)
 DAILY_VOL_CEIL = 0.15              # 15% max daily vol (clip flash-crash reads)
-# "Let winners run, cut losers fast." Mults unchanged; the CAPS are raised so
-# the ATR scaling actually reaches high-vol names instead of being clipped.
-# Calm names (JPM ~0.8% daily) stay on the floors — unchanged. Volatile names
-# (SNDK ~9%) now get proportional room: stop ~9.9%, trail ~10%, TP ~20%.
 #
-# 2026-07-24 — TP RESCALED 3.0σ → 1.5σ. The target was unreachable inside the
-# hold window: TP sat at 3× daily sigma while SIZING_MAX_HOLD_BARS caps the
-# trade at ONE day, i.e. one sigma of time. P(3σ move in 1 day) ≈ 0.1%, versus
-# ~27% for the 1.1σ stop — the trade was built to hit its stop and never its
-# target. Ledger over n=108 confirms: take_profit fired 2× (1.9%), and BOTH
-# were multi-day holds that escaped the timer. Meanwhile max_hold became the
-# dominant exit (55/108 = 51%) at mean +0.02% — a coin flip at zero
-# expectancy. Those two TP trades (+$775) were the only profit engine in the
-# whole book; everything else netted −$1,580.
-# At 1.5σ the reward:risk is 1.36 against the 1.1σ stop and the barrier is
-# genuinely reachable within one day, converting timer-exits into decisions.
-# Floor/cap come down with the mult so the clamps don't silently restore the
-# old unreachable geometry: at the 0.5% daily-vol floor the raw TP is 0.75%,
-# so a 2.0% floor would still bind and re-break calm names.
-SIZING_STOP_LOSS_DVOL_MULT = 1.1   # stop ≈ 1.1× daily sigma (cut losers fast)
-SIZING_TRAILING_DVOL_MULT = 1.2    # trail ≈ 1.2× daily sigma (give winners room)
-SIZING_TAKE_PROFIT_DVOL_MULT = 1.5 # TP ≈ 1.5× daily sigma (reachable in 1 day)
-SIZING_STOP_LOSS_FLOOR = 0.010     # 1.0% minimum stop
-SIZING_STOP_LOSS_CAP = 0.100       # 10% max stop (was 2.5% — clipped volatile names)
-SIZING_TRAILING_STOP_FLOOR = 0.008 # 0.8% minimum trailing
-SIZING_TRAILING_STOP_CAP = 0.100   # 10% max trailing (was 3.0%)
-SIZING_TAKE_PROFIT_FLOOR = 0.015   # 1.5% take profit floor (was 2.0%)
+# ── H14, 2026-09-15: barriers are quoted in sigma OF THE HOLDING WINDOW ──────
+#
+# THIS BLOCK REPLACES the 2026-07-24 (v0.5.3) note, which described a 390-bar
+# regime that no longer exists and was actively misleading. Read the history,
+# because the current values only make sense against it:
+#
+#   v0.5.3 (2026-07-24) tuned stop 1.1σ / trail 1.2σ / TP 1.5σ so the barriers
+#   were REACHABLE inside a 390-bar (one-session) hold. In that regime "1 daily
+#   sigma" and "1 sigma of the hold window" were the same thing, so quoting the
+#   multiples in daily sigma was correct.
+#
+#   v0.6.0 (2026-08-02) cut SIZING_MAX_HOLD_BARS 390 → 30 — the project's best
+#   change to date — and left these constants untouched. Volatility scales with
+#   sqrt(time), so a 30-bar window sees sqrt(30/390) = 0.277 of a session's
+#   sigma. Every barrier silently inflated by 1/0.277 = 3.6x:
+#
+#       barrier      nominal      effective vs a 30-bar hold
+#       stop           1.1σ                3.97σ
+#       trail          1.2σ                4.33σ
+#       TP             1.5σ                5.41σ
+#
+#   A 3.97σ stop is not a stop. Result: 111 of 111 v0.6.0 trades exited on
+#   max_hold, 0 on any barrier. The exit ladder code was never wrong — it was
+#   evaluated on every bar and correctly found nothing. The barriers were
+#   unreachable by construction, so `max_hold` became a tautology with zero
+#   explanatory power: it labels the winners and the losers identically.
+#
+# The fix is the missing sqrt(time) conversion in _atr_exits, and multiples
+# re-derived in the new unit. They are NOT the old numbers carried across: at
+# 1.1σ of the 30-bar window the stop would sit inside ordinary trade wander and
+# truncate the 15–30 minute edge v0.6.0 exists to protect.
+#
+# Levels picked from `python scripts/replay_ledger.py exits` over the full
+# M2 book (n=111, exits 2026-08-06 → 09-11). Fire counts are a strict LOWER
+# bound — the ledger has no intra-hold price path, only entry and exit — and
+# the P&L deltas are an OPTIMISTIC upper bound on benefit:
+#
+#       stop      median distance   fires   rate    P&L delta
+#       1.10σ           1.600%         8     7.2%     +$566
+#       1.50σ           2.182%         5     4.5%     +$195
+#       1.75σ           2.546%         2     1.8%      +$61
+#       2.00σ  ← ship   2.910%         1     0.9%       +$3
+#       2.50σ           3.637%         0     0.0%        $0
+#
+# 2.0σ is a DISASTER STOP, not a trading stop. It fires on 1 trade in 111, so
+# it does not truncate the edge, and its measured P&L effect (+$3.21 over
+# n=111) is deliberately ~zero: this is tail insurance, not an edge change.
+# 2.5σ and wider were rejected for the opposite reason — 0/111 means the
+# barrier would still be decorative, which is the defect being fixed. The
+# worst single M2 loss was LITE −3.51% / −$427.68 (2026-09-11).
+#
+# TP is set to 3.0σ on the same evidence, in the other direction: capping
+# winners COSTS money here. Trades still above the barrier at exit, with the
+# profit that capping them gives up — 1.0σ: 11 trades, −$638; 1.5σ: 1, −$214;
+# 2.5σ: 1, −$20; 3.0σ: 0 trades, $0. 3.0σ is the tightest take-profit with
+# zero measured cost to the book, and unlike the current 5.41σ it is genuinely
+# attainable (the book's p99 trade return is +4.11%).
+#
+# The trailing stop is set to 3.0σ and is the ONE barrier this evidence cannot
+# speak to: trailing fires on drop-from-peak and the ledger stores no peak, so
+# the harness cannot score it at any level. 3.0σ is chosen structurally — wider
+# than the 2.0σ stop, so on a monotone adverse path the disaster stop always
+# fires first and the trail never pre-empts it. Treat its fire rate as
+# unmeasured and watch it in the first weeks of live exit data.
+SIZING_STOP_LOSS_HVOL_MULT = 2.0   # stop ≈ 2.0σ of the hold window (disaster stop)
+SIZING_TRAILING_HVOL_MULT = 3.0    # trail ≈ 3.0σ of the hold window (UNMEASURED)
+SIZING_TAKE_PROFIT_HVOL_MULT = 3.0 # TP ≈ 3.0σ of the hold window (reachable)
+# Floors rescale with the barriers. Leaving them at the daily-regime values
+# would re-break the fix at the calm end, which is the worse half of the bug:
+# a 1.0% floor against a 30-minute sigma near 0.14% is a ~7σ stop, i.e. dead
+# again for exactly the names most likely to clamp.
+#
+# DAILY_VOL_FLOOR (0.5%) is the real floor and it binds first. At that vol the
+# formula already yields stop 0.277% and trail/TP 0.416%, so these constants
+# are deliberately set BELOW those values: they are a last-resort net against a
+# degenerate vol read, not an active clamp, and they never bind anywhere in the
+# configured range. They keep the 1.5 reward:risk ratio of the multiples.
+# (For scale: the smallest 2.0σ stop distance across the M2 book was 0.871%.)
+SIZING_STOP_LOSS_FLOOR = 0.0025    # 0.25% minimum stop (was 1.0%, daily regime)
+SIZING_STOP_LOSS_CAP = 0.100       # 10% max stop — unchanged
+SIZING_TRAILING_STOP_FLOOR = 0.0035 # 0.35% minimum trailing (was 0.8%)
+SIZING_TRAILING_STOP_CAP = 0.100   # 10% max trailing — unchanged
+SIZING_TAKE_PROFIT_FLOOR = 0.0035  # 0.35% take profit floor (was 1.5%)
 # TP cap MUST stay above SIZING_STOP_LOSS_CAP or the geometry inverts at the
 # high-vol end: with both capped at 10%, a SNDK-like 12% daily-vol name gets
 # reward == risk (R:R 1.00), which loses money at any win rate under 50%.
@@ -197,7 +253,23 @@ MAX_HOLD_EXTENSIONS = 0            # hard cap — matches the validated backtest
 # signal_reversal exits at short holds.
 SIZING_STAGNATION_BARS = 30        # unreachable while == max hold (kept for tuning)
 SIZING_STAGNATION_PNL = 0.004      # |PnL| < 0.4% at stagnation check → dead trade
-CATASTROPHIC_STOP_MULT = 2.0       # 2× stop = emergency same-day exit threshold
+# Catastrophic-loss override. When a same-day exit would otherwise be DEFERRED
+# by the PDT guard, a loss past this multiple of the stop is relabelled
+# `stop_loss` so it may spend a day-trade and get out now.
+#
+# 2026-09-15 — 2.0 → 1.5, a deliberate decision that H14 forces rather than a
+# side effect. Until H14 this path was dead twice over: the stop it multiplies
+# was itself unreachable (3.97σ of the hold window), so 2× it was ~7.9σ. With
+# the stop now at 2.0σ of the hold window the override becomes REACHABLE for
+# the first time, and 2.0 would have placed it at 4.0σ — back in decorative
+# territory. 1.5 puts it at 3.0σ: still strictly wider than the 2.0σ stop, so
+# it keeps its "materially worse than a normal stop" meaning, but attainable.
+#
+# Direction of travel is one-way safe: this constant can only make an exit
+# happen SOONER than the PDT guard would otherwise allow, never later, so
+# tightening it strengthens the control. It is inert above $25k equity, where
+# PDT does not apply and every exit is already permitted.
+CATASTROPHIC_STOP_MULT = 1.5       # 1.5× stop = emergency same-day exit threshold
 DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-min ATR)
 
 # Kelly governor — self-recovering (replaces the permanent Kelly stop).
@@ -253,21 +325,57 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(value, hi))
 
 
-def _atr_exits(daily_vol: float) -> tuple[float, float, float]:
-    """Compute (stop_loss, trailing_stop, take_profit) from a DAILY-vol fraction.
+def _hold_window_vol(daily_vol: float, hold_bars: int) -> float:
+    """Convert a daily volatility fraction into sigma of the holding window.
+
+    Volatility scales with the square root of time, so a position that can only
+    live `hold_bars` minutes can only make sqrt(hold_bars / 390) of a session's
+    move. Omitting this conversion is the H14 defect: it inflated every exit
+    barrier by 3.6x when the hold dropped from 390 bars to 30.
+
+    Args:
+        daily_vol: True daily volatility ratio (daily ATR% / price).
+        hold_bars: Maximum life of the position, in 1-minute bars.
+
+    Returns:
+        Sigma of the holding window as a return fraction. Never negative; a
+        non-positive `hold_bars` yields 0.0, which the caller's floors absorb.
+    """
+    if hold_bars <= 0:
+        return 0.0
+    dv = _clamp(daily_vol, DAILY_VOL_FLOOR, DAILY_VOL_CEIL)
+    return dv * math.sqrt(hold_bars / _BARS_PER_SESSION)
+
+
+def _atr_exits(
+    daily_vol: float, hold_bars: int | None = None
+) -> tuple[float, float, float]:
+    """Compute (stop_loss, trailing_stop, take_profit) for the holding window.
 
     `daily_vol` is a true daily volatility ratio (daily ATR% / price), supplied
     by SignalLoop._daily_vol_for (which prefers the real daily-bar ATR and falls
-    back to the 1-minute proxy × sqrt(390)). It is clamped to a sane band, then
-    scaled per threshold. The caps let volatile names get proportional room
-    while the floors keep calm names meaningful.
+    back to the 1-minute proxy × sqrt(390)). It is clamped to a sane band,
+    rescaled to the holding window, then multiplied per threshold.
+
+    The multiples are quoted in sigma OF THE HOLDING WINDOW, not daily sigma —
+    see the H14 block above for why, and for the ledger evidence behind each
+    level.
+
+    Args:
+        daily_vol: True daily volatility ratio.
+        hold_bars: Holding-window length in 1-minute bars. Defaults to
+            SIZING_MAX_HOLD_BARS, the cap the position actually lives under.
+
+    Returns:
+        (stop_loss, trailing_stop, take_profit) as positive return fractions.
     """
-    dv = _clamp(daily_vol, DAILY_VOL_FLOOR, DAILY_VOL_CEIL)
-    sl = _clamp(dv * SIZING_STOP_LOSS_DVOL_MULT,
+    bars = SIZING_MAX_HOLD_BARS if hold_bars is None else hold_bars
+    hv = _hold_window_vol(daily_vol, bars)
+    sl = _clamp(hv * SIZING_STOP_LOSS_HVOL_MULT,
                 SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP)
-    ts = _clamp(dv * SIZING_TRAILING_DVOL_MULT,
+    ts = _clamp(hv * SIZING_TRAILING_HVOL_MULT,
                 SIZING_TRAILING_STOP_FLOOR, SIZING_TRAILING_STOP_CAP)
-    tp = _clamp(dv * SIZING_TAKE_PROFIT_DVOL_MULT,
+    tp = _clamp(hv * SIZING_TAKE_PROFIT_HVOL_MULT,
                 SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
     return sl, ts, tp
 
@@ -909,11 +1017,19 @@ class SignalLoop:
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
-            "exit_mode": "daily_vol_swing",
+            "exit_mode": "hold_window_vol",
+            "hold_window_bars": SIZING_MAX_HOLD_BARS,
+            # Multiples are in sigma OF THE HOLDING WINDOW (H14). The *_dvol
+            # equivalents are published alongside so a reader can see what each
+            # barrier is worth in daily sigma, the unit the old keys used.
             "atr_multipliers": {
-                "stop_loss_dvol": SIZING_STOP_LOSS_DVOL_MULT,
-                "trailing_stop_dvol": SIZING_TRAILING_DVOL_MULT,
-                "take_profit_dvol": SIZING_TAKE_PROFIT_DVOL_MULT,
+                "stop_loss_hvol": SIZING_STOP_LOSS_HVOL_MULT,
+                "trailing_stop_hvol": SIZING_TRAILING_HVOL_MULT,
+                "take_profit_hvol": SIZING_TAKE_PROFIT_HVOL_MULT,
+                "hold_window_scale": round(
+                    math.sqrt(SIZING_MAX_HOLD_BARS / _BARS_PER_SESSION), 4
+                ),
+                "catastrophic_stop_mult": CATASTROPHIC_STOP_MULT,
             },
             "atr_floors": {
                 "stop_loss": SIZING_STOP_LOSS_FLOOR,
@@ -1832,8 +1948,13 @@ class SignalLoop:
 
         Extension conditions (ALL must hold):
           1. Extensions used so far < MAX_HOLD_EXTENSIONS (3-day absolute cap)
-          2. Position is NOT at a loss exceeding 1× the ticker's daily vol —
-             avoids compounding losing trades past their natural exit
+          2. Position is NOT at a loss exceeding 1σ of the HOLD WINDOW —
+             avoids compounding losing trades past their natural exit.
+             (H14, 2026-09-15: was 1× *daily* vol. Same unit mismatch as the
+             exit barriers — against a 30-bar hold that threshold sat at 3.6σ,
+             wider than the stop, so the check could never deny anything. In
+             hold-window units it binds at a real loss again. Strictly more
+             binding than before, and inert today since MAX_HOLD_EXTENSIONS=0.)
           3. Signal re-qualifies as a fresh entry: |pred_return| beats the
              dynamic cost threshold AND dir_prob >= 0.60 (outside dead zone)
 
@@ -1846,12 +1967,14 @@ class SignalLoop:
             return False
 
         daily_vol = self._daily_vol_for(ticker)
-        if unrealized < -daily_vol:
+        hold_vol = _hold_window_vol(daily_vol, SIZING_MAX_HOLD_BARS)
+        if unrealized < -hold_vol:
             logger.info(
                 "hold_extension_denied_loss",
                 ticker=ticker,
                 unrealized=round(unrealized, 4),
                 daily_vol=round(daily_vol, 4),
+                hold_window_vol=round(hold_vol, 4),
                 extensions_used=extensions_used,
             )
             return False
