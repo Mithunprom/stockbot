@@ -434,7 +434,80 @@ def placebo_z(fills: Sequence[Fill], result: GuardResult) -> float:
     return (actual - mean) / std if std > 0 else 0.0
 
 
-# ─── Counterfactual 3: exit barriers ────────────────────────────────────────
+# ─── Counterfactual 3: the Kelly governor ───────────────────────────────────
+
+def kelly_fraction(outcomes: Sequence[float]) -> float:
+    """Rolling Kelly fraction, matching `SignalLoop._update_kelly` exactly.
+
+    f* = (p*b - q) / b, where p is the win rate, b = avg_win/avg_loss, q = 1-p.
+
+    Args:
+        outcomes: Per-trade `pnl_pct` values in the lookback window.
+
+    Returns:
+        The Kelly fraction, or 0.0 when the window has no wins or no losses
+        (production returns 0.0 in that case rather than dividing by zero).
+    """
+    wins = [o for o in outcomes if o > 0]
+    losses = [o for o in outcomes if o < 0]
+    if not wins or not losses:
+        return 0.0
+    win_rate = len(wins) / len(outcomes)
+    avg_win = sum(wins) / len(wins)
+    avg_loss = abs(sum(losses) / len(losses))
+    b = avg_win / max(avg_loss, 1e-9)
+    return (win_rate * b - (1 - win_rate)) / max(b, 1e-9)
+
+
+def replay_kelly_block(
+    fills: Sequence[Fill],
+    threshold: float,
+    lookback_days: int = 10,
+    min_trades: int = 10,
+) -> GuardResult:
+    """Replay "block new entries while the measured Kelly is <= threshold".
+
+    Causal and lookahead-free: at each candidate entry the Kelly is computed
+    only from trades that had already CLOSED at that instant, inside the
+    lookback window, and only once the window holds `min_trades` outcomes —
+    exactly the conditions `SignalLoop._kelly_mode` applies.
+
+    Args:
+        fills: The book to replay.
+        threshold: Block entries while kelly <= this value.
+        lookback_days: Rolling window, matching KELLY_LOOKBACK_DAYS.
+        min_trades: Minimum closed trades before the governor acts.
+
+    Returns:
+        A GuardResult splitting fills into admitted and blocked.
+
+    Note:
+        The window is fed by the fills that ACTUALLY closed, not by the
+        counterfactual book. That matches what production measured at the time
+        and avoids compounding a simulation on top of a simulation.
+    """
+    admitted: list[Fill] = []
+    blocked: list[Fill] = []
+    window = timedelta(days=lookback_days)
+
+    for fill in sorted(fills, key=lambda f: f.entry_time):
+        closed = [
+            f.pnl_pct for f in fills
+            if f.exit_time <= fill.entry_time
+            and f.exit_time >= fill.entry_time - window
+        ]
+        if len(closed) < min_trades:
+            admitted.append(fill)          # governor inactive: too little data
+            continue
+        if kelly_fraction(closed) <= threshold:
+            blocked.append(fill)
+            continue
+        admitted.append(fill)
+
+    return GuardResult(admitted=admitted, blocked=blocked)
+
+
+# ─── Counterfactual 4: exit barriers ────────────────────────────────────────
 
 class DailyVolLookup:
     """Point-in-time daily ATR(14)/close, read strictly before a trade's entry.
@@ -799,6 +872,75 @@ def cmd_exits(m2: list[Fill], vol: DailyVolLookup) -> None:
     print("  P&L effect. It does not and cannot make this book profitable.")
 
 
+def cmd_kelly(m2: list[Fill], allf: list[Fill]) -> None:
+    """Score a hard entry block keyed on the measured Kelly fraction."""
+    from src.agents.signal_loop import (
+        KELLY_HARD_BLOCK_THRESHOLD, KELLY_LOOKBACK_DAYS, KELLY_MIN_TRADES,
+    )
+
+    print("== Kelly governor ==")
+    print(f"window={KELLY_LOOKBACK_DAYS}d  min_trades={KELLY_MIN_TRADES}  "
+          f"shipped hard-block threshold={KELLY_HARD_BLOCK_THRESHOLD}")
+    print()
+    print("How often the governor can even see: trading is bursty, and a")
+    print("time-boxed window drains below KELLY_MIN_TRADES during the gaps.")
+    print(f"{'lookback':>9} {'governed entries':>18} {'kelly min':>11} "
+          f"{'kelly median':>13} {'entries at k<=0':>16}")
+    for days in (KELLY_LOOKBACK_DAYS, 20, 30, 45):
+        window = timedelta(days=days)
+        values = []
+        for fill in sorted(m2, key=lambda f: f.entry_time):
+            closed = [f.pnl_pct for f in allf
+                      if fill.entry_time - window <= f.exit_time <= fill.entry_time]
+            if len(closed) >= KELLY_MIN_TRADES:
+                values.append(kelly_fraction(closed))
+        if not values:
+            print(f"{days:>8}d {'0':>18}")
+            continue
+        values.sort()
+        n_neg = sum(1 for v in values if v <= 0)
+        print(f"{days:>8}d {f'{len(values)}/{len(m2)}':>18} {values[0]:>+11.4f} "
+              f"{values[len(values) // 2]:>+13.4f} {f'{n_neg}':>16}")
+    print()
+    print(f"Hard-block replay at the shipped {KELLY_LOOKBACK_DAYS}d lookback:")
+    print(f"{'threshold':>10} {'blocked':>9} {'blocked P&L':>13} {'net after':>11} "
+          f"{'PF after':>9} {'placebo-z':>11}")
+    for threshold in (0.0, -0.05, -0.10, -0.25, -0.40, -0.50, -0.75):
+        result = replay_kelly_block(m2, threshold,
+                                    KELLY_LOOKBACK_DAYS, KELLY_MIN_TRADES)
+        stats = summarize(result.admitted)
+        profit_factor = (
+            "inf" if math.isinf(stats.profit_factor) else f"{stats.profit_factor:.2f}"
+        )
+        print(f"{threshold:>+10.2f} {len(result.blocked):>9} "
+              f"{result.blocked_pnl:>+13.2f} {stats.net_pnl:>+11.2f} "
+              f"{profit_factor:>9} {placebo_z(m2, result):>+11.2f}")
+    print()
+    print(f"Same replay at a 30d lookback (governor active far more often):")
+    print(f"{'threshold':>10} {'blocked':>9} {'blocked P&L':>13} {'net after':>11} "
+          f"{'PF after':>9} {'placebo-z':>11}")
+    for threshold in (0.0, -0.10, -0.25, -0.40):
+        result = replay_kelly_block(m2, threshold, 30, KELLY_MIN_TRADES)
+        stats = summarize(result.admitted)
+        profit_factor = (
+            "inf" if math.isinf(stats.profit_factor) else f"{stats.profit_factor:.2f}"
+        )
+        print(f"{threshold:>+10.2f} {len(result.blocked):>9} "
+              f"{result.blocked_pnl:>+13.2f} {stats.net_pnl:>+11.2f} "
+              f"{profit_factor:>9} {placebo_z(m2, result):>+11.2f}")
+    print()
+    last_exit = max(f.exit_time for f in allf)
+    for days in (KELLY_LOOKBACK_DAYS, 30):
+        recent = [f.pnl_pct for f in allf
+                  if f.exit_time > last_exit - timedelta(days=days)]
+        print(f"Live state as of the last fill ({last_exit:%Y-%m-%d}): "
+              f"{days}d window n={len(recent)} kelly={kelly_fraction(recent):+.4f}")
+    print()
+    print("The block is self-draining: with entries stopped, the rolling window")
+    print("empties within KELLY_LOOKBACK_DAYS and the governor releases itself.")
+    print("It can never become the 2026-05-27 or 2026-06-26 style deadlock.")
+
+
 def cmd_bursts(m2: list[Fill]) -> None:
     """Quantify entry-time concentration and score burst caps."""
     try:
@@ -845,8 +987,10 @@ def cmd_bursts(m2: list[Fill]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay risk rules against the ledger.")
-    parser.add_argument("command",
-                        choices=["summary", "sectors", "exits", "bursts", "all"])
+    parser.add_argument(
+        "command",
+        choices=["summary", "sectors", "exits", "kelly", "bursts", "all"],
+    )
     parser.add_argument("--ledger", default=DEFAULT_LEDGER)
     parser.add_argument("--vol-cache", default=DEFAULT_VOL_CACHE)
     args = parser.parse_args()
@@ -862,6 +1006,9 @@ def main() -> None:
         print()
     if args.command in ("exits", "all"):
         cmd_exits(m2, DailyVolLookup(args.vol_cache))
+        print()
+    if args.command in ("kelly", "all"):
+        cmd_kelly(m2, fills)
         print()
     if args.command in ("bursts", "all"):
         cmd_bursts(m2)

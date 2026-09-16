@@ -283,6 +283,39 @@ KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before actin
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
 
+# Hard entry block on a MEASURED negative edge (2026-09-15).
+#
+# The gap this closes: on 2026-09-15 production reported kelly_fraction
+# = -0.6661 and kelly_mode = "probation" while `kelly_entries_blocked` was a
+# HARDCODED `False` in the diagnostics payload. The field never reflected
+# reality, so the one number an operator would check to answer "is the bot
+# still taking risk on a measured negative edge?" was decorative.
+#
+# Probation alone is not sufficient. Its escape hatch is a daily probe on a
+# ticker whose live IC clears KELLY_PROBATION_MIN_TICKER_IC, and that gate is
+# only as good as the IC cache — which was empty in production
+# (ticker_ic_tracked = 0). A probation that blocks because a cache failed to
+# populate is not a risk control, it is luck. Worse, `_kelly_mode` returns
+# "inactive" below KELLY_MIN_TRADES, and in that state a deeply negative
+# `_kelly_fraction` gated nothing at all.
+#
+# At or below this threshold, ALL new entries stop — including probation
+# probes. -0.25 is a measured negative edge well beyond sampling noise, not a
+# marginally unlucky fortnight, which probation still handles.
+#
+# EXITS ARE NEVER AFFECTED. This gate lives only in _sizing_entry_gate_open;
+# it does not touch _check_sizing_exit and it does not raise a circuit-breaker
+# halt, so it cannot strand an open position (H13).
+#
+# DEADLOCK SAFETY — this subsystem has frozen the bot twice (2026-05-27 and
+# 2026-06-26) and must never do so again. The block is self-draining by
+# construction: it is keyed on a ROLLING KELLY_LOOKBACK_DAYS window, so with
+# entries stopped the window empties, the sample falls under KELLY_MIN_TRADES,
+# `_kelly_mode` goes "inactive" and the block releases itself within
+# KELLY_LOOKBACK_DAYS with no human action and no new trades required. It is
+# bounded, not permanent.
+KELLY_HARD_BLOCK_THRESHOLD = -0.25
+
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
 # 15/20 tickers — they are noise. The gate therefore requires a large sample
@@ -991,7 +1024,12 @@ class SignalLoop:
             "kelly_fraction": round(self._kelly_fraction, 4),
             "kelly_mode": self._kelly_mode(),
             "kelly_gate_active": self._kelly_mode() != "inactive",
-            "kelly_entries_blocked": False,  # probation replaces hard block
+            # Computed, not hardcoded. Until 2026-09-15 this was a literal
+            # `False`, so it reported "entries are flowing" no matter what the
+            # governor was actually doing — including while the measured Kelly
+            # sat at -0.67.
+            "kelly_entries_blocked": self._kelly_entries_blocked(),
+            "kelly_hard_block_threshold": KELLY_HARD_BLOCK_THRESHOLD,
             "kelly_n_trades": len(self._sizing_recent_outcomes),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
@@ -1664,6 +1702,21 @@ class SignalLoop:
             return "inactive"
         return "normal" if self._kelly_fraction > 0 else "probation"
 
+    def _kelly_entries_blocked(self) -> bool:
+        """True when the measured edge is negative enough to stop NEW entries.
+
+        Requires a live sample: the governor must be out of "inactive" mode,
+        which means at least KELLY_MIN_TRADES outcomes inside the rolling
+        lookback. A stale fraction from an expired window can never block.
+
+        Returns:
+            True if all new entries must be refused. Exits are unaffected —
+            this is consulted only by `_sizing_entry_gate_open`.
+        """
+        if self._kelly_mode() == "inactive":
+            return False
+        return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
+
     def _prune_kelly_window(self) -> None:
         """Drop outcomes older than the lookback window."""
         from datetime import timedelta
@@ -1822,6 +1875,20 @@ class SignalLoop:
             logger.debug("sizing_cooldown_active", ticker=ticker, bars=cooldown_remaining)
             return False
 
+        # Gate 2b: Measured negative edge → hard stop on NEW entries.
+        # Checked BEFORE probation, because a probe is exactly what must not
+        # happen once the edge is measurably this bad. Exits are untouched.
+        if self._kelly_entries_blocked():
+            logger.warning(
+                "entry_blocked_negative_kelly",
+                ticker=ticker,
+                kelly=round(self._kelly_fraction, 4),
+                threshold=KELLY_HARD_BLOCK_THRESHOLD,
+                n_trades=len(self._sizing_recent_outcomes),
+                lookback_days=KELLY_LOOKBACK_DAYS,
+            )
+            return False
+
         # Gate 3: Kelly governor — negative recent expectancy → probation.
         # The probe uses the 30d IC cache (reachable across redeploys), NOT the
         # 7d block cache whose ~250-sample ceiling made n>=300 unsatisfiable and
@@ -1886,6 +1953,13 @@ class SignalLoop:
         self._prune_kelly_window()
         outcomes = [p for _, p in self._sizing_recent_outcomes]
         if len(outcomes) < self._kelly_min_trades:
+            # The window no longer supports a measurement. Retiring the value
+            # rather than leaving the last one in place keeps `/diagnostics`
+            # honest: a stale -0.67 used to be published as if it were the
+            # current edge while gating nothing. 0.0 reads as "no measured
+            # edge", which is the truth when the sample is this thin, and it
+            # cannot trip the hard block (which requires an active governor).
+            self._kelly_fraction = 0.0
             return
 
         wins = [o for o in outcomes if o > 0]
