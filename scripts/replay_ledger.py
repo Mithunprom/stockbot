@@ -61,6 +61,22 @@ M2_START = date(2026, 8, 6)
 # Bars in a regular US equity session; the unit that daily sigma is quoted in.
 BARS_PER_SESSION = 390
 
+# The sector table exactly as it stood while the M2 ledger was being produced
+# (24 tickers, everything else falling through to a shared "other" bucket).
+# Frozen here so the before/after comparison stays reproducible once the
+# production SECTOR_MAP moves on.
+_LEGACY_SECTOR_MAP: dict[str, str] = {
+    "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "PLTR": "tech",
+    "MSTR": "tech",
+    "NVDA": "semis", "AVGO": "semis", "AMD": "semis", "ARM": "semis",
+    "SNDK": "semis", "MU": "semis", "SMCI": "semis", "WDC": "semis",
+    "JPM": "financials", "V": "financials", "MA": "financials",
+    "AMZN": "consumer", "TSLA": "consumer", "COST": "consumer",
+    "NFLX": "consumer",
+    "XOM": "energy", "CVX": "energy",
+    "LLY": "healthcare", "UNH": "healthcare",
+}
+
 
 # ─── Ledger model ───────────────────────────────────────────────────────────
 
@@ -638,6 +654,57 @@ def cmd_summary(m2: list[Fill], allf: list[Fill]) -> None:
     print(f"M2 median hold  : {holds[len(holds) // 2]:.1f} min")
 
 
+def cmd_sectors(m2: list[Fill]) -> None:
+    """Score the pre-fix sector resolver against the fail-closed one."""
+    from src.execution.position_sizer import (
+        MAX_POSITIONS_PER_SECTOR_DEFAULT, SECTOR_MAP, max_positions_for_sector,
+        sector_of,
+    )
+
+    def legacy_bucket(ticker: str) -> str:
+        """The pre-fix resolver: every unknown ticker shared one 'other' bucket."""
+        return _LEGACY_SECTOR_MAP.get(ticker, "other")
+
+    tickers = sorted(set(f.ticker for f in m2))
+    unmapped_then = [t for t in tickers if t not in _LEGACY_SECTOR_MAP]
+    unmapped_now = [t for t in tickers if t not in SECTOR_MAP]
+    print("== Sector / correlation guard ==")
+    print(f"M2 distinct tickers          : {len(tickers)}")
+    print(f"  absent from the OLD map    : {len(unmapped_then)}  {unmapped_then}")
+    print(f"  absent from the NEW map    : {len(unmapped_now)}  {unmapped_now}")
+    then_pnl = sum(f.pnl for f in m2 if f.ticker not in _LEGACY_SECTOR_MAP)
+    mapped_pnl = sum(f.pnl for f in m2 if f.ticker in _LEGACY_SECTOR_MAP)
+    print(f"  net on OLD-mapped names    : ${mapped_pnl:+.2f}")
+    print(f"  net on OLD-unmapped names  : ${then_pnl:+.2f}")
+    print()
+
+    cap = MAX_POSITIONS_PER_SECTOR_DEFAULT
+    legacy = replay_concurrency_guard(m2, legacy_bucket, cap)
+    fixed = replay_concurrency_guard(m2, sector_of, cap)
+    print(f"Guard replay at max {cap} concurrent positions per bucket")
+    print(f"  OLD resolver blocks {len(legacy.blocked):>3} fills "
+          f"(${legacy.blocked_pnl:+.2f} of P&L)")
+    print(f"  NEW resolver blocks {len(fixed.blocked):>3} fills "
+          f"(${fixed.blocked_pnl:+.2f} of P&L)   placebo-z={placebo_z(m2, fixed):+.2f}")
+    print()
+    print(summarize(m2).format("as traded"))
+    print(summarize(legacy.admitted).format("OLD resolver"))
+    print(summarize(fixed.admitted).format("NEW fail-closed resolver"))
+    print()
+    print("Concentration episodes the OLD resolver could not see "
+          "(>=3 same-bucket positions open at once):")
+    for bucket, when, group in _concurrency_episodes(m2, sector_of, 3):
+        names = ",".join(g.ticker for g in group)
+        net = sum(g.pnl for g in group)
+        seen = len({legacy_bucket(g.ticker) for g in group})
+        print(f"  {when:%Y-%m-%d %H:%M}Z {bucket:<11} x{len(group)} {names:<28} "
+              f"net=${net:>9.2f}  (OLD map saw {seen} bucket(s))")
+    print()
+    print(f"Unmapped bucket cap now {max_positions_for_sector('unmapped')} position "
+          f"(vs {cap} for a known sector): an unrecognized ticker gets no "
+          f"diversification credit.")
+
+
 def cmd_exits(m2: list[Fill], vol: DailyVolLookup) -> None:
     """Scan candidate stop levels in sigmas of the holding window."""
     from src.agents.signal_loop import (
@@ -726,7 +793,7 @@ def cmd_bursts(m2: list[Fill]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay risk rules against the ledger.")
     parser.add_argument("command",
-                        choices=["summary", "exits", "bursts", "all"])
+                        choices=["summary", "sectors", "exits", "bursts", "all"])
     parser.add_argument("--ledger", default=DEFAULT_LEDGER)
     parser.add_argument("--vol-cache", default=DEFAULT_VOL_CACHE)
     args = parser.parse_args()
@@ -736,6 +803,9 @@ def main() -> None:
 
     if args.command in ("summary", "all"):
         cmd_summary(m2, fills)
+        print()
+    if args.command in ("sectors", "all"):
+        cmd_sectors(m2)
         print()
     if args.command in ("exits", "all"):
         cmd_exits(m2, DailyVolLookup(args.vol_cache))

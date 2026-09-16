@@ -34,7 +34,13 @@ except ImportError:
 from src.data.options_flow import get_options_flow
 from src.execution.alpaca import AlpacaOrderRouter, OrderRequest
 from src.execution.position_manager import PositionManager
-from src.execution.position_sizer import SmartPositionSizer, SECTOR_MAP
+from src.execution.position_sizer import (
+    SmartPositionSizer,
+    SECTOR_MAP,
+    MAX_POSITIONS_PER_SECTOR_DEFAULT,
+    max_positions_for_sector,
+    sector_of,
+)
 from src.models.ensemble import EnsembleEngine, EnsembleSignal
 from src.risk.circuit_breakers import CircuitBreakers, RiskState
 
@@ -81,7 +87,11 @@ SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
 MAX_OPEN_POSITIONS = 6              # hard cap on concurrent positions
 PORTFOLIO_HEAT_CEILING = 0.75       # no new entries above 75% deployed
-MAX_POSITIONS_PER_SECTOR = 2        # correlation guard: max 2 positions per sector
+# Correlation guard. The cap is now per-BUCKET rather than one global number,
+# because the unmapped bucket must be stricter than a known sector — see
+# position_sizer.max_positions_for_sector. This name is kept as the
+# known-sector default for diagnostics and back-compat.
+MAX_POSITIONS_PER_SECTOR = MAX_POSITIONS_PER_SECTOR_DEFAULT
 # All-day entries: the 14:00+ restriction was a PDT artifact (it protected
 # overnight holds forced by the day-trade limit). With account equity ≥$25k
 # (no PDT, since 2026-06-12) same-day exits are free, and the backtest shows
@@ -1236,7 +1246,7 @@ class SignalLoop:
         """
         sector_notionals: dict[str, float] = {}
         for ticker, pos in self._pm._positions.items():
-            sector = SECTOR_MAP.get(ticker, "other")
+            sector = sector_of(ticker)
             sector_notionals[sector] = sector_notionals.get(sector, 0.0) + pos.notional
         return sector_notionals
 
@@ -1562,12 +1572,20 @@ class SignalLoop:
         return start <= now <= end
 
     def _sector_position_count(self, ticker: str) -> int:
-        """Number of open positions in the same sector as `ticker`."""
-        sector = SECTOR_MAP.get(ticker, "other")
-        return sum(
-            1 for t in self._pm._positions
-            if SECTOR_MAP.get(t, "other") == sector
-        )
+        """Number of open positions in the same correlation bucket as `ticker`.
+
+        Uses the fail-closed `sector_of`, so an unrecognized ticker counts
+        against every other unrecognized ticker instead of disappearing into a
+        shared permissive bucket.
+
+        Args:
+            ticker: Candidate ticker.
+
+        Returns:
+            Count of currently open positions sharing the candidate's bucket.
+        """
+        sector = sector_of(ticker)
+        return sum(1 for t in self._pm._positions if sector_of(t) == sector)
 
     def _ticker_ic_blocked(self, ticker: str) -> bool:
         """True if live IC fails to prove the signal works on this ticker.
@@ -1722,11 +1740,14 @@ class SignalLoop:
         if self._pm.managed_heat >= PORTFOLIO_HEAT_CEILING:
             logger.debug("sizing_heat_ceiling", heat=round(self._pm.managed_heat, 3))
             return False
-        if self._sector_position_count(ticker) >= MAX_POSITIONS_PER_SECTOR:
+        sector = sector_of(ticker)
+        sector_cap = max_positions_for_sector(sector)
+        if self._sector_position_count(ticker) >= sector_cap:
             logger.debug(
                 "sizing_sector_position_cap",
                 ticker=ticker,
-                sector=SECTOR_MAP.get(ticker, "other"),
+                sector=sector,
+                cap=sector_cap,
             )
             return False
 
