@@ -1176,6 +1176,10 @@ async def diagnostics() -> JSONResponse:
             "signal_gate_analysis": gate_analysis,
             "signals_passing": n_pass,
             "signals_blocked": n_fail,
+            "kelly_sensitivity": (
+                loop.get_kelly_sensitivity()
+                if hasattr(loop, "get_kelly_sensitivity") else None
+            ),
         }
 
     primary_label = getattr(_signal_loop, "_pipeline_id", "pipeline_a")
