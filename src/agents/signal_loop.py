@@ -1776,6 +1776,16 @@ class SignalLoop:
             lookback_days=KELLY_LOOKBACK_DAYS,
         )
 
+    def get_kelly_sensitivity(self) -> dict:
+        """Kelly fraction sensitivity analysis — multi-window and per-day-avg views.
+
+        Diagnostic only: does not affect live sizing. Exposes how sensitive the
+        current fraction is to window length and within-day trade clustering.
+        """
+        from src.execution.kelly_sensitivity import kelly_sensitivity
+        self._prune_kelly_window()
+        return kelly_sensitivity(list(self._sizing_recent_outcomes))
+
     def _sizing_signal_direction(self, sig: EnsembleSignal) -> int:
         """Get entry direction from LightGBM: +1 long, -1 short."""
         pred_ret = float(sig.lgbm_pred_return)
