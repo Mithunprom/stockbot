@@ -200,6 +200,16 @@ KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
+# H24: cap per-entry notional when the Kelly window is too thin to estimate edge.
+# Without this, an empty window (e.g. after a blocked week) allows full ~$12k
+# positions on the very first resumption day — before any recent evidence. The
+# design intent of KELLY_MIN_TRADES is "need data before acting on Kelly"; this
+# constant enforces the same spirit on raw position size.
+# Set at ~6% of a $100k paper account: meaningful enough to build history fast,
+# small enough that a single bad day cannot crater the book. The probation probe
+# ($1,200) is intentionally lower — probes are noise-confirmation trades; inactive
+# entries are real signals that should accumulate Kelly history at moderate size.
+KELLY_INACTIVE_NOTIONAL_CAP = 6000.0  # per-entry $ cap while n < KELLY_MIN_TRADES
 
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
@@ -2183,6 +2193,18 @@ class SignalLoop:
                         ticker=ticker,
                         notional=round(notional, 2),
                         kelly=round(self._kelly_fraction, 4),
+                    )
+                # H24: Kelly inactive — window too thin to size normally.
+                # Caps each entry so that resuming after a dry spell doesn't
+                # open full-size positions before we have any recent evidence.
+                elif self._kelly_mode() == "inactive":
+                    notional = min(notional, KELLY_INACTIVE_NOTIONAL_CAP)
+                    logger.info(
+                        "kelly_inactive_cap",
+                        ticker=ticker,
+                        notional=round(notional, 2),
+                        n_recent=len(self._sizing_recent_outcomes),
+                        min_trades_needed=self._kelly_min_trades,
                     )
 
                 qty = round(notional / max(price, 0.01), 2)
