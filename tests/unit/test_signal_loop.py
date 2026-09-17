@@ -1123,3 +1123,81 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ─── H24: Session realized-loss entry halt ─────────────────────────────────────
+
+def test_h24_session_loss_halt_blocks_sizing_entries():
+    """Gate 1b: accumulated session losses past threshold block new entries."""
+    from src.agents.signal_loop import SESSION_LOSS_ENTRY_HALT_USD
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.015
+    sig.lgbm_dir_prob = 0.85
+
+    # Simulate $450 of realized losses today — exceeds $400 threshold
+    loop._session_entry_pnl_today = -(SESSION_LOSS_ENTRY_HALT_USD + 50.0)
+    assert not loop._sizing_entry_gate_open(sig)
+
+
+def test_h24_session_loss_below_threshold_allows_entry():
+    """Gate 1b: losses below threshold do not block entries."""
+    from src.agents.signal_loop import SESSION_LOSS_ENTRY_HALT_USD
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.015
+    sig.lgbm_dir_prob = 0.85
+
+    # Losses present but under threshold
+    loop._session_entry_pnl_today = -(SESSION_LOSS_ENTRY_HALT_USD - 1.0)
+    # Gate 1b should pass; signal quality gates will also pass with strong signal
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h24_no_loss_allows_entry():
+    """Gate 1b: positive session PnL never triggers the halt."""
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.015
+    sig.lgbm_dir_prob = 0.85
+
+    loop._session_entry_pnl_today = 200.0   # profitable day so far
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h24_session_loss_resets_on_daily_reset():
+    """Daily reset at 09:30 ET clears session PnL so the next day starts fresh."""
+    import asyncio
+    from unittest.mock import patch
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    loop = _make_loop()
+    loop._session_entry_pnl_today = -750.0  # deep in the red from yesterday
+
+    et = ZoneInfo("America/New_York")
+    # Simulate a 09:31 ET tick on a new trading day
+    new_day = datetime(2026, 9, 5, 9, 31, 0, tzinfo=et)
+
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = new_day
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        loop._last_reset_date = None    # force the reset path
+        loop._maybe_reset_daily_value()
+
+    assert loop._session_entry_pnl_today == 0.0
+
+
+def test_h24_threshold_constant_is_in_sane_risk_range():
+    """SESSION_LOSS_ENTRY_HALT_USD must be between $100 and $2000."""
+    from src.agents.signal_loop import SESSION_LOSS_ENTRY_HALT_USD
+    assert 100.0 <= SESSION_LOSS_ENTRY_HALT_USD <= 2000.0
