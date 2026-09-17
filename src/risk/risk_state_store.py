@@ -64,6 +64,9 @@ class RiskStateSnapshot:
     halted: bool = False
     halt_reason: str = ""
     halt_time: str | None = None   # ISO timestamp, UTC
+    # H24: daily probe counter — prevents extra probes on mid-day restarts.
+    # Zero is the safe default so old snapshots restore without error.
+    probation_entries_today: int = 0
     version: int = STATE_VERSION
 
     def to_json(self) -> str:
