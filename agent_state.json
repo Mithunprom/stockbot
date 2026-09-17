@@ -450,7 +450,8 @@
    "blocked_note": "needs_data_run on Railway; implement AFTER H0 baseline is established",
    "implementation_date": "2026-09-17",
    "pr_branch": "feat/rnd-H9-probe-ensemble-floor",
-   "pr_state": "OPEN \u2014 3 unit tests pass (test_h9_probe_blocked_below_ensemble_floor, test_h9_probe_allowed_at_ensemble_floor, test_h9_probe_floor_constant_is_0_10). Freeze-exempt: makes probes MORE conservative (KELLY_PROBE_MIN_ENSEMBLE=0.10). Needs Railway backtest to measure impact on Kelly recovery rate (needs_data_run)."
+   "pr_state": "OPEN (PR #61) \u2014 3 unit tests pass. Freeze-exempt: makes probes MORE conservative (KELLY_PROBE_MIN_ENSEMBLE=0.10). Needs Railway backtest to measure impact on Kelly recovery rate (needs_data_run).",
+   "pr_number": 61
   },
   {
    "id": "H10",
@@ -496,7 +497,8 @@
     "src/agents/signal_loop.py",
     "tests/unit/test_signal_loop.py",
     "agent_state.json"
-   ]
+   ],
+   "pr_number": 61
   },
   {
    "date": "2026-09-14",
@@ -701,7 +703,7 @@
   "[OWNER ACTION \u2014 HIGH] Merge PR #31 or #32 (H13 halt-aware exits). Owner must choose variant. 44 days stale.",
   "[OWNER ACTION \u2014 HIGH] Classify PR #43 (H18b: SPY intraday session gate) before any merge.",
   "[OWNER ACTION \u2014 HIGH] Classify PR #41 (H18a: Gate 5c negative ensemble block) vs H12 (PR #29).",
-  "[OWNER ACTION \u2014 HIGH] Review PR #? (H9: probe ensemble floor KELLY_PROBE_MIN_ENSEMBLE=0.10). Freeze-exempt. needs_data_run tag for Kelly recovery rate impact.",
+  "[OWNER ACTION \u2014 HIGH] Review PR #61 (H9: probe ensemble floor KELLY_PROBE_MIN_ENSEMBLE=0.10). Freeze-exempt. needs_data_run tag for Kelly recovery rate impact.",
   "[OWNER ACTION \u2014 MEDIUM] Merge freeze-exempt diagnostics/fix queue: PR #38 (classify first), #39, #42, #44, #46, #47, #48, #49, #33, #25, #27. ~11 PRs, ~20 min review time.",
   "[RESOLVED \u2705] Halt lifted \u2014 confirmed by first new entry GS Aug 6.",
   "[RESOLVED \u2705] MSCI zombie (id 119) \u2014 closed Aug 10 via v0.6.2 max_hold exit (+$9.61). Sentinel ALL GREEN.",
