@@ -113,8 +113,40 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14):
 
 
 def _obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """Session-anchored on-balance volume.
+
+    A plain `.cumsum()` is anchored to the FIRST BAR OF WHATEVER SERIES IT IS
+    GIVEN, which makes the feature unreproducible between the two code paths
+    that compute it:
+
+      - training / backtest  -> compute_indicators() over months of bars
+      - live serving         -> compute_indicators() over the trailing
+                                WARMUP_BARS only (src/features/live.py)
+
+    Measured 2026-09-16 on 320 paired (ticker, bar) samples: raw cumulative OBV
+    disagreed between the two paths on **100% of rows at every warmup tested**
+    (300 / 780 / 1170 / 1950 / 3900 bars) — it cannot converge, because the two
+    paths start counting at different places. It was the single largest
+    contributor to train/serve skew: neutralising it alone lifted the
+    rank agreement between live and train-consistent predictions from 0.36 to
+    0.56.
+
+    Anchoring the cumulative sum to the start of each trading session makes the
+    value depend only on bars within the session, so any warmup that reaches
+    back to the session open reproduces it exactly.
+
+    NOTE: this changes the feature's distribution. Any model trained on the old
+    unanchored definition must be retrained before it is served.
+    """
     direction = np.sign(close.diff()).fillna(0)
-    return (direction * volume).cumsum()
+    signed = direction * volume
+
+    idx = close.index
+    if isinstance(idx, pd.DatetimeIndex):
+        # Same ET-calendar reset that _vwap_daily already uses.
+        return signed.groupby(_to_et_index(idx).date).cumsum()
+
+    return signed.cumsum()                            # non-datetime index: legacy behaviour
 
 
 def _mfi(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, n: int = 14) -> pd.Series:
