@@ -16,9 +16,9 @@ second, new alpha queued.
 
 | Criterion | Status |
 |-----------|--------|
-| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 24 13:25 UTC. |
-| Kelly window verified sane | ✅ OK — kelly_seed_sanity confirmed; mode: normal, fraction=0.2349 |
-| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (10 consecutive weeks since Jul 15) |
+| Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 28 22:25 UTC. |
+| Kelly window verified sane | ⚠️ kelly_seed_sanity check passes, but mode=PROBATION, fraction=-0.7343. Aug 19 losses dominate 10d window. Expected rolloff ~Sep 2. |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (11 consecutive weeks since Jul 15) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
 Fill-corrected T30 PF = 0.864 (was 0.60 stored). Integrity criterion **MET** as of Jul 28.
