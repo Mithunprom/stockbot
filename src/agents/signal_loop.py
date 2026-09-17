@@ -200,6 +200,13 @@ KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
+# Minimum ensemble signal for a Kelly-probation probe (H9, 2026-09-17).
+# SNDK id=104 entered with ensemble=0.018 during probation — pure noise.
+# Probe trades are already reduced in size; requiring a minimum ensemble floor
+# prevents firing on tickers where the composite signal is essentially zero.
+# Lower than the H12 sizing-mode floor (0.20) because probes are small and
+# the IC gate provides a second quality screen.
+KELLY_PROBE_MIN_ENSEMBLE: float = 0.10
 
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
@@ -1698,6 +1705,7 @@ class SignalLoop:
                 self._probation_entries_today < 1
                 and n >= TICKER_IC_MIN_N
                 and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                and float(sig.ensemble_signal) >= KELLY_PROBE_MIN_ENSEMBLE
             )
             if not probe_ok:
                 logger.debug(
@@ -1706,6 +1714,7 @@ class SignalLoop:
                     kelly=round(self._kelly_fraction, 4),
                     probes_used=self._probation_entries_today,
                     ticker_ic=round(ic, 3),
+                    ensemble=round(float(sig.ensemble_signal), 3),
                 )
                 return False
 

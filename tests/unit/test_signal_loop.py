@@ -244,6 +244,7 @@ def test_kelly_probation_allows_single_probe():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.12   # above KELLY_PROBE_MIN_ENSEMBLE=0.10
 
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
@@ -279,6 +280,7 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.12   # above KELLY_PROBE_MIN_ENSEMBLE=0.10
 
     # 7d block cache full & positive, but probe cache empty → still blocked
     loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
@@ -288,6 +290,70 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     # Once the 30d probe cache clears the bar, the probe fires
     loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
     assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_blocked_below_ensemble_floor():
+    """H9: a probe with ensemble_signal below KELLY_PROBE_MIN_ENSEMBLE is rejected.
+
+    Root case: SNDK id=104 entered during probation with ensemble=0.018 — pure
+    noise. The floor (0.10) prevents firing on tickers with near-zero composite
+    signal even when the ticker's IC passes the IC gate.
+    """
+    from src.agents.signal_loop import (
+        KELLY_MIN_TRADES, KELLY_PROBE_MIN_ENSEMBLE, TICKER_IC_MIN_N,
+    )
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+    # IC gate passes — the 30d cache has adequate positive IC
+    loop._ticker_ic_probe = {"SNDK": (0.12, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="SNDK", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.018   # below floor (SNDK id=104 case)
+
+    assert not loop._sizing_entry_gate_open(sig), (
+        f"Probe should be blocked: ensemble={sig.ensemble_signal} < "
+        f"KELLY_PROBE_MIN_ENSEMBLE={KELLY_PROBE_MIN_ENSEMBLE}"
+    )
+
+
+def test_h9_probe_allowed_at_ensemble_floor():
+    """H9: a probe with ensemble_signal exactly at the floor is allowed."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_PROBE_MIN_ENSEMBLE, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+    loop._ticker_ic_probe = {"AAPL": (0.12, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = KELLY_PROBE_MIN_ENSEMBLE   # exactly at floor
+
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_floor_constant_is_0_10():
+    """H9: constant sanity-check so a future edit requires an intentional override."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE
+    assert KELLY_PROBE_MIN_ENSEMBLE == 0.10, (
+        "KELLY_PROBE_MIN_ENSEMBLE changed without updating this test. "
+        "Verify the new value is intentional and update agent_state.json."
+    )
 
 
 def test_ticker_ic_gate_blocks_proven_negative():
