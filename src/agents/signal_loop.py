@@ -876,6 +876,7 @@ class SignalLoop:
             "kelly_entries_blocked": False,  # probation replaces hard block
             "kelly_n_trades": len(self._sizing_recent_outcomes),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
+            "kelly_window_by_day": self._kelly_window_by_day(),
             "probation_entries_today": self._probation_entries_today,
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
             "max_open_positions": MAX_OPEN_POSITIONS,
@@ -1548,6 +1549,44 @@ class SignalLoop:
         ]
         if len(pruned) != len(self._sizing_recent_outcomes):
             self._sizing_recent_outcomes = pruned
+
+    def _kelly_window_by_day(self) -> list[dict]:
+        """Break down the Kelly lookback window by UTC calendar date.
+
+        Returns newest-first list of per-day stats — n, wins, losses, win_rate,
+        avg_win_pct, avg_loss_pct, pf, net_pnl_pct. Useful for diagnosing whether
+        Kelly probation was caused by one outlier day (variance) or sustained
+        underperformance.  Empty list when the window holds no outcomes.
+        """
+        from collections import defaultdict
+
+        self._prune_kelly_window()
+        if not self._sizing_recent_outcomes:
+            return []
+
+        by_day: dict[str, list[float]] = defaultdict(list)
+        for ts, pnl_pct in self._sizing_recent_outcomes:
+            if ts is not None:
+                by_day[ts.strftime("%Y-%m-%d")].append(pnl_pct)
+
+        rows = []
+        for day, outcomes in sorted(by_day.items(), reverse=True):
+            wins = [o for o in outcomes if o > 0]
+            losses = [o for o in outcomes if o < 0]
+            gross_win = sum(wins)
+            gross_loss = abs(sum(losses))
+            rows.append({
+                "date": day,
+                "n": len(outcomes),
+                "wins": len(wins),
+                "losses": len(losses),
+                "win_rate": round(len(wins) / len(outcomes), 3),
+                "avg_win_pct": round(sum(wins) / max(len(wins), 1) * 100, 3),
+                "avg_loss_pct": round(sum(losses) / max(len(losses), 1) * 100, 3),
+                "pf": round(gross_win / gross_loss, 3) if gross_loss > 0 else None,
+                "net_pnl_pct": round(sum(outcomes) * 100, 4),
+            })
+        return rows
 
     def _in_entry_window(self) -> bool:
         """True if current ET time is within the allowed entry window."""
