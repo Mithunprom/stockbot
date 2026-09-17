@@ -1535,6 +1535,17 @@ class SignalLoop:
         """Current Kelly governor mode: inactive / normal / probation."""
         self._prune_kelly_window()
         if len(self._sizing_recent_outcomes) < self._kelly_min_trades:
+            # Window below minimum. Two cases:
+            #   • Startup (kelly_fraction == 0.0 initial): no prior edge to defend;
+            #     allow full sizing so the bot can accumulate history.
+            #   • Rolloff after a losing streak (kelly_fraction < 0): losing trades
+            #     aged out of the window, but that does NOT mean the edge is back.
+            #     Stay in probation so full sizing cannot fire on the recovery day
+            #     (root cause of the 2026-08-31 event: W35 losses rolled off,
+            #     12 full-sized trades fired on a down day → -$937, re-poisoning
+            #     the window and extending Kelly deadlock by 10 calendar days).
+            if self._kelly_fraction < 0:
+                return "probation"
             return "inactive"
         return "normal" if self._kelly_fraction > 0 else "probation"
 
