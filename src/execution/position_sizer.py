@@ -36,30 +36,46 @@ SECTOR_MAP: dict[str, str] = {
     "GOOGL": "tech",
     "PLTR": "tech",
     "MSTR": "tech",
-    # Semiconductors / memory & storage
+    "CIEN": "tech",     # Ciena — optical networking
+    "WDAY": "tech",     # Workday — cloud software
+    "CRM": "tech",      # Salesforce — cloud software
+    # Semiconductors / memory, storage & equipment
     "NVDA": "semis",
     "AVGO": "semis",
     "AMD": "semis",
     "ARM": "semis",
-    "SNDK": "semis",
+    "SNDK": "semis",    # SanDisk / Western Digital spin-off
     "MU": "semis",
     "SMCI": "semis",
     "WDC": "semis",
+    "INTC": "semis",    # Intel
+    "LITE": "semis",    # Lumentum — photonics / semis
+    "KLAC": "semis",    # KLA Corp — semis equipment
+    "LRCX": "semis",    # Lam Research — semis equipment
+    "AMAT": "semis",    # Applied Materials — semis equipment
     # Financials
     "JPM": "financials",
     "V": "financials",
     "MA": "financials",
+    "GS": "financials",   # Goldman Sachs
+    "COIN": "financials", # Coinbase — crypto exchange
+    "MSCI": "financials", # MSCI Inc — index / analytics
     # Consumer
     "AMZN": "consumer",
     "TSLA": "consumer",
     "COST": "consumer",
     "NFLX": "consumer",
+    "MNST": "consumer",   # Monster Beverage (H22)
     # Energy
     "XOM": "energy",
     "CVX": "energy",
     # Healthcare
     "LLY": "healthcare",
     "UNH": "healthcare",
+    # Utilities
+    "PCG": "utilities",   # Pacific Gas & Electric
+    # Industrials
+    "RTX": "industrials", # Raytheon Technologies — aerospace & defence
 }
 
 # ─── Pipeline configuration ─────────────────────────────────────────────────
