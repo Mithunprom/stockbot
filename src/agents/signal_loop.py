@@ -902,6 +902,38 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic_probe.items()
                 if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
+            # H27 (2026-09-18): full ladder of 30d IC per ticker, sorted by IC
+            # descending so near-misses appear first. Exposes WHY the probe
+            # deadlock exists: n_too_small means the prediction store isn't
+            # recording; ic_too_low means genuine poor signal on that ticker.
+            # Empty when Kelly is healthy (_ticker_ic_probe not populated).
+            "probe_ic_count": len(self._ticker_ic_probe),
+            "probe_ic_ladder": sorted(
+                [
+                    {
+                        "ticker": t,
+                        "ic": round(ic, 4),
+                        "n": n,
+                        "eligible": (
+                            n >= TICKER_IC_MIN_N
+                            and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                        ),
+                        "failing_reason": (
+                            "eligible"
+                            if (
+                                n >= TICKER_IC_MIN_N
+                                and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                            )
+                            else "n_too_small"
+                            if n < TICKER_IC_MIN_N
+                            else "ic_too_low"
+                        ),
+                    }
+                    for t, (ic, n) in self._ticker_ic_probe.items()
+                ],
+                key=lambda x: x["ic"],
+                reverse=True,
+            )[:20],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,

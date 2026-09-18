@@ -1189,3 +1189,84 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ── H27: Probe IC ladder diagnostic (2026-09-18) ─────────────────────────────
+
+def _mock_settings():
+    s = MagicMock()
+    s.alpaca_mode = "paper"
+    return s
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_empty_when_no_data(_gs):
+    """H27: probe_ic_count=0 and ladder=[] when _ticker_ic_probe is unpopulated."""
+    loop = _make_loop()
+    assert loop._ticker_ic_probe == {}
+    summary = loop.get_portfolio_summary()
+    assert summary["probe_ic_count"] == 0
+    assert summary["probe_ic_ladder"] == []
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_failing_reasons(_gs):
+    """H27: ladder correctly diagnoses n_too_small vs ic_too_low per ticker."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N, KELLY_PROBATION_MIN_TICKER_IC
+
+    loop = _make_loop()
+    loop._ticker_ic_probe = {
+        "AAPL": (0.03, TICKER_IC_MIN_N + 10),  # n ok, ic too low (0.03 < 0.05)
+        "MSFT": (0.12, TICKER_IC_MIN_N - 50),  # ic ok, n too small
+        "NVDA": (0.06, TICKER_IC_MIN_N + 5),   # eligible: ic >= 0.05, n >= 300
+    }
+    summary = loop.get_portfolio_summary()
+    assert summary["probe_ic_count"] == 3
+
+    ladder = summary["probe_ic_ladder"]
+    assert len(ladder) == 3
+
+    # Sorted by IC descending: MSFT(0.12) > NVDA(0.06) > AAPL(0.03)
+    assert ladder[0]["ticker"] == "MSFT"
+    assert ladder[0]["ic"] == 0.12
+    assert ladder[0]["failing_reason"] == "n_too_small"
+    assert not ladder[0]["eligible"]
+
+    assert ladder[1]["ticker"] == "NVDA"
+    assert ladder[1]["ic"] == 0.06
+    assert ladder[1]["failing_reason"] == "eligible"
+    assert ladder[1]["eligible"]
+
+    assert ladder[2]["ticker"] == "AAPL"
+    assert ladder[2]["ic"] == 0.03
+    assert ladder[2]["failing_reason"] == "ic_too_low"
+    assert not ladder[2]["eligible"]
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_truncates_at_20(_gs):
+    """H27: ladder is capped at 20 entries even with a large _ticker_ic_probe dict."""
+    loop = _make_loop()
+    loop._ticker_ic_probe = {f"T{i:02d}": (float(i) / 100, 50) for i in range(30)}
+
+    summary = loop.get_portfolio_summary()
+    assert summary["probe_ic_count"] == 30
+    assert len(summary["probe_ic_ladder"]) == 20
+    assert summary["probe_ic_ladder"][0]["ticker"] == "T29"
+    assert summary["probe_ic_ladder"][0]["failing_reason"] == "n_too_small"
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_eligible_ticker_flagged(_gs):
+    """H27: an eligible ticker is marked eligible=True with failing_reason='eligible'."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N, KELLY_PROBATION_MIN_TICKER_IC
+
+    loop = _make_loop()
+    loop._ticker_ic_probe = {
+        "VRT": (KELLY_PROBATION_MIN_TICKER_IC + 0.01, TICKER_IC_MIN_N + 100),
+    }
+    summary = loop.get_portfolio_summary()
+    entry = summary["probe_ic_ladder"][0]
+    assert entry["eligible"] is True
+    assert entry["failing_reason"] == "eligible"
+    assert entry["ticker"] == "VRT"
