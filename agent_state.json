@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED \u2014 Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 13). BOT ACTIVE BUT IN PROBATION. v0.6.2 DEPLOYED. M2 v0.6.0 n=110 GATE MISSED (PF=0.857 DECLINING \u2014 Sep 10-11 12 trades 7W/5L net -$449.58; Kelly -0.6661 probation recovering from -5.3731). H24 cluster PRs #51\u2013#54 STILL OPEN \u2014 Sep 12 deadline missed; next window ~Sep 20-21. H25 cluster PRs #56-57 added (systemic Kelly guard). H14/H15 33d stale. W38 program review complete 2026-09-14.",
- "last_iteration_date": "2026-09-17",
- "active_hypothesis": "\ud83d\udd34 M2 DECLINING. n=110, PF=0.857 (was 0.926). PROBE DEADLOCK CONFIRMED Sep 16-17: tickers_probe_eligible=[] \u2014 no tickers meet IC\u22650.05 in 30d window; 0 probes fired since Sep 11. Kelly -0.6661 probation, n_trades_window=12. \u26a0\ufe0f CRITICAL SEP 20-21: Sep 10-11 trades roll off Kelly window \u2192 Kelly goes 'inactive' \u2192 H24 guard still not live (ALL 4 PRs #51-54 open). H9 IMPLEMENTED Sep 17: KELLY_PROBE_MIN_ENSEMBLE=0.10 prevents noise probes (SNDK id=104 type). Kelly LOOKBACK analysis: KELLY_LOOKBACK_DAYS=10 is CORRECT for intraday recovery \u2014 reducing would break probe recovery mechanism. H24/H25 are the right structural fixes. Integrity ALL GREEN Sep 14. Watchdog OK Sep 16 23:06 UTC. Railway worker BLOCKED week 13.",
+ "last_iteration_date": "2026-09-18",
+ "active_hypothesis": "\ud83d\udd34 M2 DECLINING. n=110, PF=0.857 (was 0.926). PROBE DEADLOCK CONFIRMED Sep 16-18: tickers_probe_eligible=[] \u2014 no tickers meet IC\u22650.05 in 30d window; 0 probes fired since Sep 11. Kelly -0.6661 probation, n_trades_window=12. \u26a0\ufe0f CRITICAL SEP 20-21: Sep 10-11 trades roll off Kelly window \u2192 Kelly goes 'inactive' \u2192 H24 guard still not live (ALL 4 PRs #51-54 open). H27 IMPLEMENTED Sep 18: probe_ic_count + probe_ic_ladder diagnostic in get_portfolio_summary() \u2014 exposes WHY probe deadlock exists (n_too_small vs ic_too_low per ticker). Freeze-exempt. PR #64 open. H9 IMPLEMENTED Sep 17: KELLY_PROBE_MIN_ENSEMBLE=0.10 prevents noise probes. Kelly LOOKBACK analysis: KELLY_LOOKBACK_DAYS=10 is CORRECT. Integrity ALL GREEN Sep 14. Watchdog OK Sep 17 22:58 UTC. Railway worker BLOCKED week 13.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -109,7 +109,8 @@
   "m2_trajectory": "IN PROGRESS \u2014 v0.6.0 window n=49 (Aug 6\u201316). PF=2.33 at n=49 still noise (MSTR+CIEN outsized, 28% of gross profit). Bot active. All exits via max_hold \u2014 H14 (PR #36) not yet merged. ETA for n=100: late Sep at ~5 trades/day. Do not act on PF signal until n\u2265100.",
   "jnj_anomaly": "ID 163, BUY, ensemble_signal=-0.0238 (NET NEGATIVE on long entry). Won +$62.86 via max_hold. A negative ensemble on a BUY means the weighted composite of model scores is bearish even though LGBM pred_return+dir_prob passed the entry gate. H12 (min_signal=0.20) would block this. Monitor for recurrence.",
   "diagnostics_sep17": "Sep 16 23:06 UTC. Kelly: -0.6661 probation. n_trades_window: 12 (Sep 10-11 trades still in window). signals_passing: 1 (VRT ensemble=0.501, pred_return=0.010, dir_prob=0.775 \u2014 blocked by kelly_probation only). tickers_probe_eligible: [] (PROBE DEADLOCK \u2014 no tickers meet n>=300 AND ic>=0.05 in 30d window). n_trades_today: 0. probation_entries_today: 0. Heat: 0.0. 0 trades since Sep 11. Market closed Sep 16. Watchdog OK. KELLY_LOOKBACK analysis: reducing KELLY_LOOKBACK_DAYS from 10 to 5 would break probe recovery (at 1 probe/day, can never accumulate KELLY_MIN_TRADES=10 in 5 days). KELLY_LOOKBACK_DAYS=10 is CORRECT. H24/H25 are the right structural fixes for window sensitivity.",
-  "h9_implementation_sep17": "H9 IMPLEMENTED Sep 17. Added KELLY_PROBE_MIN_ENSEMBLE=0.10 to signal_loop.py. Probe gate now requires float(sig.ensemble_signal) >= 0.10 in addition to IC+n gates. 3 new unit tests: test_h9_probe_blocked_below_ensemble_floor, test_h9_probe_allowed_at_ensemble_floor, test_h9_probe_floor_constant_is_0_10. 225 tests pass (9 pre-existing sandbox failures: yfinance not installed). Freeze-exempt: makes probes MORE conservative. PR opened feat/rnd-H9-probe-ensemble-floor. Needs Railway backtest to measure impact on Kelly recovery rate."
+  "h9_implementation_sep17": "H9 IMPLEMENTED Sep 17. Added KELLY_PROBE_MIN_ENSEMBLE=0.10 to signal_loop.py. Probe gate now requires float(sig.ensemble_signal) >= 0.10 in addition to IC+n gates. 3 new unit tests: test_h9_probe_blocked_below_ensemble_floor, test_h9_probe_allowed_at_ensemble_floor, test_h9_probe_floor_constant_is_0_10. 225 tests pass (9 pre-existing sandbox failures: yfinance not installed). Freeze-exempt: makes probes MORE conservative. PR opened feat/rnd-H9-probe-ensemble-floor. Needs Railway backtest to measure impact on Kelly recovery rate.",
+  "h27_implementation_sep18": "H27 IMPLEMENTED Sep 18. Added probe_ic_count (int) and probe_ic_ladder (list[dict], max 20) to get_portfolio_summary(). Each ladder entry: {ticker, ic, n, eligible, failing_reason}. Populated only during Kelly probation (_ticker_ic_probe non-empty). Freeze-exempt: no entry logic change. 4 new unit tests: test_h27_probe_ic_ladder_empty_when_no_data, test_h27_probe_ic_ladder_failing_reasons, test_h27_probe_ic_ladder_truncates_at_20, test_h27_probe_ic_ladder_eligible_ticker_flagged. 229 tests pass (9 pre-existing failures unchanged). PR #64 feat/rnd-H27-probe-ic-ladder."
  },
  "live_data_status": {
   "date": "2026-08-13",
@@ -489,6 +490,17 @@
   }
  ],
  "completed_iterations": [
+  {
+   "date": "2026-09-18",
+   "hypothesis_id": "H27_IMPLEMENTATION",
+   "result": "IMPLEMENTED — H27 probe IC ladder diagnostic. Added probe_ic_count and probe_ic_ladder fields to get_portfolio_summary(). Ladder shows top 20 tickers from _ticker_ic_probe (30d IC window, probation-only), sorted IC descending, with per-ticker eligible flag and failing_reason (eligible/n_too_small/ic_too_low). Freeze-exempt: pure diagnostics, no change to entry logic. 229 unit tests pass (4 new H27 tests). PR #64 opened feat/rnd-H27-probe-ic-ladder. Sep 17 live snapshot: probe_ic_count field not yet present (H27 not deployed). Kelly -0.6661 probation, tickers_probe_eligible=[], 0 probes since Sep 11. URGENT: H24 PRs #51-54 must merge BEFORE SEP 20-21.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "agent_state.json"
+   ],
+   "pr_number": 64
+  },
   {
    "date": "2026-09-17",
    "hypothesis_id": "H9_IMPLEMENTATION",
