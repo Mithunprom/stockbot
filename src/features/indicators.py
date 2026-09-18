@@ -22,6 +22,25 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 _REQUIRED_COLS = {"open", "high", "low", "close", "volume"}
 
+# Semantic version of the FEATURE DEFINITIONS produced by this module.
+#
+# Bump this whenever a feature's meaning changes — not when a bug is fixed in
+# how it is plumbed, but when the same input bars would now yield a different
+# number. Models record the version they were trained under and refuse to load
+# against a different one (src/models/lgbm.LGBMSignalModel.load).
+#
+# Without this guard a model trained on one definition can be served another
+# and nothing errors: every feature still computes, just to different values,
+# and the only symptom is that predictions quietly stop ranking correctly. That
+# is precisely what happened between 2026-07 and 2026-09 — see
+# reports/research/loss_diagnosis_2026-09-16.md.
+#
+#   1  original definitions
+#   2  2026-09-16 — obv anchored to the ET session instead of the first bar of
+#      whatever series it was handed (it was unreproducible between the
+#      full-history training path and the windowed live path)
+FEATURE_PIPELINE_VERSION = 2
+
 
 def _validate(df: pd.DataFrame) -> None:
     missing = _REQUIRED_COLS - set(df.columns)
