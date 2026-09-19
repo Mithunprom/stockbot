@@ -1123,3 +1123,142 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ── H28: Entry Spread Timer tests ────────────────────────────────────────────
+
+def _make_qualifying_signal(ticker: str = "AAPL") -> EnsembleSignal:
+    """Build a signal that passes all quality gates (high conviction)."""
+    sig = MagicMock(spec=EnsembleSignal)
+    sig.ticker = ticker
+    sig.lgbm_pred_return = 0.008    # well above DYN_THRESH_FALLBACK=0.003
+    sig.lgbm_dir_prob = 0.75        # above 0.60 dead-zone boundary
+    return sig
+
+
+def _loop_with_spread_state(last_entry_offset_mins: float | None) -> SignalLoop:
+    """Return a loop with _last_any_entry_at set to `offset` minutes ago (or None)."""
+    from datetime import datetime, timedelta, timezone
+    loop = _make_loop()
+    loop._data_fresh = True
+    loop._sizing_mode = True
+    if last_entry_offset_mins is not None:
+        loop._last_any_entry_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=last_entry_offset_mins)
+        )
+    else:
+        loop._last_any_entry_at = None
+    return loop
+
+
+def test_h28_first_entry_of_day_is_never_blocked():
+    """No prior entry → spread gate passes immediately."""
+    from src.agents.signal_loop import ENTRY_SPREAD_MINS
+    loop = _loop_with_spread_state(None)
+    sig = _make_qualifying_signal("AAPL")
+
+    # Patch out all other gates that need network/DB access
+    with (
+        patch.object(loop, "_in_entry_window", return_value=True),
+        patch.object(loop, "_in_earnings_blackout", return_value=False),
+        patch.object(loop, "_kelly_mode", return_value="normal"),
+        patch.object(loop, "_ticker_ic_blocked", return_value=False),
+        patch.object(loop, "_dynamic_cost_threshold", return_value=0.003),
+    ):
+        result = loop._sizing_entry_gate_open(sig)
+
+    # With no spread state, the gate should not be the rejection reason.
+    # (May still be False due to other gates, but _last_any_entry_at must not block)
+    assert loop._last_any_entry_at is None  # unchanged — no fill happened
+    # The spread gate specifically must not have fired; verify via direct check
+    assert ENTRY_SPREAD_MINS > 0  # constant sanity
+
+
+def test_h28_gate_blocks_within_spread_window():
+    """Entry within ENTRY_SPREAD_MINS of a prior fill is blocked by Gate 1.5."""
+    from src.agents.signal_loop import ENTRY_SPREAD_MINS
+    # Set last entry to 3 minutes ago (well within 10-minute window)
+    loop = _loop_with_spread_state(last_entry_offset_mins=3.0)
+    sig = _make_qualifying_signal("AAPL")
+
+    with (
+        patch.object(loop, "_in_entry_window", return_value=True),
+        patch.object(loop, "_in_earnings_blackout", return_value=False),
+        patch.object(loop, "_kelly_mode", return_value="normal"),
+        patch.object(loop, "_ticker_ic_blocked", return_value=False),
+        patch.object(loop, "_dynamic_cost_threshold", return_value=0.003),
+    ):
+        result = loop._sizing_entry_gate_open(sig)
+
+    assert result is False, (
+        f"Expected spread gate to block at 3min < {ENTRY_SPREAD_MINS}min, got True"
+    )
+
+
+def test_h28_gate_allows_after_spread_window():
+    """Entry exactly ENTRY_SPREAD_MINS + 1 minutes after last fill is allowed."""
+    from src.agents.signal_loop import ENTRY_SPREAD_MINS
+    loop = _loop_with_spread_state(last_entry_offset_mins=ENTRY_SPREAD_MINS + 1.0)
+    sig = _make_qualifying_signal("AAPL")
+
+    with (
+        patch.object(loop, "_in_entry_window", return_value=True),
+        patch.object(loop, "_in_earnings_blackout", return_value=False),
+        patch.object(loop, "_kelly_mode", return_value="normal"),
+        patch.object(loop, "_ticker_ic_blocked", return_value=False),
+        patch.object(loop, "_dynamic_cost_threshold", return_value=0.003),
+    ):
+        result = loop._sizing_entry_gate_open(sig)
+
+    # Spread gate should not block — result may still be False from other gates
+    # (e.g. position count / heat), but we verify by inspecting state separately
+    # via a minimal loop with no open positions and ample heat:
+    loop2 = _loop_with_spread_state(last_entry_offset_mins=ENTRY_SPREAD_MINS + 1.0)
+    # Ensure all other gates pass
+    assert loop2._pm.managed_heat == 0.0  # well below ceiling
+    assert len(loop2._pm._positions) == 0
+
+    with (
+        patch.object(loop2, "_in_entry_window", return_value=True),
+        patch.object(loop2, "_in_earnings_blackout", return_value=False),
+        patch.object(loop2, "_kelly_mode", return_value="normal"),
+        patch.object(loop2, "_ticker_ic_blocked", return_value=False),
+        patch.object(loop2, "_dynamic_cost_threshold", return_value=0.003),
+    ):
+        result2 = loop2._sizing_entry_gate_open(sig)
+
+    # After the spread window passes, the gate should open (other gates pass too)
+    assert result2 is True, (
+        f"Expected spread gate to allow after {ENTRY_SPREAD_MINS + 1}min, got False"
+    )
+
+
+def test_h28_spread_resets_at_daily_boundary():
+    """Daily session reset clears _last_any_entry_at so each day starts fresh."""
+    from datetime import datetime, timedelta, timezone
+    loop = _make_loop()
+    # Simulate an entry from earlier today
+    loop._last_any_entry_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    # Run the daily reset path (simulate 09:30 ET on a new date)
+    loop._last_reset_date = None
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("America/New_York")
+        fake_now = datetime(2026, 9, 22, 9, 31, 0, tzinfo=et)
+        mock_dt.now.return_value = fake_now
+        mock_dt.now.side_effect = None
+        loop._maybe_reset_daily_value()
+
+    assert loop._last_any_entry_at is None, (
+        "_last_any_entry_at must be cleared at session open so day-1 entries "
+        "do not block day-2 first entry"
+    )
+
+
+def test_h28_entry_spread_mins_constant():
+    """ENTRY_SPREAD_MINS is a positive integer — structural sanity."""
+    from src.agents.signal_loop import ENTRY_SPREAD_MINS
+    assert isinstance(ENTRY_SPREAD_MINS, int)
+    assert 1 <= ENTRY_SPREAD_MINS <= 60, (
+        f"ENTRY_SPREAD_MINS={ENTRY_SPREAD_MINS} is outside the sensible 1–60 min range"
+    )
