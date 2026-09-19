@@ -271,11 +271,11 @@
   {
    "id": "H28",
    "hypothesis": "Entry clustering amplifies macro-correlated losses. Sep 11: 6 entries in 2 minutes (13:40–13:42 UTC), net -$449.58. Aug 31: 12 entries in 10 minutes, net -$938. When all daily slots fill in a single macro moment, wins and losses are correlated — one bad open accounts for all loss. A minimum wall-clock gap between any two consecutive new entries (ENTRY_SPREAD_MINS=10 min) spreads the 6 daily slots over ≥50 minutes instead of 2, preserving all-day exposure while preventing full-budget correlation on a single macro move.",
-   "status": "implemented — PR #63 open (Sep 19, freeze-exempt risk-control enhancement)",
+   "status": "implemented — PR #65 open (Sep 19, freeze-exempt risk-control enhancement)",
    "added": "2026-09-19",
    "added_by": "nightly desk — post-mortem pattern of Sep 11 + Aug 31 entry clustering in live trade data",
    "pr_branch": "feat/rnd-H28-entry-spread-timer",
-   "pr_number": 63,
+   "pr_number": 65,
    "pr_state": "OPEN — freeze-exempt: pure temporal risk control. Gate 1.5 in _sizing_entry_gate_open(). ENTRY_SPREAD_MINS=10 constant. 5 unit tests pass. Does not change WHICH entries qualify, only throttles WHEN consecutive entries fire. Complements H24/H25 (Kelly boundary) and H27 (sector map).",
    "priority": "HIGH — merge before Sep 22. Addresses structural clustering risk alongside H24/H25/H27.",
    "pm_priority": -4
@@ -467,7 +467,7 @@
   {
    "date": "2026-09-19",
    "hypothesis_id": "H28",
-   "result": "IMPLEMENTED — Entry spread timer (Gate 1.5, ENTRY_SPREAD_MINS=10). Addresses burst-cluster entry pattern: Sep 11 6 entries in 2min (net -$449), Aug 31 12 entries in 10min (net -$938). Added constant ENTRY_SPREAD_MINS=10, instance var _last_any_entry_at, Gate 1.5 in _sizing_entry_gate_open(), update on fill, reset at daily boundary. Also added tests/unit/conftest.py (stub env vars enabling signal_loop tests to run). 5 new H28 unit tests pass. Total 200 pass / 4 pre-existing sandbox-dep failures (pandas, yfinance not installed). PR #63 opened (feat/rnd-H28-entry-spread-timer). Freeze-exempt: pure temporal risk control.",
+   "result": "IMPLEMENTED — Entry spread timer (Gate 1.5, ENTRY_SPREAD_MINS=10). Addresses burst-cluster entry pattern: Sep 11 6 entries in 2min (net -$449), Aug 31 12 entries in 10min (net -$938). Added constant ENTRY_SPREAD_MINS=10, instance var _last_any_entry_at, Gate 1.5 in _sizing_entry_gate_open(), update on fill, reset at daily boundary. Also added tests/unit/conftest.py (stub env vars enabling signal_loop tests to run). 5 new H28 unit tests pass. Total 200 pass / 4 pre-existing sandbox-dep failures (pandas, yfinance not installed). PR #65 opened (feat/rnd-H28-entry-spread-timer). Freeze-exempt: pure temporal risk control.",
    "files_changed": [
     "src/agents/signal_loop.py",
     "tests/unit/test_signal_loop.py",
@@ -671,7 +671,7 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION — CRITICAL — BEFORE SEP 22 MARKET OPEN] Merge PR #63 (H28: entry spread timer, ENTRY_SPREAD_MINS=10). FREEZE-EXEMPT. Prevents burst-cluster entries on Sep 22 resumption: Sep 11 all 6 entries fired in 2 minutes net -$449; Aug 31 12 entries in 10 minutes net -$938. Complements H24/H25/H27.",
+  "[OWNER ACTION — CRITICAL — BEFORE SEP 22 MARKET OPEN] Merge PR #65 (H28: entry spread timer, ENTRY_SPREAD_MINS=10). FREEZE-EXEMPT. Prevents burst-cluster entries on Sep 22 resumption: Sep 11 all 6 entries fired in 2 minutes net -$449; Aug 31 12 entries in 10 minutes net -$938. Complements H24/H25/H27.",
   "[OWNER ACTION — CRITICAL — BEFORE SEP 22 MARKET OPEN] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary risk mitigation). ALL FREEZE-EXEMPT. Sep 12 deadline missed; Sep 20 deadline missed; Sep 10-11 trades roll off window Sep 20-21 → bot may resume full-size entries Mon Sep 22 WITHOUT guard. PR #52 (rolloff guard) is most critical.",
   "[OWNER ACTION — HIGH — BEFORE SEP 22] Review H25 cluster PRs #56 and #57 (systemic Kelly guard: min unique days + cluster-day cap). Both freeze-exempt. Addresses root cause more robustly than H24 alone. Also needed before Sep 22 window transition.",
   "[OWNER ACTION — CRITICAL — BEFORE SEP 22] Merge PR #62 (H27: SECTOR_MAP expansion). Freeze-exempt. PCG/INTC/LITE currently qualifying in diagnostics; if Kelly exits probation Sep 22 these tickers can fire without sector cap protection. Supersedes PRs #42 (H19) and #48 (H22) — consider closing those.",
