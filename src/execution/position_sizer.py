@@ -28,15 +28,54 @@ logger = structlog.get_logger(__name__)
 
 
 # ─── Sector mapping for the trading universe ────────────────────────────────
+#
+# 2026-09-15 — FAIL-CLOSED REWRITE. This table used to cover 24 tickers and
+# every miss fell through to a single shared `"other"` bucket. The trading
+# universe is SCREENED DYNAMICALLY into the DB (see
+# screener_agent.load_universe_from_db), so it rotates faster than any
+# hand-maintained table can track: across the live ledger the bot traded 57
+# distinct names and 35 of them were absent here.
+#
+# The consequence was not a missing limit, it was a SILENTLY INVERTED one.
+# `MAX_POSITIONS_PER_SECTOR = 2` counts positions per bucket, so 34 unmapped
+# names sharing one bucket meant the correlation guard read a basket of four
+# simultaneous semiconductor longs as "2 semis + 2 other" and passed it.
+# Measured on the ledger (`python scripts/replay_ledger.py sectors`):
+#   2026-08-19  KLAC, INTC, MU, WDC  open together   -> -$1,237 in 31 minutes
+#   2026-09-11  SNDK, LITE, LRCX, AMD open together  ->   -$621
+# Net on unmapped tickers -$1,203 vs +$408 on mapped ones (M2, n=111).
+#
+# Two changes, together:
+#   1. The table is completed for every name the bot has actually traded.
+#   2. `sector_of()` NEVER returns a shared permissive bucket. An unknown
+#      ticker resolves to UNMAPPED_SECTOR, which carries the STRICTEST caps in
+#      the system (one position, one position's worth of notional). An
+#      unrecognized name is assumed to be correlated with every other
+#      unrecognized name, because we have no evidence that it is not.
+#
+# Adding a ticker here LOOSENS a constraint, so it is a deliberate act. Leaving
+# one out now costs opportunity, not risk — which is the correct direction for
+# a table that will always lag a dynamic universe.
 
 SECTOR_MAP: dict[str, str] = {
-    # Tech
+    # Software / internet / platform tech
     "AAPL": "tech",
     "MSFT": "tech",
     "GOOGL": "tech",
     "PLTR": "tech",
     "MSTR": "tech",
-    # Semiconductors / memory & storage
+    "ORCL": "tech",
+    "NOW": "tech",
+    "SNOW": "tech",
+    "DDOG": "tech",
+    "WDAY": "tech",
+    "TTD": "tech",
+    "ANET": "tech",
+    "DELL": "tech",
+    # Semiconductors / semicap / memory & storage / photonics.
+    # Deliberately ONE bucket: these names share the same demand cycle and
+    # trade as a single factor intraday. Splitting "semicap" or "photonics"
+    # out would re-create the 2026-08-19 basket under prettier labels.
     "NVDA": "semis",
     "AVGO": "semis",
     "AMD": "semis",
@@ -45,22 +84,103 @@ SECTOR_MAP: dict[str, str] = {
     "MU": "semis",
     "SMCI": "semis",
     "WDC": "semis",
+    "INTC": "semis",
+    "QCOM": "semis",
+    "MRVL": "semis",
+    "KLAC": "semis",
+    "LRCX": "semis",
+    "AMAT": "semis",
+    "TER": "semis",
+    "STX": "semis",
+    "LITE": "semis",
+    "COHR": "semis",
+    "CIEN": "semis",
+    "FLEX": "semis",
     # Financials
     "JPM": "financials",
     "V": "financials",
     "MA": "financials",
+    "GS": "financials",
+    "WFC": "financials",
+    "MSCI": "financials",
+    "HOOD": "financials",
     # Consumer
     "AMZN": "consumer",
     "TSLA": "consumer",
     "COST": "consumer",
     "NFLX": "consumer",
+    "APTV": "consumer",
+    "GRMN": "consumer",
     # Energy
     "XOM": "energy",
     "CVX": "energy",
-    # Healthcare
+    "COP": "energy",
+    # Healthcare / pharma
     "LLY": "healthcare",
     "UNH": "healthcare",
+    "JNJ": "healthcare",
+    "PFE": "healthcare",
+    "ABBV": "healthcare",
+    "MRNA": "healthcare",
+    # Industrials / defense
+    "LMT": "industrials",
+    "LDOS": "industrials",
+    "LII": "industrials",
+    "ZBRA": "industrials",
 }
+
+# Bucket for any ticker absent from SECTOR_MAP. It is a real bucket name so it
+# shows up in diagnostics and logs, and it is subject to the strictest caps in
+# the system — never a permissive default.
+UNMAPPED_SECTOR = "unmapped"
+
+
+def sector_of(ticker: str) -> str:
+    """Resolve a ticker to its correlation bucket, failing CLOSED.
+
+    Args:
+        ticker: Ticker symbol.
+
+    Returns:
+        The mapped sector, or `UNMAPPED_SECTOR` for anything unrecognized.
+        Never a shared permissive bucket: callers must pair this with
+        `max_positions_for_sector` / `sector_cap_pct`, which treat
+        `UNMAPPED_SECTOR` as the most restrictive bucket in the system.
+    """
+    return SECTOR_MAP.get(ticker.upper(), UNMAPPED_SECTOR)
+
+
+def max_positions_for_sector(sector: str) -> int:
+    """Concurrent-position cap for a correlation bucket.
+
+    Args:
+        sector: Bucket name, as returned by `sector_of`.
+
+    Returns:
+        `MAX_POSITIONS_UNMAPPED` for the unmapped bucket (an unknown name is
+        assumed correlated with every other unknown name), otherwise
+        `MAX_POSITIONS_PER_SECTOR_DEFAULT`.
+    """
+    return (
+        MAX_POSITIONS_UNMAPPED if sector == UNMAPPED_SECTOR
+        else MAX_POSITIONS_PER_SECTOR_DEFAULT
+    )
+
+
+def sector_cap_pct(sector: str) -> float:
+    """Maximum share of the portfolio allowed in a correlation bucket.
+
+    Args:
+        sector: Bucket name, as returned by `sector_of`.
+
+    Returns:
+        The notional cap as a fraction of portfolio value. The unmapped bucket
+        gets one position's worth, mirroring its one-position count cap.
+    """
+    return (
+        _UNMAPPED_SECTOR_CAP_PCT if sector == UNMAPPED_SECTOR
+        else _SECTOR_CAP_PCT
+    )
 
 # ─── Pipeline configuration ─────────────────────────────────────────────────
 
@@ -102,7 +222,18 @@ _HEAT_TIERS: list[tuple[float, float]] = [
     (0.75, 0.50),   # 60% ≤ heat < 75%: half size
     (1.00, 0.00),   # heat ≥ 75%: no new entries
 ]
-_SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single sector
+_SECTOR_CAP_PCT = 0.40     # Max 40% of portfolio in any single KNOWN sector
+# The unmapped bucket gets one position's worth of notional — the same
+# restriction its one-position count cap expresses, so the two agree. This had
+# the identical fail-open defect as the count guard: every unrecognized ticker
+# shared one "other" bucket and 40% of the book could pile into names the
+# correlation model knew nothing about.
+_UNMAPPED_SECTOR_CAP_PCT = 0.125   # == _MAX_NOTIONAL_PCT: one position
+
+# Concurrent-position caps per correlation bucket. Consumed by
+# `max_positions_for_sector`; the signal loop's entry gate enforces them.
+MAX_POSITIONS_PER_SECTOR_DEFAULT = 2   # max concurrent positions per known sector
+MAX_POSITIONS_UNMAPPED = 1             # an unknown name gets no diversification credit
 
 # Stage 5: Minimum viable trade
 _MIN_NOTIONAL = 1000.0     # $1k minimum trade (probation probes stay viable)
@@ -283,11 +414,14 @@ class SmartPositionSizer:
 
         stage4 = stage3 * heat_multiplier
 
-        # 4b: Sector cap — prevent concentration in a single sector
-        sector = SECTOR_MAP.get(ticker, "other")
+        # 4b: Sector cap — prevent concentration in a single correlation bucket.
+        # `sector_of` fails closed: an unrecognized ticker lands in
+        # UNMAPPED_SECTOR, which carries the tighter _UNMAPPED_SECTOR_CAP_PCT.
+        sector = sector_of(ticker)
+        cap_pct = sector_cap_pct(sector)
         current_sector_notional = sector_notionals.get(sector, 0.0)
         sector_heat = current_sector_notional / max(portfolio_value, 1.0)
-        max_sector_room = max(_SECTOR_CAP_PCT - sector_heat, 0.0)
+        max_sector_room = max(cap_pct - sector_heat, 0.0)
 
         if max_sector_room <= 0:
             logger.info(
@@ -295,7 +429,7 @@ class SmartPositionSizer:
                 ticker=ticker,
                 sector=sector,
                 sector_heat=round(sector_heat, 3),
-                cap=_SECTOR_CAP_PCT,
+                cap=cap_pct,
             )
             return None
 
