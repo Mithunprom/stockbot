@@ -86,6 +86,13 @@ SIZING_REVERSAL_BARS = 45
 SIZING_MAX_TRADES_PER_DAY = 6       # swing cadence: supports 6 position slots
 SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
+
+# Health bar for where a filled entry sits in the model's own cross-sectional
+# ranking. The v0.6.x window averaged ~46 (indistinguishable from random) because
+# the live feature path had drifted from the training path; that percentile has a
+# negative expectancy. Sustained readings below this mean train/serve skew is back.
+ENTRY_RANK_HEALTHY_PCTILE = 85.0
+ENTRY_RANK_WINDOW = 60              # rolling sample kept for /diagnostics
 MAX_OPEN_POSITIONS = 6              # hard cap on concurrent positions
 PORTFOLIO_HEAT_CEILING = 0.75       # no new entries above 75% deployed
 # Correlation guard. The cap is now per-BUCKET rather than one global number,
@@ -635,6 +642,12 @@ class SignalLoop:
         from collections import deque
         self._pred_magnitudes: Any = deque(maxlen=DYN_THRESH_WINDOW)
 
+        # Rolling percentile ranks of filled entries within the model's own
+        # cross-section — the live check for train/serve skew. See
+        # _record_entry_rank: the v0.6.x window averaged ~46 here, which is
+        # where the money went, and nothing in the system reported it.
+        self._entry_ranks: Any = deque(maxlen=ENTRY_RANK_WINDOW)
+
         # PDT day-trade budget tracking (refreshed from broker)
         self._daytrade_count: int = 0
         self._pdt_refresh_countdown: int = 0
@@ -1033,6 +1046,20 @@ class SignalLoop:
             "kelly_n_trades": len(self._sizing_recent_outcomes),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
+            # Train/serve skew watch. entry_rank_mean is the average percentile
+            # of filled entries within the model's own cross-section. Healthy is
+            # >= 85; the v0.6.x window sat near 46 while every other check
+            # stayed green. n < 5 means not enough fills yet to judge.
+            "entry_rank_mean": (
+                round(sum(self._entry_ranks) / len(self._entry_ranks), 1)
+                if self._entry_ranks else None
+            ),
+            "entry_rank_n": len(self._entry_ranks),
+            "entry_rank_healthy": (
+                (sum(self._entry_ranks) / len(self._entry_ranks)
+                 >= ENTRY_RANK_HEALTHY_PCTILE)
+                if len(self._entry_ranks) >= 5 else None
+            ),
             "max_trades_per_day": SIZING_MAX_TRADES_PER_DAY,
             "max_open_positions": MAX_OPEN_POSITIONS,
             "heat_ceiling": PORTFOLIO_HEAT_CEILING,
@@ -1691,7 +1718,48 @@ class SignalLoop:
             entered = await self._act_on_signal(sig, price, feat_np, regime=regime)
             if entered:
                 entries += 1
+                self._record_entry_rank(sig, candidates)
         return entries
+
+    def _record_entry_rank(
+        self, chosen: EnsembleSignal, candidates: list[EnsembleSignal],
+    ) -> None:
+        """Log where a filled entry sat in the model's own cross-sectional ranking.
+
+        This is the direct measurement of the defect that cost the v0.6.x window
+        its money. Live entries were landing at the ~46th percentile of the
+        model's ranking — statistically indistinguishable from picking at random —
+        because the live feature path could not reproduce the training path.
+        Selecting at that percentile has a NEGATIVE expectancy (-0.29%/trade,
+        PF 0.34 measured over 90 counterfactual fills); the top decile has
+        +1.67%/trade. See reports/research/loss_diagnosis_2026-09-16.md.
+
+        Nothing in the system surfaced that. Every health check stayed green
+        while the bot bought median-ranked names for two months. A single
+        percentile per fill makes the failure observable on day one instead of
+        after a hundred trades and a post-mortem.
+
+        Expected healthy value: >= 85. Sustained readings near 50 mean the
+        serving path has drifted from training again.
+        """
+        try:
+            preds = [abs(float(s.lgbm_pred_return)) for s in candidates
+                     if s.lgbm_pred_return is not None]
+            mine = abs(float(chosen.lgbm_pred_return))
+            if len(preds) < 5:
+                return
+            pct = 100.0 * sum(1 for p in preds if p < mine) / len(preds)
+            self._entry_ranks.append(pct)
+            logger.info(
+                "entry_rank_pctile",
+                ticker=chosen.ticker,
+                pctile=round(pct, 1),
+                pred_return=round(float(chosen.lgbm_pred_return), 6),
+                n_candidates=len(preds),
+                healthy=pct >= ENTRY_RANK_HEALTHY_PCTILE,
+            )
+        except Exception as exc:                      # never break an entry
+            logger.debug("entry_rank_record_failed", error=str(exc))
 
     # ── Sizing-mode entry/exit gating ────────────────────────────────────────
 

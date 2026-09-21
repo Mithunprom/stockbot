@@ -775,7 +775,12 @@ def _load_ffsa_features() -> list[str]:
 # landing at the ~46th percentile of the model's own ranking because the live
 # feature path could not reproduce the training path. The M2 measurement clock
 # RESETS here — no statistic from the v0.6.x window carries forward.
-APP_VERSION = "0.7.0"
+#
+# v0.7.1 — entry-rank monitor. Diagnostics only, no behaviour change: logs where
+# each filled entry sat in the model's own cross-section and surfaces a rolling
+# mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
+# near 46 and nothing reported it.
+APP_VERSION = "0.7.1"
 
 app = FastAPI(
     title="StockBot API",
