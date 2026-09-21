@@ -33,13 +33,70 @@ logging.basicConfig(
 logger = logging.getLogger("train_lgbm")
 
 FORWARD_N = 15
+
+# Below this, the archive is not yet a better training set than the live tables.
+# 20 sessions ~= one trading month; the models that actually worked were fit on
+# months of bars, not the 3 days DB retention leaves behind.
+_MIN_ARCHIVE_DAYS = 20
 DIRECTION_EPSILON = 0.0001
+
+
+def _load_from_archive(
+    feature_cols: list[str], tickers: list[str], max_rows: int,
+) -> pd.DataFrame | None:
+    """Build the training frame from the durable Parquet archive.
+
+    Returns None when the archive holds too little to be worth using, so the
+    caller can fall back to the (short-retention) live tables.
+    """
+    from datetime import date as _date, timedelta as _td
+
+    from src.data.feature_archive import available_days, load_range
+
+    days = available_days()
+    if len(days) < _MIN_ARCHIVE_DAYS:
+        logger.info("Archive has %d day(s) — below the %d-day minimum",
+                    len(days), _MIN_ARCHIVE_DAYS)
+        return None
+
+    start = _date.fromisoformat(days[0])
+    end = _date.fromisoformat(days[-1])
+    logger.info("Loading archive %s → %s (%d sessions)", start, end, len(days))
+
+    raw = load_range(start, end, tickers=tickers)
+    if raw.empty or "close" not in raw.columns:
+        return None
+
+    frames: list[pd.DataFrame] = []
+    for ticker, grp in raw.groupby("ticker"):
+        grp = grp.sort_values("time")
+        close_s = pd.to_numeric(grp["close"], errors="coerce")
+        fwd = close_s.pct_change(FORWARD_N).shift(-FORWARD_N)
+
+        out = pd.DataFrame({"time": grp["time"].values, "ticker": ticker})
+        for f in feature_cols:
+            out[f] = (pd.to_numeric(grp[f], errors="coerce").fillna(0.0).values
+                      if f in grp.columns else 0.0)
+        out["forward_return"] = fwd.values
+        out = out.dropna(subset=["forward_return"])
+        if max_rows:
+            out = out.tail(max_rows)
+        if not out.empty:
+            frames.append(out)
+            logger.info("  %s: %d rows (archive)", ticker, len(out))
+
+    if not frames:
+        return None
+    merged = pd.concat(frames, ignore_index=True)
+    logger.info("Total from archive: %d rows, %d features",
+                len(merged), len(feature_cols))
+    return merged
 
 
 async def load_data(
     top_n: int, max_rows: int, tickers: list[str] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Load features + forward returns from DB."""
+    """Load features + forward returns, preferring the durable archive."""
     from sqlalchemy import select
 
     from src.data.db import FeatureMatrix, OHLCV1m, get_session_factory, init_db
@@ -61,6 +118,19 @@ async def load_data(
         tickers = _DEFAULT_UNIVERSE
     tickers = [t for t in tickers if "/" not in t]
     logger.info("Universe: %d tickers, max %d rows each", len(tickers), max_rows)
+
+    # Prefer the durable archive. `feature_matrix` is pruned at 3 days and
+    # `ohlcv_1m` at 7, so training only off the live tables fits an intraday
+    # model to ~3 days of bars — which is how checkpoints with val_ic of -0.06
+    # came to exist. The archive holds months.
+    archived = _load_from_archive(feature_cols, tickers, max_rows)
+    if archived is not None:
+        return archived, [c for c in feature_cols if c in archived.columns]
+
+    logger.warning(
+        "Feature archive empty — falling back to the live DB. This trains on at "
+        "most the retention window (3 days) and will produce an unstable model."
+    )
 
     all_frames: list[pd.DataFrame] = []
 

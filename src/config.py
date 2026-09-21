@@ -76,6 +76,17 @@ class Settings(BaseSettings):
     forecast_email_from: str = Field("", description="From address (defaults to smtp_user)")
     forecast_email_to: str = Field("", description="Comma-separated recipient list")
     forecast_tickers: str = Field("SNDK", description="Comma-separated tickers to forecast")
+    # Opt-in. The daily pre-market forecast is informational only — nothing in
+    # the strategy consumes it — so it defaults OFF and must be switched on
+    # deliberately. Disabled 2026-09-21 at the owner's request.
+    #
+    # Deliberately a separate flag from forecast_email_to: that setting is ALSO
+    # the recipient list for circuit-breaker halt alerts, integrity-sentinel
+    # escalations and news-risk warnings. Silencing this digest by clearing the
+    # recipients would silence those too, which is the last thing you want.
+    forecast_email_enabled: bool = Field(
+        False, description="Send the daily pre-market forecast digest"
+    )
 
     # ─── A/B Testing ──────────────────────────────────────────────────────────
     ab_test_enabled: bool = False

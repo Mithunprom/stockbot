@@ -22,6 +22,25 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 _REQUIRED_COLS = {"open", "high", "low", "close", "volume"}
 
+# Semantic version of the FEATURE DEFINITIONS produced by this module.
+#
+# Bump this whenever a feature's meaning changes — not when a bug is fixed in
+# how it is plumbed, but when the same input bars would now yield a different
+# number. Models record the version they were trained under and refuse to load
+# against a different one (src/models/lgbm.LGBMSignalModel.load).
+#
+# Without this guard a model trained on one definition can be served another
+# and nothing errors: every feature still computes, just to different values,
+# and the only symptom is that predictions quietly stop ranking correctly. That
+# is precisely what happened between 2026-07 and 2026-09 — see
+# reports/research/loss_diagnosis_2026-09-16.md.
+#
+#   1  original definitions
+#   2  2026-09-16 — obv anchored to the ET session instead of the first bar of
+#      whatever series it was handed (it was unreproducible between the
+#      full-history training path and the windowed live path)
+FEATURE_PIPELINE_VERSION = 2
+
 
 def _validate(df: pd.DataFrame) -> None:
     missing = _REQUIRED_COLS - set(df.columns)
@@ -113,8 +132,40 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14):
 
 
 def _obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """Session-anchored on-balance volume.
+
+    A plain `.cumsum()` is anchored to the FIRST BAR OF WHATEVER SERIES IT IS
+    GIVEN, which makes the feature unreproducible between the two code paths
+    that compute it:
+
+      - training / backtest  -> compute_indicators() over months of bars
+      - live serving         -> compute_indicators() over the trailing
+                                WARMUP_BARS only (src/features/live.py)
+
+    Measured 2026-09-16 on 320 paired (ticker, bar) samples: raw cumulative OBV
+    disagreed between the two paths on **100% of rows at every warmup tested**
+    (300 / 780 / 1170 / 1950 / 3900 bars) — it cannot converge, because the two
+    paths start counting at different places. It was the single largest
+    contributor to train/serve skew: neutralising it alone lifted the
+    rank agreement between live and train-consistent predictions from 0.36 to
+    0.56.
+
+    Anchoring the cumulative sum to the start of each trading session makes the
+    value depend only on bars within the session, so any warmup that reaches
+    back to the session open reproduces it exactly.
+
+    NOTE: this changes the feature's distribution. Any model trained on the old
+    unanchored definition must be retrained before it is served.
+    """
     direction = np.sign(close.diff()).fillna(0)
-    return (direction * volume).cumsum()
+    signed = direction * volume
+
+    idx = close.index
+    if isinstance(idx, pd.DatetimeIndex):
+        # Same ET-calendar reset that _vwap_daily already uses.
+        return signed.groupby(_to_et_index(idx).date).cumsum()
+
+    return signed.cumsum()                            # non-datetime index: legacy behaviour
 
 
 def _mfi(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, n: int = 14) -> pd.Series:

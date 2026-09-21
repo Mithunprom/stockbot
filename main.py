@@ -768,7 +768,19 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.6.2"
+#
+# v0.7.0 — train/serve skew fix + feature pipeline v2 + retrained model, with
+# the correlation guards and exit calibration that bound the damage when
+# selection goes wrong. This CHANGES WHAT THE BOT BUYS: live entries were
+# landing at the ~46th percentile of the model's own ranking because the live
+# feature path could not reproduce the training path. The M2 measurement clock
+# RESETS here — no statistic from the v0.6.x window carries forward.
+#
+# v0.7.1 — entry-rank monitor. Diagnostics only, no behaviour change: logs where
+# each filled entry sat in the model's own cross-section and surfaces a rolling
+# mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
+# near 46 and nothing reported it.
+APP_VERSION = "0.7.3"
 
 app = FastAPI(
     title="StockBot API",
@@ -1151,6 +1163,13 @@ async def diagnostics() -> JSONResponse:
             "kelly_n_trades": summary.get("kelly_n_trades", 0),
             "kelly_lookback_days": summary.get("kelly_lookback_days"),
             "probation_entries_today": summary.get("probation_entries_today", 0),
+            # Train/serve skew watch — the percentile each filled entry occupied
+            # in the model's own cross-section. Healthy >= 85; the v0.6.x window
+            # averaged ~46 while every other check here stayed green, and that
+            # is where the money went. null until 5 fills accumulate.
+            "entry_rank_mean": summary.get("entry_rank_mean"),
+            "entry_rank_n": summary.get("entry_rank_n", 0),
+            "entry_rank_healthy": summary.get("entry_rank_healthy"),
             "daytrade_count": summary.get("daytrade_count", 0),
             "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),

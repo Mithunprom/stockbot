@@ -172,19 +172,20 @@ def test_take_profit_is_an_outlier_valve_not_a_noise_trigger():
     target tight enough to fire on ordinary 30-bar noise and truncate winners
     the timer would have carried. TP is now a windfall valve.
     """
+    # 2026-09-15 (H14): the multiples are now quoted in sigma OF THE HOLD
+    # WINDOW, so this invariant states itself directly — no sqrt(time)
+    # conversion needed. That conversion being absent from _atr_exits was the
+    # bug; it must not creep back into the test that guards the geometry.
     from src.agents.signal_loop import (
-        SIZING_TAKE_PROFIT_DVOL_MULT,
-        SIZING_STOP_LOSS_DVOL_MULT,
-        SIZING_MAX_HOLD_BARS,
+        SIZING_TAKE_PROFIT_HVOL_MULT,
+        SIZING_STOP_LOSS_HVOL_MULT,
     )
-    # Typical move over the hold window, in units of DAILY sigma.
-    sigmas_of_time = (SIZING_MAX_HOLD_BARS / 390.0) ** 0.5
-    assert SIZING_TAKE_PROFIT_DVOL_MULT >= 2.0 * sigmas_of_time, (
+    assert SIZING_TAKE_PROFIT_HVOL_MULT >= 2.0, (
         "take-profit sits inside ordinary noise for this hold window — it will "
         "truncate winners the timer should have carried"
     )
     # …and must still pay more than the stop risks.
-    assert SIZING_TAKE_PROFIT_DVOL_MULT > SIZING_STOP_LOSS_DVOL_MULT
+    assert SIZING_TAKE_PROFIT_HVOL_MULT > SIZING_STOP_LOSS_HVOL_MULT
 
 
 def test_reward_exceeds_risk_across_the_whole_vol_range():
@@ -607,19 +608,29 @@ def test_h5_max_hold_fires_after_two_extensions():
     assert result == "max_hold"
 
 
-def test_h5_extension_denied_when_losing_more_than_daily_vol():
-    """Extension denied if unrealized < -1× daily vol (don't compound losers).
+def test_h5_extension_denied_when_losing_more_than_hold_window_vol():
+    """Extension denied at a loss past 1σ of the hold window (no compounding losers).
 
-    Setup: daily_vol=0.5% so stop_loss floor (1.0%) doesn't fire before the
-    extension check. A -0.7% loss exceeds -1× daily_vol but sits inside the stop,
-    so the only exit reason that can fire is 'max_hold' (no extension granted).
+    H14 (2026-09-15) restated this in hold-window units. The old setup forced
+    daily_vol to 0.5% so the 1.0% stop FLOOR would not fire first; with the
+    barriers now scaled to the 30-bar window that floor is 0.4% and the old
+    numbers no longer describe the geometry.
+
+    New setup uses the fixture's 2% daily vol, which gives a hold-window sigma
+    of 2% x sqrt(30/390) = 0.555%. The denial threshold is 1σ = 0.555% and the
+    stop is 2σ = 1.110%, so a -0.7% loss lands cleanly between them: extension
+    denied, stop not triggered, and the only reason that can fire is max_hold.
     """
+    from src.agents.signal_loop import _atr_exits, _hold_window_vol
+
     loop = _make_loop()
     loop._pm.portfolio_value = 100_000.0
     sig = _h5_fixture(loop, pred_ret=0.009, dir_prob=0.75)
-    # Override fixture's 2% daily_vol with 0.5%; stop = max(0.5*1.1, floor=1%) = 1%
-    loop._ticker_daily_vol["AAPL"] = 0.005
-    # -0.7% < -0.5% (1× daily_vol) → extension denied; -0.7% > -1% (stop) → no stop
+
+    hold_vol = _hold_window_vol(0.02, 30)
+    stop, _trail, _tp = _atr_exits(0.02)
+    assert hold_vol < 0.007 < stop, "test setup no longer straddles the barriers"
+
     result = loop._check_sizing_exit("AAPL", 99.3, sig)
     assert result == "max_hold"
     assert loop._hold_extension_count.get("AAPL", 0) == 0
