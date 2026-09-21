@@ -245,6 +245,7 @@ def test_kelly_probation_allows_single_probe():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.12   # above KELLY_PROBE_MIN_ENSEMBLE=0.10
 
     # No IC history → no probe (probes require demonstrated positive IC)
     assert not loop._sizing_entry_gate_open(sig)
@@ -280,6 +281,7 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
     sig.lgbm_pred_return = 0.009
     sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.12   # above KELLY_PROBE_MIN_ENSEMBLE=0.10
 
     # 7d block cache full & positive, but probe cache empty → still blocked
     loop._ticker_ic = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
@@ -289,6 +291,70 @@ def test_kelly_probation_probe_ignores_7d_block_cache():
     # Once the 30d probe cache clears the bar, the probe fires
     loop._ticker_ic_probe = {"AAPL": (0.15, TICKER_IC_MIN_N + 50)}
     assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_blocked_below_ensemble_floor():
+    """H9: a probe with ensemble_signal below KELLY_PROBE_MIN_ENSEMBLE is rejected.
+
+    Root case: SNDK id=104 entered during probation with ensemble=0.018 — pure
+    noise. The floor (0.10) prevents firing on tickers with near-zero composite
+    signal even when the ticker's IC passes the IC gate.
+    """
+    from src.agents.signal_loop import (
+        KELLY_MIN_TRADES, KELLY_PROBE_MIN_ENSEMBLE, TICKER_IC_MIN_N,
+    )
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+    # IC gate passes — the 30d cache has adequate positive IC
+    loop._ticker_ic_probe = {"SNDK": (0.12, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="SNDK", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = 0.018   # below floor (SNDK id=104 case)
+
+    assert not loop._sizing_entry_gate_open(sig), (
+        f"Probe should be blocked: ensemble={sig.ensemble_signal} < "
+        f"KELLY_PROBE_MIN_ENSEMBLE={KELLY_PROBE_MIN_ENSEMBLE}"
+    )
+
+
+def test_h9_probe_allowed_at_ensemble_floor():
+    """H9: a probe with ensemble_signal exactly at the floor is allowed."""
+    from src.agents.signal_loop import KELLY_MIN_TRADES, KELLY_PROBE_MIN_ENSEMBLE, TICKER_IC_MIN_N
+    loop = _make_loop()
+    loop._in_entry_window = lambda: True
+    loop._data_fresh = True
+    loop._sizing_recent_outcomes = [
+        (_stamp(1), -0.01) for _ in range(KELLY_MIN_TRADES + 2)
+    ]
+    loop._update_kelly()
+    assert loop._kelly_mode() == "probation"
+
+    loop._ticker_ic_probe = {"AAPL": (0.12, TICKER_IC_MIN_N + 50)}
+
+    sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
+    sig.lgbm_pred_return = 0.009
+    sig.lgbm_dir_prob = 0.62
+    sig.ensemble_signal = KELLY_PROBE_MIN_ENSEMBLE   # exactly at floor
+
+    assert loop._sizing_entry_gate_open(sig)
+
+
+def test_h9_probe_floor_constant_is_0_10():
+    """H9: constant sanity-check so a future edit requires an intentional override."""
+    from src.agents.signal_loop import KELLY_PROBE_MIN_ENSEMBLE
+    assert KELLY_PROBE_MIN_ENSEMBLE == 0.10, (
+        "KELLY_PROBE_MIN_ENSEMBLE changed without updating this test. "
+        "Verify the new value is intentional and update agent_state.json."
+    )
 
 
 def test_ticker_ic_gate_blocks_proven_negative():
@@ -1134,3 +1200,84 @@ def test_bars_held_recovery_is_not_reset_for_known_tickers():
 
     asyncio.run(loop._recover_entry_state())
     assert loop._bars_held["AAPL"] == 7
+
+
+# ── H27: Probe IC ladder diagnostic (2026-09-18) ─────────────────────────────
+
+def _mock_settings():
+    s = MagicMock()
+    s.alpaca_mode = "paper"
+    return s
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_empty_when_no_data(_gs):
+    """H27: probe_ic_count=0 and ladder=[] when _ticker_ic_probe is unpopulated."""
+    loop = _make_loop()
+    assert loop._ticker_ic_probe == {}
+    summary = loop.get_portfolio_summary()
+    assert summary["probe_ic_count"] == 0
+    assert summary["probe_ic_ladder"] == []
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_failing_reasons(_gs):
+    """H27: ladder correctly diagnoses n_too_small vs ic_too_low per ticker."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N, KELLY_PROBATION_MIN_TICKER_IC
+
+    loop = _make_loop()
+    loop._ticker_ic_probe = {
+        "AAPL": (0.03, TICKER_IC_MIN_N + 10),  # n ok, ic too low (0.03 < 0.05)
+        "MSFT": (0.12, TICKER_IC_MIN_N - 50),  # ic ok, n too small
+        "NVDA": (0.06, TICKER_IC_MIN_N + 5),   # eligible: ic >= 0.05, n >= 300
+    }
+    summary = loop.get_portfolio_summary()
+    assert summary["probe_ic_count"] == 3
+
+    ladder = summary["probe_ic_ladder"]
+    assert len(ladder) == 3
+
+    # Sorted by IC descending: MSFT(0.12) > NVDA(0.06) > AAPL(0.03)
+    assert ladder[0]["ticker"] == "MSFT"
+    assert ladder[0]["ic"] == 0.12
+    assert ladder[0]["failing_reason"] == "n_too_small"
+    assert not ladder[0]["eligible"]
+
+    assert ladder[1]["ticker"] == "NVDA"
+    assert ladder[1]["ic"] == 0.06
+    assert ladder[1]["failing_reason"] == "eligible"
+    assert ladder[1]["eligible"]
+
+    assert ladder[2]["ticker"] == "AAPL"
+    assert ladder[2]["ic"] == 0.03
+    assert ladder[2]["failing_reason"] == "ic_too_low"
+    assert not ladder[2]["eligible"]
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_truncates_at_20(_gs):
+    """H27: ladder is capped at 20 entries even with a large _ticker_ic_probe dict."""
+    loop = _make_loop()
+    loop._ticker_ic_probe = {f"T{i:02d}": (float(i) / 100, 50) for i in range(30)}
+
+    summary = loop.get_portfolio_summary()
+    assert summary["probe_ic_count"] == 30
+    assert len(summary["probe_ic_ladder"]) == 20
+    assert summary["probe_ic_ladder"][0]["ticker"] == "T29"
+    assert summary["probe_ic_ladder"][0]["failing_reason"] == "n_too_small"
+
+
+@patch("src.config.get_settings", return_value=_mock_settings())
+def test_h27_probe_ic_ladder_eligible_ticker_flagged(_gs):
+    """H27: an eligible ticker is marked eligible=True with failing_reason='eligible'."""
+    from src.agents.signal_loop import TICKER_IC_MIN_N, KELLY_PROBATION_MIN_TICKER_IC
+
+    loop = _make_loop()
+    loop._ticker_ic_probe = {
+        "VRT": (KELLY_PROBATION_MIN_TICKER_IC + 0.01, TICKER_IC_MIN_N + 100),
+    }
+    summary = loop.get_portfolio_summary()
+    entry = summary["probe_ic_ladder"][0]
+    assert entry["eligible"] is True
+    assert entry["failing_reason"] == "eligible"
+    assert entry["ticker"] == "VRT"

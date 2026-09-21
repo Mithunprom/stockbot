@@ -289,6 +289,13 @@ KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
+# Minimum ensemble signal for a Kelly-probation probe (H9, 2026-09-17).
+# SNDK id=104 entered with ensemble=0.018 during probation — pure noise.
+# Probe trades are already reduced in size; requiring a minimum ensemble floor
+# prevents firing on tickers where the composite signal is essentially zero.
+# Lower than the H12 sizing-mode floor (0.20) because probes are small and
+# the IC gate provides a second quality screen.
+KELLY_PROBE_MIN_ENSEMBLE: float = 0.10
 
 # Hard entry block on a MEASURED negative edge (2026-09-15).
 #
@@ -1078,6 +1085,38 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic_probe.items()
                 if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
+            # H27 (2026-09-18): full ladder of 30d IC per ticker, sorted by IC
+            # descending so near-misses appear first. Exposes WHY the probe
+            # deadlock exists: n_too_small means the prediction store isn't
+            # recording; ic_too_low means genuine poor signal on that ticker.
+            # Empty when Kelly is healthy (_ticker_ic_probe not populated).
+            "probe_ic_count": len(self._ticker_ic_probe),
+            "probe_ic_ladder": sorted(
+                [
+                    {
+                        "ticker": t,
+                        "ic": round(ic, 4),
+                        "n": n,
+                        "eligible": (
+                            n >= TICKER_IC_MIN_N
+                            and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                        ),
+                        "failing_reason": (
+                            "eligible"
+                            if (
+                                n >= TICKER_IC_MIN_N
+                                and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                            )
+                            else "n_too_small"
+                            if n < TICKER_IC_MIN_N
+                            else "ic_too_low"
+                        ),
+                    }
+                    for t, (ic, n) in self._ticker_ic_probe.items()
+                ],
+                key=lambda x: x["ic"],
+                reverse=True,
+            )[:20],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
@@ -1967,6 +2006,7 @@ class SignalLoop:
                 self._probation_entries_today < 1
                 and n >= TICKER_IC_MIN_N
                 and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                and float(sig.ensemble_signal) >= KELLY_PROBE_MIN_ENSEMBLE
             )
             if not probe_ok:
                 logger.debug(
@@ -1975,6 +2015,7 @@ class SignalLoop:
                     kelly=round(self._kelly_fraction, 4),
                     probes_used=self._probation_entries_today,
                     ticker_ic=round(ic, 3),
+                    ensemble=round(float(sig.ensemble_signal), 3),
                 )
                 return False
 
