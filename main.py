@@ -768,7 +768,14 @@ def _load_ffsa_features() -> list[str]:
 # GitHub raw / checkout — keep the exact format `APP_VERSION = "x.y.z"`.
 # v0.3.6 — watchdog agent + dashboard + external monitor. Entry/exit LOGIC
 # frozen; measurement clock continues from v0.3.5.
-APP_VERSION = "0.6.2"
+#
+# v0.7.0 — train/serve skew fix + feature pipeline v2 + retrained model, with
+# the correlation guards and exit calibration that bound the damage when
+# selection goes wrong. This CHANGES WHAT THE BOT BUYS: live entries were
+# landing at the ~46th percentile of the model's own ranking because the live
+# feature path could not reproduce the training path. The M2 measurement clock
+# RESETS here — no statistic from the v0.6.x window carries forward.
+APP_VERSION = "0.7.0"
 
 app = FastAPI(
     title="StockBot API",

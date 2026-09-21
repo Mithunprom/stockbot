@@ -21,3 +21,12 @@ __pycache__/
 !/models/tcn/step_001472_sharpe_5.217.pt
 /models/transformer/*
 !/models/transformer/step_000555_sharpe_5.201.pt
+
+# LightGBM: ship only the promoted v2 checkpoint. Every older checkpoint was
+# trained under feature pipeline v1, and LGBMSignalModel.load() now refuses a
+# version mismatch — so carrying them costs ~55MB of the <100MB upload budget
+# to ship models that cannot be loaded. They stay in git; they just don't deploy.
+/models/lgbm/*
+!/models/lgbm/lgbm_ic_0.1830.pkl
+!/models/lgbm/lgbm_ic_0.1830.json
+!/models/lgbm/reference_distributions.json

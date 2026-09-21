@@ -466,8 +466,32 @@ async def prune_old_data() -> dict[str, int]:
     now = datetime.now(timezone.utc)
     results: dict[str, int] = {}
 
+    # Archive feature rows BEFORE deleting them. `feature_matrix` is kept for
+    # only 3 days, which is far too short to train on — the archive is where the
+    # real training set lives (see feature_archive). If archiving fails we skip
+    # the feature_matrix prune entirely: losing a day of disk is recoverable,
+    # losing a day of irreplaceable training data is not.
+    skip: set[str] = set()
+    try:
+        from src.data.feature_archive import archive_pending
+
+        archive = await archive_pending()
+        results["feature_matrix_archived_rows"] = archive.rows_written
+        if not archive.ok:
+            skip.add("feature_matrix")
+            logger.error(
+                "retention_skipping_feature_matrix_prune_archive_failed",
+                errors=archive.errors,
+            )
+    except Exception as exc:
+        skip.add("feature_matrix")
+        logger.error("retention_archive_unavailable_skipping_prune", error=str(exc))
+
     async with engine.begin() as conn:
         for table, time_col, keep_days in _RETENTION_POLICIES:
+            if table in skip:
+                results[table] = 0
+                continue
             cutoff = now - timedelta(days=keep_days)
             try:
                 r = await conn.execute(
