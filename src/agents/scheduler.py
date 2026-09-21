@@ -18,6 +18,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from src.config import get_settings
+
 logger = structlog.get_logger(__name__)
 
 
@@ -291,7 +293,11 @@ def create_scheduler(
         )
 
     # ── Forecast Email Agent: daily 07:00 ET (pre-market) Mon–Fri ─────────────
-    if forecast_agent is not None:
+    # Opt-in via FORECAST_EMAIL_ENABLED. Informational only — no strategy code
+    # reads it — so it stays unscheduled unless explicitly switched on. Halt,
+    # integrity and news-risk alerts are unaffected; they are separate jobs that
+    # merely share the recipient list.
+    if forecast_agent is not None and get_settings().forecast_email_enabled:
         scheduler.add_job(
             forecast_agent.run,
             trigger=CronTrigger(

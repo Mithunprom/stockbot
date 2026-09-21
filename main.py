@@ -780,7 +780,7 @@ def _load_ffsa_features() -> list[str]:
 # each filled entry sat in the model's own cross-section and surfaces a rolling
 # mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
 # near 46 and nothing reported it.
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.7.3"
 
 app = FastAPI(
     title="StockBot API",
