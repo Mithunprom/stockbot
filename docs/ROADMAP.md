@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-09-14 W38 program review (v0.6.2 deployed; M2 n=110 PF=0.857 GATE MISSED — Kelly -0.6661 probation recovering; 12 new trades Sep 10-11 (7W/5L, net -$450); H24 deadline Sep 12 MISSED — PRs #51-54 still open; H25 cluster PRs #56-57 added; H14/H15 33d stale; Railway worker week 13).
+Last updated: 2026-09-21 W39 program review (v0.7.0 DEPLOYED — train/serve skew fixed, model retrained, sector guards fail-closed, exit barriers live, Kelly block functional; M2 RETIRED (was measuring broken infra); M3 starts n=0 today; Kelly inactive 0.0; W39: 0 new trades; Railway worker week 14).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -34,100 +34,96 @@ change (research: IC at 390 bars = 0.004, edge gone; backtest PF@30 = 4.55 vs 0.
 Prior M2 stats (PF=0.636@n=35) measured a broken strategy and are retired. New M2 window
 starts from v0.6.0 deploy. Bot resumed Aug 6.
 
-**M2 status (Sep 14):** n=110, PF=0.857, WR=44.5% (49W/1T/60L), net -$804.19, exp -$7.31/trade.
-🚨 GATE MISSED — PF=0.857 DECLINING (was 0.926 at W37). T30 PF=0.265 (IDs 207–236, 10W/20L).
-Sep 10-11: 12 new trades (7W/5L, net -$449.58). Aug 31 losses rolled off Kelly window Sep 10
-(calendar-day basis); bot traded without H24 guard live — cap respected (6/day), no double-batch.
-Sep 11: LITE -$428 at ensemble=0.191 with zero stop protection (H14 unmerged 33d). All 110 exits
-via max_hold. Kelly -0.6661 (probation, recovering from -5.3731). Next window transition ~Sep 20-21
-— H24 still unmerged. PM recommendation: reset M2 gate after merging H14+H15+H24+H25 structural
-fixes; measuring on broken infrastructure conflates strategy quality with infrastructure failure.
+**M2 RETIRED (Sep 21):** n=110, PF=0.857, WR=44.5% (49W/1T/60L), net -$804.19. RETIRED — was
+measuring a bot with corrupted feature serving (OBV session-anchoring bug; entries at ~46th
+pctile of model's own ranking vs top decile). v0.7.0 fixed root cause. M2 data is an infra
+failure case study, NOT strategy evidence.
+
+**M3 starts Sep 21** at n=0 on v0.7.0. Key early signal: `entry_rank_mean` ≥85 at /diagnostics.
+Kelly inactive (0.0, n=6 in window). ETA for n=100 gate: ~Sep 25–Oct 6 at ~5 trades/day.
 
 ## Milestones
 
 | ID | Milestone | Gate | Status |
 |----|-----------|------|--------|
-| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~66 days (Jul 10–Sep 14); watchdog OK; no outages or halts |
-| M2 | Measured edge on new config | PF ≥ 1.2 at n ≥ 100 closed trades on v0.6.0 | 🔴 **GATE MISSED** — n=110, PF=0.857 DECLINING. Sep 10-11: 12 trades 7W/5L net -$450. All 110 exits via max_hold (H14 stops unmerged 33d). Kelly -0.6661 probation. TPM recommends M2 reset after structural fixes merged. |
-| M3 | H1 cross-sectional validation | Backtest improves BOTH tune + hold-out legs | 🔴 BLOCKED — Railway worker not enabled. H1 draft PR #7 ready. Week 10. |
-| M4 | H5/H3/H2/H4 validation (data runs) | Same walk-forward standard | 🔴 BLOCKED — Railway worker not enabled. 13+ hypotheses total blocked. Week 10. |
-| M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M2 |
+| M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~73 days (Jul 10–Sep 21); watchdog OK; no outages or halts |
+| M2 | Measured edge (v0.6.0) | PF ≥ 1.2 at n ≥ 100 on v0.6.0 | 🏁 **RETIRED** — n=110, PF=0.857; was measuring broken feature serving pipeline. v0.7.0 deployed Sep 21. |
+| M3 | Measured edge (v0.7.0) | PF ≥ 1.2 at n ≥ 100 on v0.7.0 | 🟡 **STARTS TODAY** — n=0, deployed Sep 21. Watch entry_rank_mean ≥85 on first session. ETA ~Sep 25–Oct 6. |
+| M4 | H1/H5/H3/H2/H4 validation (data runs) | Walk-forward backtest standard | 🔴 BLOCKED — Railway worker not enabled. 15+ hypotheses total blocked. Week **14**. |
+| M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M3 |
 | M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
 ## Current Single Bottleneck (TPM)
 
 **Railway worker service** (`python agent_worker.py`, env `AGENT_WORKER_ENABLE=true`
-+ Alpaca paper keys). Blocks M3, M4, and CODE RED exit (data_run criterion).
-Outstanding **13 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
++ Alpaca paper keys). Blocks M4 and CODE RED exit (data_run criterion).
+Outstanding **14 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
 
 All 15+ hypothesis validations (H0–H12+) blocked behind this single action.
 
-**SECOND BOTTLENECK: PRs #35/#36 (H15/H14) 33 days stale.** Sep 11: LITE -$428 with no stop
-protection — direct, measurable cost of H14 sitting unreviewed. Daily cap circumventable on any
-restart (H15). PRs #31/#32 (H13) are 41 days stale. Open PR backlog: ~30 (2 new H25 PRs added;
-H24 still unmerged after Sep 12 deadline).
+**OPERATIONAL FOCUS (not a program blocker, but highest priority to watch):**
+`entry_rank_mean` on first v0.7.0 fills. Must read ≥85 to confirm skew fix is live. A reading near
+50 means the fix did not hold — stop trading immediately and diagnose.
 
-**THIRD BOTTLENECK: H24 cluster (PRs #51–#54) — Sep 12 deadline MISSED, still open.**
-Trades resumed Sep 10-11 without guard; next Kelly window transition ~Sep 20-21 is the next risk.
-H25 cluster (PRs #56-57) provides deeper systemic guard — also unreviewed.
+**SECOND BOTTLENECK: ~30 open PRs, 14 weeks zero net strategy merges.**
+PR #35 (H15) 38d stale — daily trade cap circumventable on restart. H24 (PRs #51–#54) still
+unmerged (structural Kelly boundary fix). PRs #31/#32 (H13 halt-aware exits) 45d stale.
+**~5 PRs now superseded by v0.7.0** (PR #36, PR #62, PRs #42/#48) and should be closed.
 
 ## Freeze Status (TPM-enforced)
 
-- **Strategy FROZEN at v0.6.0** since 2026-08-02. No strategy merges until n=100 closed
-  trades on v0.6.0 (max_hold=30) or a walk-forward-validated backtest justifies an exception.
+- **Strategy FROZEN at v0.7.0** since 2026-09-21. No strategy merges until n=100 closed
+  trades on v0.7.0 or a walk-forward-validated backtest justifies an exception.
 - Bug fixes, infra, monitoring always exempt.
-- **PR #36 (H14: horizon-scaled ATR exits)** — FREEZE-EXEMPT. Corrects _atr_exits() stops
-  that are 3.6× too wide for 30-bar holds. All 49 v0.6.0 exits via max_hold because
-  SL/trail/TP floors never fire. Merge recommended.
-- **PR #35 (H15: persist n_trades_today)** — FREEZE-EXEMPT. Fixes risk-control enforcement:
-  daily trade cap resets to 0 on restarts, circumventing the cap. Aug 10–12 had excess trades.
-  Merge recommended.
-- **PR #38 (H16: ENTRY_WINDOW_ET 15:30→15:28 ET)** — FREEZE-EXEMPT CANDIDATE. Prevents
-  entries whose 30-bar max_hold exit lands at market close. Owner to classify before merge.
-- **PR #39 (H17: diagnostic short-block)** — FREEZE-EXEMPT. Diagnostics-only; no trade logic.
-- **H24 cluster (PRs #51, #52, #53, #54)** — FREEZE-EXEMPT. Risk-control fixes for Kelly window
-  boundary defect that caused Aug 31 structural failure. All four must merge before ~Sep 12.
-  - PR #52: Kelly rolloff probation guard (blocks full-sizing when window has n<10 trades)
-  - PR #53: Intraday session realized-loss entry halt ($400 daily guard)
-  - PR #51: Cap per-entry notional when Kelly window inactive (n<10)
-  - PR #54: Persist probation_entries_today across restarts
-- v0.6.0 deployed: max_hold 390→30, MAX_HOLD_EXTENSIONS 2→0, SIZING_STAGNATION_BARS 390→30.
-  224 tests. STRATEGY CHANGE — M2 clock resets to Aug 2, 2026.
-- v0.6.1 deployed: resume-persistence fix (not a strategy change).
-- v0.6.2 deployed: universe-rotation zombie fix — _owned_tickers now persists positions
-  regardless of screener membership. Revealed portfolio_heat blind spot ($12.6k / 12.9%
-  deployed and invisible during MSCI zombie).
-- Draft PRs queued: #7 (H1), #9 (H5 phase needs re-scope for 30-bar), #10 (H2+H6),
-  #11 (H7 needs re-scope: stagnation_bars=30=max_hold now), #26 (H11), #29 (H12).
-- H5 (hold extension) disabled in prod (MAX_HOLD_EXTENSIONS=0); needs re-evaluation
-  under 30-bar horizon.
-- H7 (stagnation exits) needs re-scoping: stagnation_bars now equals max_hold (both 30).
-- Non-draft PRs #25 (PROD_PARAMS) and #27 (H9+H10) ready to merge.
+- **PR #35 (H15: persist n_trades_today)** — FREEZE-EXEMPT. Daily trade cap resets to 0 on
+  restarts, circumventing the cap. 38 days stale. Merge recommended.
+- **H24 cluster (PRs #51, #52, #53, #54)** — FREEZE-EXEMPT. Kelly boundary structural fixes.
+  Kelly now "inactive" (fraction=0.0) — less urgent than Sep 20-21 scenario, but structural
+  fix still owed before Kelly builds under M3. Merge recommended.
+- **H25 cluster (PRs #56, #57)** — FREEZE-EXEMPT. Systemic Kelly guard.
+- **PR #65 (H28: entry-spread timer)** — FREEZE-EXEMPT. Risk-control enhancement.
+- **SUPERSEDED by v0.7.0 — CLOSE RECOMMENDED:**
+  - PR #36 (H14 ATR exits) — incorporated in v0.7.0
+  - PR #62 (H27 sector map) — superseded by fail-closed sector resolution
+  - PRs #42/#48 (H19/H22 sector completeness) — superseded by fail-closed sector resolution
+- v0.7.0 deployed Sep 21: feature pipeline v2 (OBV session-anchored, WARMUP_BARS 300→1950),
+  feature version guard, feature archive + backfill, retrained model (OOS IC15=0.1795),
+  fail-closed sector guards, working exit barriers, functional Kelly block, entry_rank monitor.
+  STRATEGY CHANGE — M3 clock resets to Sep 21, 2026.
+- v0.7.1: entry_rank fields surfaced at /diagnostics.
+- v0.7.2: diagnostics fix (entry_rank export).
+- v0.7.3: forecast email opt-in.
+- Draft PRs queued: #7 (H1), #9 (H5 phase needs re-scope), #10 (H2+H6), #11 (H7 re-scope),
+  #26 (H11), #29 (H12). All blocked on Railway worker for data runs.
+- Non-draft PRs #25 (PROD_PARAMS) and #27 (H9+H10) — may be superseded by v0.7.0; triage.
 
 ## Risk Register
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| H24 cluster — Sep 12 deadline MISSED; PRs #51–#54 still open; next transition ~Sep 20-21 | **CRITICAL** | Merge all 4 immediately; H25 (#56/#57) provides additional systemic guard |
-| Railway worker not running — CODE RED exit + 15+ validations blocked | **CRITICAL** | Week 13; ~10 min owner action in Railway dashboard |
-| PR #36 (H14) not merged — stops dead code (33d stale); LITE -$428 Sep 11 | **CRITICAL** | All 110 M2 exits via max_hold; every trade is pure max_hold risk. Merge now. |
-| PR #35 (H15) not merged — daily cap circumventable on restart (33d stale) | **CRITICAL** | Structural risk on any restart; merge now. |
-| M2 PF=0.857@n=110 declining — gate missed, no recovery path without structural fixes | **CRITICAL** | TPM recommendation: reset M2 window after H14+H15+H24+H25 merged and deployed |
-| Kelly probation -0.6661 — Sep 10-11 trades in window; rolls off Sep 20-21 without guard | **CRITICAL** | H24 must be live before Sep 20 open; H25 as additional layer |
-| LITE -$428 Sep 11 (ensemble=0.191, no stop) — PR backlog cost is now measurable | **HIGH** | H12 floor (PR #29, ensemble≥0.20) + H14 (stops) would have mitigated this |
-| H25 PRs #56/#57 unreviewed — systemic Kelly guard not live | **HIGH — NEW** | Freeze-exempt; both ready for review |
-| Halt-aware exits not merged (PRs #31/#32) | **HIGH** | 41d stale; owner must choose #31 or #32 and merge |
-| PR #43 (H18b SPY session gate) freeze classification outstanding | **HIGH** | Strategy change candidate; must not merge during M2 freeze |
-| PR #41 (H18a Gate 5c) vs H12 (PR #29) overlap | **HIGH** | Disambiguation needed before either merges |
-| ~30 open PRs with 0 code merges W37/W38 — debt accelerating | **HIGH** | 13th week of zero structural PR activity |
-| Hypothesis accumulation without validation | **MED** | 15+ queued, 0 data runs in 13 weeks (Railway worker) |
+| entry_rank_mean not yet observable — skew fix unconfirmed in prod | **CRITICAL — NEW** | Watch first v0.7.0 session; halt if reading ~50 |
+| H24 cluster (PRs #51–#54) — Kelly boundary structural fix not merged | **HIGH** | Kelly now "inactive" (0.0) + hard Kelly block in v0.7.0; structural fix still recommended |
+| H25 cluster (PRs #56–#57) — systemic Kelly guard not merged | **HIGH** | Freeze-exempt; merge recommended |
+| PR #35 (H15) not merged — daily cap circumventable on restart (38d stale) | **HIGH** | Structural risk on any restart; merge now |
+| Railway worker not running — CODE RED exit + 15+ validations blocked | **CRITICAL** | Week 14; ~10 min owner action in Railway dashboard |
+| ~30 open PRs, 14 weeks zero net strategy merges | **HIGH** | ~5 PRs superseded by v0.7.0 — triage and close |
+| Halt-aware exits not merged (PRs #31/#32) | **HIGH** | 45d stale; owner must choose #31 or #32 |
+| PR #43 (H18b SPY gate) freeze classification outstanding | **MED** | Strategy change candidate; must not merge during M3 freeze |
+| PR #41 (H18a Gate 5c) vs H12 (PR #29) overlap | **MED** | Disambiguation needed before either merges |
 | H5 + H7 need re-scoping for 30-bar horizon | **MED** | Re-scope before Railway runs |
+| Hypothesis accumulation without validation | **MED** | 15+ queued, 0 data runs in 14 weeks (Railway worker) |
+| **RESOLVED** Train/serve skew — ✅ v0.7.0 Sep 21 | — | — |
+| **RESOLVED** PR #36 (H14 dead stops) — ✅ incorporated in v0.7.0 | — | — |
+| **RESOLVED** Kelly block hardcoded False — ✅ fixed in v0.7.0 | — | — |
+| **RESOLVED** M2 gate — ✅ RETIRED (measuring broken infra) | — | — |
+| **RESOLVED** Kelly probation -0.6661 — ✅ inactive 0.0 (Sep 20-21 rolloff) | — | — |
 | **RESOLVED** Bot HALTED — ✅ Halt lifted Aug 6 | — | — |
 | **RESOLVED** MSCI zombie (id 119, 14d open) — ✅ Closed Aug 10 via v0.6.2 | — | — |
-| **RESOLVED** Sentinel CRITICAL stale_open_rows — ✅ ALL GREEN continuing Sep 14 | — | — |
+| **RESOLVED** Sentinel CRITICAL stale_open_rows — ✅ ALL GREEN continuing | — | — |
 
 ## Decision Log
 
+- 2026-09-21: W39 program review — ✅ v0.7.0 DEPLOYED (merged Sep 21 05:45 UTC). ROOT CAUSE DIAGNOSED AND FIXED: train/serve skew (OBV session-anchoring, WARMUP_BARS 300→1950). Entries were at ~46th pctile of model's own ranking vs top decile (measured). v0.7.0: feature pipeline v2, version guard, feature archive (99 sessions), retrained model (OOS IC15=0.1795), fail-closed sector guards (24→57 tickers), working exit barriers, functional Kelly block, entry_rank monitor. M2 RETIRED (was measuring broken infra). M3 starts today n=0. Kelly: -0.6661 → inactive 0.0 (Sep 20-21 rolloff). Integrity ALL GREEN Sep 21. W39: 0 new trades. Railway worker week 14. 6 owner decisions needed. Report: reports/program/2026-W39.md.
 - 2026-09-14: W38 program review — 🔴 M2 DECLINING: n=110, PF=0.857 (was 0.926). Sep 10-11: 12 new trades 7W/5L, net -$449.58. Aug 31 losses rolled off Kelly window Sep 10 (calendar basis); bot resumed trading without H24 guard live. Sep 11: LITE -$428 at ensemble=0.191 with zero stop protection (H14 33d stale, H12 PR #29 not merged). Kelly -0.6661 (probation, recovering from -5.37). H24 deadline Sep 12 MISSED — PRs #51-54 still open; next window transition ~Sep 20-21. H25 cluster PRs #56-57 added (systemic Kelly guard: min unique days + cluster-day cap). All 110 exits via max_hold. ~30 open PRs, 0 code merges in 2 weeks. Railway worker week 13. TPM recommendation: reset M2 gate after merging H14+H15+H24+H25. Report: reports/program/2026-W38.md.
 - 2026-09-07: W37 program review — 🚨 M2 GATE MISSED. Aug 31 structural defect: Kelly window-empty condition fired 12 full-size entries (2 batches of 6 = H15 daily-cap-reset signature; all max_hold = H14 stops dead). Result: 2W/10L, net -$937.85. M2 PF collapsed 1.152→0.926 (below 1.0), net +$583→-$354, T30 PF=0.182 (worst on record). Kelly crashed -0.7343→-5.3731 (deep probation). Sep 1–5: 0 new trades. Sep 7: watchdog OK, fresh ticks, 0 open positions. Desk shipped 4 H24 PRs (#51–#54) addressing Kelly boundary defect — all freeze-exempt, must merge before ~Sep 12. Total open PRs: 30 (was 20). PR #35/#36 now 26d stale — their absence caused real harm Aug 31. Railway worker week 12. Owner gate-posture decision required: PF=0.926@n=98 is a gate failure; continue window or reset after structural fixes. Report: reports/program/2026-W37.md.
 - 2026-08-31: W36 program review — M2 v0.6.0: n=86 UNCHANGED (0 new trades W36, Kelly probation -0.7343). W36 (Aug 25-31): 0 closed trades — Kelly probation deadlock (was +0.2349 at W35). Probes also blocked per H21 PR #47. M2 gate ETA revised to ~Sep 8–10 (Kelly window rolls off ~Sep 4–5). Integrity Sentinel ALL GREEN Aug 31 12:25 UTC. Watchdog OK, v0.6.2, signal_loop_active, 0 errors, 0 open positions. Diagnostics: 5 tickers pass gates (CRM/WDAY/ARM/AMD/COIN) but Kelly inactive blocks sizing. No strategy code shipped — freeze intact. New PRs: #46 (H20 Kelly ETA), #47 (H21 probe_ic_debug), #48 (H22 MNST sector fix), #49 (H23 Kelly rolloff schedule). Total open PRs: 20 (was 16). Railway worker week 11 — sole CODE RED exit blocker. PR #36 (H14) and #35 (H15) now 19d stale; upgraded H14 to CRITICAL (stops must be live when Kelly recovers). Report: reports/program/2026-W36.md.
