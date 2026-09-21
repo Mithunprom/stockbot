@@ -156,6 +156,17 @@ class LGBMSignalModel:
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         path = path or MODEL_DIR / f"lgbm_ic_{self.val_ic:.4f}.pkl"
 
+        from datetime import datetime, timezone
+
+        from src.features.indicators import FEATURE_PIPELINE_VERSION
+
+        # `trained_at` is REQUIRED, not decorative: _select_checkpoint orders by
+        # it and sorts checkpoints without it OLDEST. Omitting it here meant
+        # every model RetrainAgent ever produced was structurally unpromotable —
+        # of the ten checkpoints on disk in 2026-09, exactly one carried the
+        # field, and that is the one production had been pinned to since July.
+        trained_at = datetime.now(timezone.utc).isoformat()
+
         data = {
             "regressor": self.regressor,
             "classifier": self.classifier,
@@ -163,6 +174,8 @@ class LGBMSignalModel:
             "train_ic": self.train_ic,
             "val_ic": self.val_ic,
             "val_dir_acc": self.val_dir_acc,
+            "trained_at": trained_at,
+            "feature_pipeline_version": FEATURE_PIPELINE_VERSION,
         }
         with open(path, "wb") as f:
             pickle.dump(data, f)
@@ -175,6 +188,8 @@ class LGBMSignalModel:
                 "val_ic": self.val_ic,
                 "val_dir_acc": self.val_dir_acc,
                 "n_features": len(self.feature_cols),
+                "trained_at": trained_at,
+                "feature_pipeline_version": FEATURE_PIPELINE_VERSION,
             }, f, indent=2)
 
         return path
@@ -236,6 +251,8 @@ class LGBMSignalModel:
         with open(path, "rb") as f:
             data = pickle.load(f)
 
+        cls._check_pipeline_version(path, data.get("feature_pipeline_version"))
+
         model = cls(feature_cols=data["feature_cols"])
         model.regressor = data["regressor"]
         model.classifier = data["classifier"]
@@ -243,6 +260,44 @@ class LGBMSignalModel:
         model.val_ic = data.get("val_ic", 0.0)
         model.val_dir_acc = data.get("val_dir_acc", 0.0)
         return model
+
+    @staticmethod
+    def _check_pipeline_version(path: Path, trained_version: int | None) -> None:
+        """Refuse a model trained against different feature SEMANTICS.
+
+        A mismatch here is silent by nature: every feature still computes, the
+        model still predicts, and the only symptom is that the predictions stop
+        ranking correctly. Between 2026-07 and 2026-09 that cost a measured
+        1.3 points of return per trade while every health check stayed green.
+
+        A checkpoint with no recorded version is treated as v1, because every
+        checkpoint written before this field existed was trained on the v1
+        definitions. That is deliberate and it fails CLOSED: shipping the v2
+        feature pipeline without also retraining will refuse to load a model
+        rather than quietly serve it the wrong inputs.
+
+        Refusing to load leaves the ensemble without a LightGBM signal, so the
+        bot produces no entries. For a trading system that is the correct
+        failure mode — not trading is always recoverable.
+        """
+        from src.features.indicators import FEATURE_PIPELINE_VERSION
+
+        if trained_version is None:
+            logger.warning(
+                "lgbm_checkpoint_missing_pipeline_version — assuming v1: %s",
+                path.name,
+            )
+            trained_version = 1
+
+        if int(trained_version) != FEATURE_PIPELINE_VERSION:
+            raise ValueError(
+                f"Feature pipeline mismatch for {path.name}: model was trained "
+                f"on feature definitions v{trained_version}, but this process "
+                f"computes v{FEATURE_PIPELINE_VERSION}. Serving it would feed "
+                f"the model an input distribution it has never seen. Retrain "
+                f"against v{FEATURE_PIPELINE_VERSION} "
+                f"(scripts/train_lgbm.py) or pin an older build."
+            )
 
 
 def load_best_checkpoint() -> LGBMSignalModel | None:

@@ -63,9 +63,11 @@ def test_heat_ceiling_blocks_new_size():
 
 def test_h27_live_universe_tickers_are_mapped():
     """Every ticker confirmed in the live trade ledger (Aug–Sep 2026) must be in
-    SECTOR_MAP so it is subject to sector heat caps instead of bypassing them via
-    the default 'other' slot.  Root: PCG, INTC, LITE, GS, COIN all appeared in
+    SECTOR_MAP so it is subject to sector heat caps instead of landing in
+    UNMAPPED_SECTOR.  Root: PCG, INTC, LITE, GS, COIN all appeared in
     live diagnostics/ledger without a sector assignment.
+    Note: CIEN is in 'semis' per the fail-closed rewrite (photonics/optical
+    shares the semiconductor demand cycle intraday).
     """
     from src.execution.position_sizer import SECTOR_MAP
 
@@ -79,7 +81,7 @@ def test_h27_live_universe_tickers_are_mapped():
         "GS": "financials",
         "COIN": "financials",
         "MSCI": "financials",
-        "CIEN": "tech",
+        "CIEN": "semis",  # optical networking — semis demand cycle per fail-closed rewrite
         "WDAY": "tech",
         "CRM": "tech",
         "MNST": "consumer",   # H22
@@ -101,17 +103,18 @@ def test_h27_live_universe_tickers_are_mapped():
         )
 
 
-def test_h27_pcg_not_in_other_bucket():
-    """PCG (utilities) must resolve to 'utilities', not the 'other' default that
-    bypasses per-sector caps.  Sep-17 diagnostics confirmed PCG qualifies for entry
-    and would have fired without sector protection if Kelly exits probation.
+def test_h27_pcg_not_unmapped():
+    """PCG (utilities) must resolve to 'utilities', not UNMAPPED_SECTOR.
+    Sep-17 diagnostics confirmed PCG qualifies for entry and would have fired
+    without sector protection if Kelly exits probation.
     """
-    from src.execution.position_sizer import SECTOR_MAP
+    from src.execution.position_sizer import SECTOR_MAP, UNMAPPED_SECTOR
     assert SECTOR_MAP.get("PCG") == "utilities"
+    assert SECTOR_MAP.get("PCG") != UNMAPPED_SECTOR
 
 
 def test_h27_no_unmapped_recent_tickers_bypass_cap():
-    """Verify that sizing PCG/INTC/LITE uses their correct sector, not 'other'.
+    """Verify that sizing PCG/INTC/LITE uses their correct sector, not UNMAPPED_SECTOR.
     A sector_notionals dict with 40% in each of their sectors should block entry
     (sector_cap = 40%), confirming they are subject to the cap.
     """
