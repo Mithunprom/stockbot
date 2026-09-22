@@ -86,6 +86,7 @@ SIZING_REVERSAL_BARS = 45
 SIZING_MAX_TRADES_PER_DAY = 6       # swing cadence: supports 6 position slots
 SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
+ENTRY_SPREAD_MINS: int = 10         # min minutes between any two new entries (H28)
 
 # Health bar for where a filled entry sits in the model's own cross-sectional
 # ranking. The v0.6.x window averaged ~46 (indistinguishable from random) because
@@ -604,6 +605,9 @@ class SignalLoop:
         self._sizing_n_trades_today: int = 0
         self._ticker_cooldown: dict[str, int] = {}  # ticker → bars remaining
         self._exit_fail_cooldown: dict[str, int] = {}  # ticker → bars before exit retry
+        # H28: timestamp of the most recent confirmed new entry (UTC). Reset at
+        # session open so each day starts with a free first-entry window.
+        self._last_any_entry_at: datetime | None = None
 
         # Per-ticker ATR cache (refreshed each tick from feature_matrix)
         self._ticker_atr: dict[str, float] = {}
@@ -1079,6 +1083,11 @@ class SignalLoop:
                 if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
+            "entry_spread_mins": ENTRY_SPREAD_MINS,
+            "last_any_entry_at": (
+                self._last_any_entry_at.isoformat()
+                if self._last_any_entry_at else None
+            ),
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
@@ -1937,6 +1946,22 @@ class SignalLoop:
             logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)
             return False
 
+        # Gate 1.5 (H28): Portfolio entry spread timer — minimum wall-clock gap
+        # between any two new position entries. Prevents burst-cluster entries
+        # that share the same macro moment (Sep 11 / Aug 31 2026 post-mortems).
+        if self._last_any_entry_at is not None:
+            elapsed_mins = (
+                datetime.now(timezone.utc) - self._last_any_entry_at
+            ).total_seconds() / 60.0
+            if elapsed_mins < ENTRY_SPREAD_MINS:
+                logger.debug(
+                    "sizing_entry_spread_pending",
+                    ticker=ticker,
+                    elapsed_mins=round(elapsed_mins, 1),
+                    required_mins=ENTRY_SPREAD_MINS,
+                )
+                return False
+
         # Gate 2: Per-ticker cooldown
         cooldown_remaining = self._ticker_cooldown.get(ticker, 0)
         if cooldown_remaining > 0:
@@ -2612,6 +2637,7 @@ class SignalLoop:
                     self._sizing_n_trades_today += 1
                     if self._kelly_mode() == "probation":
                         self._probation_entries_today += 1
+                    self._last_any_entry_at = datetime.now(timezone.utc)  # H28
                 await self._write_trade_entry(
                     ticker=ticker,
                     sig=sig,
@@ -2997,6 +3023,7 @@ class SignalLoop:
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
             self._probation_entries_today = 0
+            self._last_any_entry_at = None  # H28: open entry window at session start
             self._ticker_cooldown.clear()
             self._pdt_deferred_logged.clear()
             self._prune_kelly_window()

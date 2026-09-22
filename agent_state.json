@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 14). v0.7.0 DEPLOYED Sep 21. M2 RETIRED (was measuring broken feature-serving pipeline). M3 starts n=0 today. Kelly INACTIVE (fraction=0.0, n=6 in window). Entry_rank_mean not yet observable — first v0.7.0 fills pending. W39 program review complete 2026-09-21.",
- "last_iteration_date": "2026-09-21",
- "active_hypothesis": "✅ v0.7.0 DEPLOYED (Sep 21 05:45 UTC). ROOT CAUSE: train/serve skew — OBV session-anchoring + WARMUP_BARS 300→1950. Entries were at ~46th pctile of model's own ranking vs top decile. v0.7.0 ships: feature pipeline v2, feature version guard, feature archive (99 sessions backfilled), retrained model (OOS IC15=0.1795, dir_acc=0.5605), fail-closed sector guards (24→57 tickers), working exit barriers (H14 deployed), functional Kelly block, entry_rank monitor (healthy ≥85). M2 RETIRED. M3 starts today n=0. Kelly: -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff, n_trades=6). W39: 0 new trades. Watchdog OK Sep 21 12:10 UTC. Integrity ALL GREEN Sep 21 11:25 UTC. H24/H25 still open. Railway worker BLOCKED week 14.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 14). v0.7.0 DEPLOYED Sep 21. M2 RETIRED (was measuring broken feature-serving pipeline). M3 starts n=0 today. Kelly INACTIVE (fraction=0.0, n=6 in window). Entry_rank_mean not yet observable — first v0.7.0 fills pending. W39 program review complete 2026-09-21. H28 (PR #65 entry-spread timer) still open — not yet merged.",
+ "last_iteration_date": "2026-09-22",
+ "active_hypothesis": "✅ v0.7.0 DEPLOYED (Sep 21 05:45 UTC). ROOT CAUSE: train/serve skew — OBV session-anchoring + WARMUP_BARS 300→1950. Entries were at ~46th pctile of model's own ranking vs top decile. v0.7.0 ships: feature pipeline v2, feature version guard, feature archive (99 sessions backfilled), retrained model (OOS IC15=0.1795, dir_acc=0.5605), fail-closed sector guards (24→57 tickers), working exit barriers (H14 deployed), functional Kelly block, entry_rank monitor (healthy ≥85). M2 RETIRED. M3 starts today n=0. Kelly: -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff, n_trades=6). W39: 0 new trades. Watchdog OK Sep 21 12:10 UTC. Integrity ALL GREEN Sep 21 11:25 UTC. H24/H25 still open. Railway worker BLOCKED week 14. ⚠️ H28 (PR #65): entry-spread timer Gate 1.5 — merge conflict resolved Sep 22; PR still open, not yet merged into main.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -275,6 +275,18 @@
    "priority": "HIGH — merge soon. Trade cap is currently ineffective across deploys."
   },
   {
+   "id": "H28",
+   "hypothesis": "Entry clustering amplifies macro-correlated losses. Sep 11: 6 entries in 2 minutes (13:40–13:42 UTC), net -$449.58. Aug 31: 12 entries in 10 minutes, net -$938. When all daily slots fill in a single macro moment, wins and losses are correlated — one bad open accounts for all loss. A minimum wall-clock gap between any two consecutive new entries (ENTRY_SPREAD_MINS=10 min) spreads the 6 daily slots over ≥50 minutes instead of 2, preserving all-day exposure while preventing full-budget correlation on a single macro move.",
+   "status": "implemented — PR #65 open (Sep 19, freeze-exempt risk-control enhancement)",
+   "added": "2026-09-19",
+   "added_by": "nightly desk — post-mortem pattern of Sep 11 + Aug 31 entry clustering in live trade data",
+   "pr_branch": "feat/rnd-H28-entry-spread-timer",
+   "pr_number": 65,
+   "pr_state": "OPEN — freeze-exempt: pure temporal risk control. Gate 1.5 in _sizing_entry_gate_open(). ENTRY_SPREAD_MINS=10 constant. 5 unit tests pass. Does not change WHICH entries qualify, only throttles WHEN consecutive entries fire. Complements H24/H25 (Kelly boundary) and H27 (sector map).",
+   "priority": "HIGH — merge before Sep 22. Addresses structural clustering risk alongside H24/H25/H27.",
+   "pm_priority": -4
+  },
+  {
    "id": "H27",
    "hypothesis": "SECTOR_MAP completeness — comprehensive superset of H19 (PR #42) and H22 (PR #48). 13 tickers confirmed in the live trade ledger (Aug–Sep 2026) were missing from SECTOR_MAP and bypassing per-sector heat caps via the 'other' default bucket. Sep-17 diagnostics confirmed PCG, INTC, and LITE are currently qualifying for entry. Adds: INTC/LITE/KLAC/LRCX/AMAT (semis), CIEN/WDAY/CRM (tech), GS/COIN/MSCI (financials), MNST (consumer, H22), PCG (utilities — new sector), RTX (industrials — new sector).",
    "status": "implemented — PR #62 open (Sep 18, freeze-exempt structural correctness fix)",
@@ -465,6 +477,17 @@
    "files_changed": [
     "docs/ROADMAP.md",
     "reports/program/2026-W39.md",
+    "agent_state.json"
+   ]
+  },
+  {
+   "date": "2026-09-19",
+   "hypothesis_id": "H28",
+   "result": "IMPLEMENTED — Entry spread timer (Gate 1.5, ENTRY_SPREAD_MINS=10). Addresses burst-cluster entry pattern: Sep 11 6 entries in 2min (net -$449), Aug 31 12 entries in 10min (net -$938). Added constant ENTRY_SPREAD_MINS=10, instance var _last_any_entry_at, Gate 1.5 in _sizing_entry_gate_open(), update on fill, reset at daily boundary. Also added tests/unit/conftest.py (stub env vars enabling signal_loop tests to run). 5 new H28 unit tests pass. Total 200 pass / 4 pre-existing sandbox-dep failures (pandas, yfinance not installed). PR #65 opened (feat/rnd-H28-entry-spread-timer). Freeze-exempt: pure temporal risk control. Merge conflict resolved Sep 22 — rebased onto v0.7.0 main.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_signal_loop.py",
+    "tests/unit/conftest.py",
     "agent_state.json"
    ]
   },
@@ -664,9 +687,10 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER MONITOR — CRITICAL — TODAY] Watch entry_rank_mean at /diagnostics on first v0.7.0 fills. Healthy ≥85. If reading ~50, halt trading and notify desk immediately — means skew fix did not hold.",
+  "[OWNER MONITOR — CRITICAL — TODAY] Watch entry_rank_mean at /diagnostics on first v0.7.0 fills. Healthy \u226585. If reading ~50, halt trading and notify desk immediately — means skew fix did not hold.",
+  "[OWNER ACTION — HIGH] Merge PR #65 (H28: entry-spread timer, ENTRY_SPREAD_MINS=10). FREEZE-EXEMPT. Prevents burst-cluster entries: Sep 11 all 6 entries in 2min net -$449; Aug 31 12 entries in 10min net -$938. Merge conflict resolved Sep 22; PR rebased on v0.7.0 main.",
   "[OWNER ACTION — CRITICAL, WEEK 14] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 14 consecutive weeks outstanding since Jul 15.",
-  "[OWNER ACTION — HIGH] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly now 'inactive' (0.0) — less urgent than Sep 20 scenario, but structural guard should land before Kelly builds under M3.",
+  "[OWNER ACTION — HIGH] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly now 'inactive' (0.0) — structural guard should land before Kelly builds under M3.",
   "[OWNER ACTION — HIGH] Merge H25 cluster PRs #56, #57 (systemic Kelly guard). Both freeze-exempt.",
   "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT. Daily cap circumventable on any restart. 38 days stale.",
   "[OWNER ACTION — HIGH] Merge PR #31 or #32 (H13 halt-aware exits). Owner must choose variant. 45 days stale.",
