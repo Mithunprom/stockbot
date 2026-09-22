@@ -1127,6 +1127,12 @@ async def diagnostics() -> JSONResponse:
                 probe_budget_left and sig.ticker in probe_eligible
             )
 
+            # H28: flag entries whose composite ensemble disagrees with the
+            # trade direction (positive ensemble = net bullish; long entries
+            # should only fire when ensemble_signal > 0). SNDK (Sep 21 2026)
+            # entered long with ensemble=-0.069 — lgbm/dir_prob passed their
+            # gates while negative sentiment dragged the composite negative.
+            ensemble_direction_ok = float(sig.ensemble_signal) > 0
             gate_analysis.append({
                 "ticker": sig.ticker,
                 "ensemble_signal": round(float(sig.ensemble_signal), 4),
@@ -1135,6 +1141,7 @@ async def diagnostics() -> JSONResponse:
                 "passes_pred_return_gate": passes_pred,
                 "passes_dir_prob_gate": passes_dir,
                 "passes_both_gates": passes_both,
+                "ensemble_direction_ok": ensemble_direction_ok,
                 "would_trade": passes_both and not cooldown_active and not probation_block,
                 "blocked_by": (
                     []
@@ -1143,12 +1150,17 @@ async def diagnostics() -> JSONResponse:
                     + (["ticker_cooldown"] if cooldown_active else [])
                     + (["kelly_probation"] if probation_block else [])
                     + (["managed_heat_too_high"] if summary.get("managed_heat", 0) >= 0.80 else [])
+                    + (["ensemble_direction_inconsistent"] if not ensemble_direction_ok and passes_both else [])
                 ),
             })
 
-        # Count how many signals pass vs fail
+        # Count how many signals pass vs fail; count direction inconsistencies
         n_pass = sum(1 for g in gate_analysis if g["passes_both_gates"])
         n_fail = len(gate_analysis) - n_pass
+        n_direction_anomalies = sum(
+            1 for g in gate_analysis
+            if g["passes_both_gates"] and not g["ensemble_direction_ok"]
+        )
 
         return {
             "active": True,
@@ -1195,6 +1207,14 @@ async def diagnostics() -> JSONResponse:
             "signal_gate_analysis": gate_analysis,
             "signals_passing": n_pass,
             "signals_blocked": n_fail,
+            # H28: how many passing-gate signals have ensemble_signal <= 0
+            # (composite disagrees with trade direction). Non-zero = a guard
+            # gap: H18a (PR #41) would block these before they become entries.
+            "signal_direction_anomalies": n_direction_anomalies,
+            # Clarify: kelly_mode stays "probation" even when the hard block
+            # fires (fraction ≤ KELLY_HARD_BLOCK_THRESHOLD). This field makes
+            # the distinction explicit so readers know probes are also blocked.
+            "kelly_hard_blocked": summary.get("kelly_entries_blocked", False),
         }
 
     primary_label = getattr(_signal_loop, "_pipeline_id", "pipeline_a")
