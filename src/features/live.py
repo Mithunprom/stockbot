@@ -28,7 +28,24 @@ from src.features.indicators import compute_indicators
 logger = structlog.get_logger(__name__)
 
 # Enough bars for longest indicator (EMA-50, VPIN-50) to fully warm up.
-WARMUP_BARS = 300
+# Warmup must be long enough that every feature compute_indicators() produces is
+# identical to what the training/backtest path produces over full history.
+#
+# 300 was not. Measured 2026-09-16 over 320 paired (ticker, bar) samples, 11 of
+# the model's 30 features disagreed between the two paths, and the resulting
+# predictions had a Spearman rank agreement of only 0.36 with the
+# train-consistent ones — which is why production's entries landed at the ~46th
+# percentile of the model's true ranking instead of the top decile where the
+# edge is. See reports/research/loss_diagnosis_2026-09-16.md.
+#
+# Warmup alone could not close it (rank agreement plateaued at ~0.55) because
+# `obv` was anchored to the first bar of the window; that is fixed separately in
+# indicators._obv. With the anchoring fixed, this covers the remaining
+# longest-lookback features: the mtf_* family resamples to 15m and smooths with
+# Wilder EWM, which needs multiple sessions to converge.
+#
+# 1950 bars = 5 trading sessions.
+WARMUP_BARS = 1950
 FFSA_VERSION = "v1"
 
 

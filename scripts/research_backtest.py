@@ -393,7 +393,9 @@ def _is_confirmed_reversal_long(
 
 def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
              capital: float = 10_000.0) -> dict:
-    from src.execution.position_sizer import SmartPositionSizer, SECTOR_MAP
+    from src.execution.position_sizer import (
+        SmartPositionSizer, SECTOR_MAP, max_positions_for_sector, sector_of,
+    )
 
     sizer = SmartPositionSizer(mode="paper")
 
@@ -549,14 +551,16 @@ def simulate(preds: pd.DataFrame, p: Params, start: str, end: str,
                        for t, pos in positions.items()) / max(pv, 1.0)
             if heat >= p.heat_ceiling:
                 break
-            sector = SECTOR_MAP.get(r.ticker, "other")
-            n_sector = sum(1 for t in positions
-                           if SECTOR_MAP.get(t, "other") == sector)
-            if n_sector >= p.sector_cap_n:
+            # Fail-closed bucket resolution, identical to production. The old
+            # SECTOR_MAP.get(..., "other") default let the backtest model a
+            # correlation guard the live book never actually had.
+            sector = sector_of(r.ticker)
+            n_sector = sum(1 for t in positions if sector_of(t) == sector)
+            if n_sector >= min(p.sector_cap_n, max_positions_for_sector(sector)):
                 continue
             sector_notionals: dict[str, float] = {}
             for t, pos in positions.items():
-                s = SECTOR_MAP.get(t, "other")
+                s = sector_of(t)
                 sector_notionals[s] = sector_notionals.get(s, 0.0) + \
                     pos["qty"] * price_now.get(t, pos["last"])
             sizing = sizer.compute(
