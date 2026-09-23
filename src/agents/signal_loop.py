@@ -657,6 +657,12 @@ class SignalLoop:
         # (tracker is created after signal loop in main.py startup sequence)
         self._ic_tracker: Any | None = None
 
+        # H29: session-level exit reason distribution — incremented on every
+        # closed trade so /diagnostics can report how often each exit type fires.
+        # Resets on restart (intentional — shows current session's barrier activity).
+        from collections import Counter
+        self._exit_reason_counts: Counter[str] = Counter()
+
     def set_ic_tracker(self, tracker: Any) -> None:
         """Attach a LiveICTracker instance for prediction recording.
 
@@ -1102,6 +1108,10 @@ class SignalLoop:
                 "take_profit": SIZING_TAKE_PROFIT_FLOOR,
             },
             "ticker_atr": {t: round(a, 4) for t, a in self._ticker_atr.items()},
+            # H29: session-level exit reason counts. Resets on restart.
+            # Verifies that v0.7.0 ATR barriers (stop_loss, trailing_stop,
+            # take_profit) are firing; all-max_hold means barriers are dead.
+            "exit_reason_counts": dict(self._exit_reason_counts),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -2643,6 +2653,7 @@ class SignalLoop:
                 exit_reason = "signal_reversal"
                 if self._sizing_mode:
                     exit_reason = self._pending_exit_reasons.pop(ticker, "signal_reversal")
+                    self._exit_reason_counts[exit_reason] += 1
                     # Track outcome for recent win rate + Kelly computation
                     self._sizing_recent_outcomes.append(
                         (filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=timezone.utc), pnl_pct)
