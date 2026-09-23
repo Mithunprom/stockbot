@@ -1205,8 +1205,23 @@ class SignalLoop:
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
-            "exit_mode": "hold_window_vol",
-            "hold_window_bars": SIZING_MAX_HOLD_BARS,
+            # Report what the exit ladder is ACTUALLY doing, not the constants
+            # it used to use. This block previously hardcoded
+            # SIZING_MAX_HOLD_BARS, so after v0.8.0 it kept publishing the
+            # 30-bar geometry while the position ran on a session window —
+            # exactly the class of stale readout that hid the train/serve skew
+            # for two months.
+            "exit_mode": (
+                "profit_target" if EXIT_PROFIT_TARGET_MODE else "hold_window_vol"
+            ),
+            "hold_window_bars": _effective_hold_bars(),
+            "profit_target": {
+                "enabled": EXIT_PROFIT_TARGET_MODE,
+                "annual_vol_frac": PROFIT_TARGET_ANNUAL_VOL_FRAC,
+                "stop_to_target": STOP_TO_TARGET_RATIO,
+                "trail_to_target": TRAIL_TO_TARGET_RATIO,
+                "backstop": "session_close" if EXIT_PROFIT_TARGET_MODE else "max_hold",
+            },
             # Multiples are in sigma OF THE HOLDING WINDOW (H14). The *_dvol
             # equivalents are published alongside so a reader can see what each
             # barrier is worth in daily sigma, the unit the old keys used.
@@ -1215,7 +1230,7 @@ class SignalLoop:
                 "trailing_stop_hvol": SIZING_TRAILING_HVOL_MULT,
                 "take_profit_hvol": SIZING_TAKE_PROFIT_HVOL_MULT,
                 "hold_window_scale": round(
-                    math.sqrt(SIZING_MAX_HOLD_BARS / _BARS_PER_SESSION), 4
+                    math.sqrt(_effective_hold_bars() / _BARS_PER_SESSION), 4
                 ),
                 "catastrophic_stop_mult": CATASTROPHIC_STOP_MULT,
             },
