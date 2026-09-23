@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 14). v0.7.0 DEPLOYED Sep 21. M2 RETIRED (was measuring broken feature-serving pipeline). M3 starts n=0 today. Kelly INACTIVE (fraction=0.0, n=6 in window). Entry_rank_mean not yet observable — first v0.7.0 fills pending. W39 program review complete 2026-09-21.",
- "last_iteration_date": "2026-09-21",
- "active_hypothesis": "✅ v0.7.0 DEPLOYED (Sep 21 05:45 UTC). ROOT CAUSE: train/serve skew — OBV session-anchoring + WARMUP_BARS 300→1950. Entries were at ~46th pctile of model's own ranking vs top decile. v0.7.0 ships: feature pipeline v2, feature version guard, feature archive (99 sessions backfilled), retrained model (OOS IC15=0.1795, dir_acc=0.5605), fail-closed sector guards (24→57 tickers), working exit barriers (H14 deployed), functional Kelly block, entry_rank monitor (healthy ≥85). M2 RETIRED. M3 starts today n=0. Kelly: -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff, n_trades=6). W39: 0 new trades. Watchdog OK Sep 21 12:10 UTC. Integrity ALL GREEN Sep 21 11:25 UTC. H24/H25 still open. Railway worker BLOCKED week 14.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 15). v0.7.3 live. M3 ACTIVE n=11 (1 session, Sep 21). Kelly HARD-BLOCKED (-0.2699 ≤ -0.25). entry_rank_mean=96.9 ✅ (skew fix confirmed). Recovery ~Oct 1. Sep 23 nightly review complete 2026-09-23.",
+ "last_iteration_date": "2026-09-23",
+ "active_hypothesis": "H29 IMPLEMENTED (Sep 23). Adds session-level exit_reason_counts to /diagnostics. Motivation: STX (Sep 21) exited via stop_loss — first ever ATR barrier exit under v0.7.0. exit_reason_counts gives real-time proof that barriers are live. 6 tests pass. M3 corrected: n=11, 3W/8L (PR #68 had n=10/2W/8L — missed ARM ID 237 +$426.19). PF=0.587. Kelly hard-blocked (-0.2699). entry_rank=96.9 (healthy). H28 (PR #68) still open with count error. Integrity ALL GREEN Sep 22. Watchdog OK Sep 22 23:06 UTC. Railway worker BLOCKED week 15.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -66,8 +66,21 @@
   "trailing_30_win_rate": 0.333,
   "trailing_30_net_pnl": -1494.23,
   "trailing_30_note": "IDs 207-236 (30 most recent closed trades under v0.6.x, Aug 21–Sep 11). 10W/20L, PF=0.265. FINAL v0.6.x T30 — all exits via max_hold (barriers dead code). Not carried forward; M3 (v0.7.0) window starts fresh today.",
-  "m3_v070_n": 0,
-  "m3_v070_note": "M3 measurement window starts Sep 21 2026 (v0.7.0 deploy). Gate: PF≥1.2@n≥100. Key early signal: entry_rank_mean ≥85 at /diagnostics on first fills. First trades pending (market opens ~13:30 UTC Sep 21).",
+  "m3_v070_n": 11,
+  "m3_v070_wins": 3,
+  "m3_v070_losses": 8,
+  "m3_v070_win_rate": 0.273,
+  "m3_v070_gross_profit": 468.33,
+  "m3_v070_gross_loss": 798.18,
+  "m3_v070_pf": 0.587,
+  "m3_v070_net_pnl": -329.85,
+  "m3_v070_expectancy_per_trade": -29.99,
+  "m3_v070_exit_distribution": {"max_hold": 10, "stop_loss": 1, "trailing_stop": 0, "take_profit": 0},
+  "m3_v070_entry_rank_mean": 96.9,
+  "m3_v070_entry_rank_n": 5,
+  "m3_v070_entry_rank_healthy": true,
+  "m3_v070_kelly_eod_sep21": -0.2699,
+  "m3_v070_note": "M3 Day 1 (Sep 21 2026): n=11 [corrected; PR #68 had n=10, missed ARM ID 237 +$426.19], 3W/8L, WR=27.3%, PF=0.587, net -$329.85. Index/Risk Quant veto: n=11 is pure noise — gate is PF≥1.2@n≥100. Double-batch: H15 bug (n_trades_today resets on restart) caused 11 trades vs cap=6 — batch1 IDs 237-242 (6 trades, 13:40 UTC), batch2 IDs 243-247 (5 trades, 17:01 UTC). entry_rank_mean=96.9 ✅ (skew fix confirmed on 5 fills; was 46th pctile under v0.6.x). EXIT BARRIER CONFIRMED: STX (ID 240) exited stop_loss at -3.36% — first non-max_hold exit in bot history. SNDK (ID 246) entered long with ensemble=-0.069 (negative composite) — second JNJ anomaly; H18a/H12 not live. Kelly ended day -0.2699 (hard-blocked). M3 window is structurally contaminated (H15 double-batch) until PR #35 merges.",
   "v070_note": "Sep 21 2026. STRATEGY CHANGE. Root cause fix: train/serve skew (OBV session-anchored, WARMUP_BARS 300→1950). Feature pipeline v2. Feature version guard (model refuses version mismatch — fail-closed). Feature archive + 99-session backfill (2026-04-22→09-11). Retrained model: val_ic 0.1830, dir_acc 0.5689; OOS IC15=0.1795, dir_acc=0.5605, per-ticker IC positive 100% of 75 tickers. Fail-closed sector guards: SECTOR_MAP 24→57 tickers, unknown→1 slot. Exit barriers deployed (H14): hold-window-scaled ATR (sqrt(30/390)=0.277), floors 0.25%/0.35%/0.35%, stop=2σ, TP/trail=3σ. Kelly entry block functional: KELLY_HARD_BLOCK_THRESHOLD=-0.25, exits unaffected, self-draining. Entry rank monitor: entry_rank_pctile per fill, entry_rank_mean/n/healthy at /diagnostics, healthy≥85. M3 clock resets.",
   "v071_note": "entry_rank_* fields surfaced at /diagnostics (were logged but not exported from whitelist).",
   "v072_note": "diagnostics export fix — entry_rank fields.",
@@ -102,6 +115,16 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H29",
+   "hypothesis": "Session-level exit reason distribution in /diagnostics: add exit_reason_counts (Counter: max_hold, stop_loss, trailing_stop, take_profit) to the diagnostics payload. Resets on restart (intentional — shows current session's barrier activity). Motivation: STX (ID 240, Sep 21 2026) exited via stop_loss — the first ATR barrier exit in bot history under v0.7.0. The counter gives operators a real-time signal that barriers are live. All-max_hold (like v0.6.x) would immediately flag a barrier regression.",
+   "status": "implemented — PR pending (Sep 23 2026)",
+   "added": "2026-09-23",
+   "added_by": "nightly desk — STX stop_loss observation, first confirmed ATR barrier exit under v0.7.0",
+   "pr_branch": "feat/rnd-H29-exit-distribution",
+   "priority": "MEDIUM — diagnostic; freeze-exempt (no change to exit logic)",
+   "pm_priority": -5
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -459,6 +482,16 @@
  ],
  "completed_iterations": [
   {
+   "date": "2026-09-23",
+   "hypothesis_id": "H29_NIGHTLY_SEP23",
+   "result": "H29 IMPLEMENTED + M3 DAY 1 CORRECTION. ✅ entry_rank_mean=96.9 (n=5, healthy — skew fix confirmed). ✅ STX stop_loss exit confirmed — first ever ATR barrier exit, v0.7.0 barriers are live. 🚨 M3 COUNT CORRECTED: PR #68 had n=10/PF=0.053 — missed ARM (ID 237, +$426.19, first M3 trade). Correct: n=11, 3W/8L, PF=0.587. 🚨 Kelly hard-blocked: -0.2699 from 11 Sep 21 trades. H15 double-batch confirmed (6+5 trades vs cap=6). 🚨 SNDK negative ensemble: ensemble=-0.069 on long, second JNJ anomaly. H29 code: exit_reason_counts Counter added to SignalLoop.__init__(), incremented on every exit, exposed in _get_diagnostics(). 6 tests pass. Integrity ALL GREEN Sep 22. Watchdog OK Sep 22 23:06 UTC. Kelly recovery ~Oct 1 (Sep 21 trades roll off 10-day window).",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_h29_exit_distribution.py",
+    "agent_state.json"
+   ]
+  },
+  {
    "date": "2026-09-21",
    "hypothesis_id": "W39_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W39 weekly review complete. ✅ v0.7.0 DEPLOYED Sep 21 05:45 UTC. ROOT CAUSE: train/serve skew (OBV session-anchoring, WARMUP_BARS 300→1950). Entries at ~46th pctile of model's own ranking vs top decile (measured: top decile WR 86.7% PF 10.55; 46th pctile WR 33.3% PF 0.34; production matched to the decimal). v0.7.0: feature pipeline v2, version guard, feature archive (99 sessions), retrained model (OOS IC15=0.1795), fail-closed sector guards (24→57 tickers), working exit barriers (H14), functional Kelly block (was hardcoded False), entry_rank monitor. M2 RETIRED (was measuring broken infra). M3 starts n=0 today. Kelly: -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff, n_trades=6). W39: 0 new trades. Integrity ALL GREEN Sep 21. Watchdog OK. Railway worker week 14. 6 owner decisions needed.",
@@ -664,7 +697,11 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER MONITOR — CRITICAL — TODAY] Watch entry_rank_mean at /diagnostics on first v0.7.0 fills. Healthy ≥85. If reading ~50, halt trading and notify desk immediately — means skew fix did not hold.",
+  "[RESOLVED ✅] entry_rank_mean = 96.9 after 5 fills (Sep 21). Healthy ≥85 confirmed. Skew fix is holding.",
+  "[OWNER ACTION — CRITICAL] Merge PR #35 (H15: persist n_trades_today across restarts). CONFIRMED: Sep 21 had 11 trades (6+5 batches) vs cap=6 — H15 restart reset contaminated M3 Day 1. 43 days stale. Prevents Kelly hard-block recurrence from excess restart-batches.",
+  "[OWNER NOTE — PR #68] PR #68 (H28, Sep 22) contains a count error: m3_v070_n=10, PF=0.053 — missed ARM (ID 237, +$426.19). Correct M3 Day 1: n=11, 3W/8L, PF=0.587. Tonight's agent_state.json corrects these metrics.",
+  "[OWNER MONITOR] Kelly hard-blocked at -0.2699 (threshold -0.25). kelly_entries_blocked=true at /diagnostics. Recovery ETA ~Oct 1 (Sep 21 trades roll off 10-day window). DO NOT disable the hard block.",
+  "[OWNER ACTION — CRITICAL, WEEK 15] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). 15 consecutive weeks outstanding since Jul 15.",
   "[OWNER ACTION — CRITICAL, WEEK 14] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 14 consecutive weeks outstanding since Jul 15.",
   "[OWNER ACTION — HIGH] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly now 'inactive' (0.0) — less urgent than Sep 20 scenario, but structural guard should land before Kelly builds under M3.",
   "[OWNER ACTION — HIGH] Merge H25 cluster PRs #56, #57 (systemic Kelly guard). Both freeze-exempt.",
@@ -711,8 +748,8 @@
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
-   "kelly_window_sane": "⚠️ INACTIVE — Kelly fraction 0.0 (inactive, n=6 in window). Sep 20-21 rolloff occurred as predicted (n was 12, now 6 — partial rolloff). kelly_seed_sanity check OK (Integrity ALL GREEN Sep 21). Hard Kelly block in v0.7.0 (KELLY_HARD_BLOCK_THRESHOLD=-0.25) adds a layer. H24 (PRs #51-54) still unmerged. Structural boundary fix still recommended before Kelly builds under M3.",
-   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (14 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
+   "kelly_window_sane": "🚨 HARD-BLOCKED — Kelly fraction -0.2699 (below KELLY_HARD_BLOCK_THRESHOLD=-0.25). M3 Day 1 (Sep 21): 11 trades, 3W/8L, pushed Kelly from 0.0 to -0.2699. H15 double-batch contributed 5 extra trades. kelly_entries_blocked=true at /diagnostics Sep 22. Probes also blocked. Recovery: Sep 21 trades roll off ~Oct 1 (10-day lookback). Hard block is correct — do not disable. H24 (PRs #51-54) and H25 (PRs #56-57) still unmerged.",
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (15 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
   }
  }
 }
