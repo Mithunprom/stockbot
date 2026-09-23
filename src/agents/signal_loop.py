@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Coroutine
 
@@ -350,6 +351,30 @@ TICKER_IC_MIN_ENTRY = 0.0          # live IC must exceed this to enter (n≥MIN_
 # block gate keeps the 7d + `since` behavior (judging only the live incarnation).
 KELLY_PROBE_IC_WINDOW_DAYS = 30
 
+# ...and that widening was still not enough. Measured 2026-09-22, with the 30d
+# window live: max filled predictions on ANY ticker = 99, median 90, across 82
+# tickers and 6,426 filled predictions total. The "~600+/ticker" figure above
+# assumed a trading cadence the bot has never sustained. So the bar sat ~3x
+# above what the system can produce and `tickers_probe_eligible` was
+# structurally empty — the SAME deadlock recurred a fourth time (06-11, 06-30,
+# 09-11→09-20, 09-22).
+#
+# The real defect is that ONE constant served two opposite purposes:
+#
+#   IC-BLOCK gate    "don't ban a ticker unless the evidence is overwhelming"
+#                    -> a HIGH bar is correct. Keeps TICKER_IC_MIN_N.
+#   PROBE eligibility "only probe where the signal is proven"
+#                    -> a high bar is BACKWARDS. You cannot gather evidence
+#                       without trading and cannot trade without the evidence.
+#                       Circular by construction; the gate can only ever
+#                       tighten itself into a permanent freeze.
+#
+# Probation's job is to resume cautiously on the most promising names, not to
+# certify them. It already limits damage by size (KELLY_PROBATION_NOTIONAL,
+# ~$1.2k) and by count (1/day), so the sample bar only needs to be enough to
+# rank names sensibly — not enough to prove an edge.
+KELLY_PROBE_MIN_N = 30             # ~1/3 of the observed per-ticker maximum
+
 # PDT (Pattern Day Trader) protection — accounts under $25k get 3 day trades
 # per rolling 5 business days. A same-day round trip is a day trade, so the
 # default plan is to hold overnight; the day-trade budget is reserved for
@@ -387,6 +412,71 @@ def _hold_window_vol(daily_vol: float, hold_bars: int) -> float:
     return dv * math.sqrt(hold_bars / _BARS_PER_SESSION)
 
 
+FULL_SESSION_BARS = 390             # 09:30–15:59 ET
+
+# ── Owner-directed exit redesign (2026-09-22) ────────────────────────────────
+#
+# Requested: stop closing on a 30-minute timer; exit when the position has made
+# a move worth taking, sized as a fraction of the name's ANNUAL volatility.
+#
+# EXIT_PROFIT_TARGET_MODE swaps the primary exit from "the clock ran out" to
+# "the target was hit", and gives the trade the whole session to get there
+# instead of 30 bars.
+#
+# The timer is NOT removed, and that is deliberate rather than a hedge. An
+# unbounded hold is how this project produced the MSCI zombie (9 days open,
+# portfolio_heat reading 0.0 while 12.9% was deployed) and the Aug 3 stale-row
+# escalation. SIZING_MAX_HOLD_BARS becomes a SESSION BACKSTOP: the position
+# still cannot survive the close, so it can never carry overnight gap risk or
+# silently rot. Within the session the clock no longer decides anything.
+#
+# What the evidence says, stated plainly so the trade-off is on the record.
+# Measured over 108 real M2 entries against actual minute prices:
+#
+#     target   hit by bar 30   by bar 120   by bar 390
+#     +1.75%        7.4%         13.3%        22.4%
+#     +3.00%        3.7%          7.6%        14.3%
+#
+# At a 40% annual vol, 5% of vol is a +2.0% target — reached by roughly a fifth
+# of trades within a session. So the backstop, not the target, will still close
+# the majority of positions. And the model's IC decays 0.173 (15 bars) -> 0.070
+# (120) -> 0.034 (390), so the later a trade exits the less of the model's edge
+# is carrying it. This mode trades measured edge for larger individual winners;
+# it is an owner decision, taken with that cost visible, and it is
+# instrumented (exit_reason distribution) so it can be judged on data.
+# Gated by env, defaulting OFF in code. This rewires the core exit ladder, and
+# the existing suite encodes lessons that were expensive to learn (short
+# covering, exits firing during a halt, H5 extension rules). Flipping the
+# default would have "fixed" 21 of those tests by deleting what they protect.
+# Production opts in with EXIT_PROFIT_TARGET_MODE=true; the tests for this mode
+# set it explicitly.
+EXIT_PROFIT_TARGET_MODE = os.environ.get(
+    "EXIT_PROFIT_TARGET_MODE", "false"
+).lower() == "true"
+PROFIT_TARGET_ANNUAL_VOL_FRAC = float(
+    os.environ.get("PROFIT_TARGET_ANNUAL_VOL_FRAC", "0.05")
+)   # 5% of annual vol (owner range: 5–10%)
+TRADING_DAYS_PER_YEAR = 252
+
+# Loss side, expressed against the target so reward:risk cannot invert.
+# A stop wider than the target needs an implausible win rate to break even
+# (5% stop vs 2% target => 71% required; measured directional accuracy ~56%).
+# 0.8 => risk 1.6% to make 2.0%, reward:risk 1.25, break-even win rate 44.4%.
+# Measured directional accuracy is ~56%, so this leaves ~12 points of margin
+# for the edge to decay before the geometry stops working. A symmetric 1.0
+# would put break-even at exactly 50% and leave none.
+STOP_TO_TARGET_RATIO = 0.8
+# Must stay WIDER than the stop. At 0.6 the trailing exit sat inside the stop,
+# so an ordinary pullback closed the trade before the stop could — re-creating
+# the early-exit behaviour this mode exists to remove.
+TRAIL_TO_TARGET_RATIO = 0.9
+
+
+def _annual_vol(daily_vol: float) -> float:
+    """Annualised volatility from a daily volatility ratio."""
+    return daily_vol * math.sqrt(TRADING_DAYS_PER_YEAR)
+
+
 def _atr_exits(
     daily_vol: float, hold_bars: int | None = None
 ) -> tuple[float, float, float]:
@@ -409,15 +499,48 @@ def _atr_exits(
     Returns:
         (stop_loss, trailing_stop, take_profit) as positive return fractions.
     """
-    bars = SIZING_MAX_HOLD_BARS if hold_bars is None else hold_bars
+    bars = _effective_hold_bars() if hold_bars is None else hold_bars
     hv = _hold_window_vol(daily_vol, bars)
     sl = _clamp(hv * SIZING_STOP_LOSS_HVOL_MULT,
                 SIZING_STOP_LOSS_FLOOR, SIZING_STOP_LOSS_CAP)
     ts = _clamp(hv * SIZING_TRAILING_HVOL_MULT,
                 SIZING_TRAILING_STOP_FLOOR, SIZING_TRAILING_STOP_CAP)
-    tp = _clamp(hv * SIZING_TAKE_PROFIT_HVOL_MULT,
-                SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
+
+    if EXIT_PROFIT_TARGET_MODE:
+        # Owner-directed: the target is a fraction of ANNUAL volatility, so it
+        # means the same thing to a calm name and a volatile one — "a move worth
+        # taking for this stock" — rather than a fixed percentage that is
+        # trivial for MSTR and unreachable for XOM.
+        tp = _clamp(_annual_vol(daily_vol) * PROFIT_TARGET_ANNUAL_VOL_FRAC,
+                    SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
+
+        # Re-anchor the loss side to the target. Scaling the stop to a
+        # full-session sigma while the target is a fraction of annual vol put
+        # them badly out of proportion: at 2.5% daily vol the stop landed at
+        # 5.0% against a 1.98% target — risking 5 to make 2, which needs a 71%
+        # win rate merely to break even. The model's directional accuracy is
+        # ~56%, so that geometry loses money by construction no matter how good
+        # the signal is.
+        #
+        # Capping both at the target keeps reward:risk >= 1. The trailing stop
+        # is placed inside the target so a position that runs most of the way
+        # and turns over still banks something instead of round-tripping.
+        sl = min(sl, tp * STOP_TO_TARGET_RATIO)
+        ts = min(ts, tp * TRAIL_TO_TARGET_RATIO)
+    else:
+        tp = _clamp(hv * SIZING_TAKE_PROFIT_HVOL_MULT,
+                    SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP)
     return sl, ts, tp
+
+
+def _effective_hold_bars() -> int:
+    """Bars the position actually lives under.
+
+    In profit-target mode the 30-bar timer is not the exit — the target is — so
+    the position gets the full session and the barriers are scaled to that
+    window. The session bound itself always remains: nothing carries overnight.
+    """
+    return FULL_SESSION_BARS if EXIT_PROFIT_TARGET_MODE else SIZING_MAX_HOLD_BARS
 
 
 def _compute_daily_vols(tickers: list[str]) -> dict[str, float]:
@@ -1076,7 +1199,7 @@ class SignalLoop:
             # Kelly is in probation and this is empty, ALL entries are blocked.
             "tickers_probe_eligible": [
                 t for t, (ic, n) in self._ticker_ic_probe.items()
-                if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                if n >= KELLY_PROBE_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
@@ -1560,7 +1683,7 @@ class SignalLoop:
             ]
             probe_eligible = [
                 t for t, (ic, n) in self._ticker_ic_probe.items()
-                if n >= TICKER_IC_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
+                if n >= KELLY_PROBE_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ]
             logger.info(
                 "ticker_ic_refreshed",
@@ -1961,11 +2084,17 @@ class SignalLoop:
         # The probe uses the 30d IC cache (reachable across redeploys), NOT the
         # 7d block cache whose ~250-sample ceiling made n>=300 unsatisfiable and
         # deadlocked the governor (2026-06-26 → 06-30 halt).
+        #
+        # It also uses KELLY_PROBE_MIN_N, not TICKER_IC_MIN_N: the 30d window
+        # tops out near 99 filled predictions per ticker in practice, so the
+        # n>=300 bar re-deadlocked the governor on 2026-09-22 even WITH the
+        # wider window. See the constant's definition for why a high bar is
+        # backwards here specifically.
         if self._kelly_mode() == "probation":
             ic, n = self._ticker_ic_probe.get(ticker, (0.0, 0))
             probe_ok = (
                 self._probation_entries_today < 1
-                and n >= TICKER_IC_MIN_N
+                and n >= KELLY_PROBE_MIN_N
                 and ic >= KELLY_PROBATION_MIN_TICKER_IC
             )
             if not probe_ok:
@@ -2208,25 +2337,49 @@ class SignalLoop:
 
         bars = self._bars_held.get(ticker, 0)
         if reason is None:
-            # Max hold (~1 trading day). H5: before forcing exit, check if the
-            # signal re-qualifies for an extension (up to MAX_HOLD_EXTENSIONS).
-            if bars >= SIZING_MAX_HOLD_BARS:
+            # In profit-target mode the clock is a SESSION BACKSTOP, not the
+            # exit rule: the position runs until it hits its target, its stop,
+            # or the session ends. `session_close` is logged distinctly from
+            # `max_hold` so the exit mix stays readable — if the backstop is
+            # still closing most trades, the target is set too far away and
+            # the mode is not doing what it was asked to do.
+            hold_cap = _effective_hold_bars()
+            if bars >= hold_cap:
                 if not self._maybe_extend_hold(ticker, sig, unrealized):
-                    reason = "max_hold"
+                    reason = "session_close" if EXIT_PROFIT_TARGET_MODE else "max_hold"
                 # else: extension granted — bars_held reset to 0; don't exit
-            # Stagnation: dead trade going nowhere — free up the capital
-            elif bars >= SIZING_STAGNATION_BARS and abs(unrealized) < SIZING_STAGNATION_PNL:
+            # Stagnation: dead trade going nowhere — free up the capital.
+            # Suppressed in profit-target mode: "flat after N bars" is exactly
+            # the early close the owner asked to stop doing, and a position
+            # sitting still is not costing anything beyond the slot.
+            elif (
+                not EXIT_PROFIT_TARGET_MODE
+                and bars >= SIZING_STAGNATION_BARS
+                and abs(unrealized) < SIZING_STAGNATION_PNL
+            ):
                 reason = "stagnation"
 
         if reason is None:
             # Signal reversal — N consecutive bars of CONFIRMED opposite signal
             # (tradeable quality, not just sign). See SIZING_REVERSAL_BARS note.
-            if self._confirmed_opposite_signal(sig, entry_dir):
-                self._reversal_counts[ticker] = self._reversal_counts.get(ticker, 0) + 1
-            else:
-                self._reversal_counts[ticker] = 0
-            if self._reversal_counts.get(ticker, 0) >= SIZING_REVERSAL_BARS:
-                reason = "signal_reversal"
+            #
+            # DORMANT since v0.6.0 purely as a side effect: SIZING_REVERSAL_BARS
+            # (45) exceeded the 30-bar hold, so the counter could never reach the
+            # threshold. Extending the hold to a full session would silently
+            # re-arm it — and reversal exits are the mechanism the 2026-07-07
+            # profitability diagnosis named as the #1 cause of truncated trades.
+            # Re-enabling an early-exit rule inside a change whose entire purpose
+            # is to STOP exiting early would be a regression dressed as an
+            # accident, so it stays off in this mode.
+            if not EXIT_PROFIT_TARGET_MODE:
+                if self._confirmed_opposite_signal(sig, entry_dir):
+                    self._reversal_counts[ticker] = (
+                        self._reversal_counts.get(ticker, 0) + 1
+                    )
+                else:
+                    self._reversal_counts[ticker] = 0
+                if self._reversal_counts.get(ticker, 0) >= SIZING_REVERSAL_BARS:
+                    reason = "signal_reversal"
 
         if reason is None:
             return None
