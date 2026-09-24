@@ -20,6 +20,7 @@ import asyncio
 import logging
 import math
 import os
+from collections import Counter
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Coroutine
 
@@ -94,6 +95,7 @@ MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (20
 # negative expectancy. Sustained readings below this mean train/serve skew is back.
 ENTRY_RANK_HEALTHY_PCTILE = 85.0
 ENTRY_RANK_WINDOW = 60              # rolling sample kept for /diagnostics
+EXIT_DIST_WINDOW = 50               # rolling exit-reason distribution window
 MAX_OPEN_POSITIONS = 6              # hard cap on concurrent positions
 PORTFOLIO_HEAT_CEILING = 0.75       # no new entries above 75% deployed
 # Correlation guard. The cap is now per-BUCKET rather than one global number,
@@ -771,6 +773,13 @@ class SignalLoop:
         # where the money went, and nothing in the system reported it.
         self._entry_ranks: Any = deque(maxlen=ENTRY_RANK_WINDOW)
 
+        # Rolling exit-reason distribution (last EXIT_DIST_WINDOW closes).
+        # Exported in /diagnostics as exit_distribution_recent so profit-target
+        # mode can be judged on the actual exit mix: take_profit leading means
+        # the mode is working; session_close dominating means the target is set
+        # too far away; stop_loss leading means the signal direction is wrong.
+        self._recent_exit_reasons: Any = deque(maxlen=EXIT_DIST_WINDOW)
+
         # PDT day-trade budget tracking (refreshed from broker)
         self._daytrade_count: int = 0
         self._pdt_refresh_countdown: int = 0
@@ -1238,6 +1247,13 @@ class SignalLoop:
                 "stop_loss": SIZING_STOP_LOSS_FLOOR,
                 "trailing_stop": SIZING_TRAILING_STOP_FLOOR,
                 "take_profit": SIZING_TAKE_PROFIT_FLOOR,
+            },
+            # Exit-reason distribution over the last EXIT_DIST_WINDOW closes.
+            # In profit-target mode: take_profit leading = working; session_close
+            # dominating = target too far; stop_loss leading = direction quality.
+            "exit_distribution_recent": {
+                "counts": dict(Counter(self._recent_exit_reasons)),
+                "n": len(self._recent_exit_reasons),
             },
             "ticker_atr": {t: round(a, 4) for t, a in self._ticker_atr.items()},
         }
@@ -2819,6 +2835,10 @@ class SignalLoop:
                         self._sizing_recent_outcomes = self._sizing_recent_outcomes[-50:]
                     self._update_kelly()
                     self._clear_sizing_state(ticker)
+                # Rolling exit-distribution — recorded for all exits (sizing
+                # and non-sizing) so the mix is visible at /diagnostics even
+                # when the system is in a non-standard mode.
+                self._recent_exit_reasons.append(exit_reason)
                 await self._write_trade_exit(
                     ticker=ticker,
                     fill_price=fill_price,
