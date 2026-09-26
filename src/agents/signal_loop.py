@@ -960,6 +960,20 @@ class SignalLoop:
 
         self._consecutive_losses = snap.consecutive_losses
 
+        # Restore entry-rank sample so /diagnostics reflects the true session
+        # history even after a patch deploy. The deque's maxlen enforces the
+        # rolling window cap; extend() respects it automatically.
+        if snap.entry_ranks:
+            self._entry_ranks.clear()
+            self._entry_ranks.extend(snap.entry_ranks)
+            logger.info(
+                "entry_ranks_restored",
+                pipeline=self._pipeline_id,
+                n=len(self._entry_ranks),
+                mean=round(sum(self._entry_ranks) / len(self._entry_ranks), 1)
+                     if self._entry_ranks else None,
+            )
+
         # Restore the halt LAST and only ever in the safe direction: a
         # persisted halt is re-applied, but a persisted "not halted" never
         # clears a halt this process already decided on. CLAUDE.md: resuming
@@ -1034,6 +1048,7 @@ class SignalLoop:
             halted=self._cb.is_halted,
             halt_reason=self._cb.halt_reason,
             halt_time=halt_time.isoformat() if halt_time else None,
+            entry_ranks=list(self._entry_ranks),
         ))
 
     def get_latest_signals(self) -> list[dict[str, Any]]:

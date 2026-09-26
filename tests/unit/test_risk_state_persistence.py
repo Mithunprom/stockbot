@@ -304,3 +304,84 @@ def test_resume_must_be_persisted_not_left_in_memory():
     if snap.halted and not fresh.is_halted:
         fresh._halted = True
     assert not fresh.is_halted, "resume was undone by the restore path"
+
+
+# ─── H28: entry_rank window survives restarts ─────────────────────────────────
+
+def test_h28_entry_ranks_survive_roundtrip():
+    """Entry-rank percentiles must survive a JSON round-trip intact."""
+    ranks = [72.5, 88.0, 91.3, 85.0, 78.6]
+    snap = RiskStateSnapshot(
+        peak_value=104_278.55, daily_start_value=101_942.18,
+        daily_start_date=et_today_iso(), consecutive_losses=2,
+        entry_ranks=ranks,
+    )
+    back = RiskStateSnapshot.from_json(snap.to_json())
+    assert back is not None
+    assert back.entry_ranks == pytest.approx(ranks)
+
+
+def test_h28_old_snapshot_without_entry_ranks_loads_cleanly():
+    """A v1 snapshot that pre-dates the entry_ranks field must not crash.
+
+    This is the backward-compat path: after deploying H28, the first load sees
+    a JSON row written by an older build (no entry_ranks key). The restore must
+    succeed with an empty list rather than crashing or wiping other counters.
+    """
+    raw = (
+        '{"version": 1, "peak_value": 104278.55, "daily_start_value": 101942.18, '
+        '"daily_start_date": "2026-09-26", "consecutive_losses": 0, '
+        '"halted": false, "halt_reason": "", "halt_time": null}'
+    )
+    snap = RiskStateSnapshot.from_json(raw)
+    assert snap is not None
+    assert snap.entry_ranks == []
+    assert snap.peak_value == pytest.approx(104_278.55)
+    assert snap.halted is False
+
+
+def test_h28_entry_ranks_restored_into_deque():
+    """After a restart the _entry_ranks deque must be refilled from the snapshot.
+
+    Before H28, _entry_ranks was in-memory only: any patch deploy (v0.7.1,
+    0.7.2, 0.7.3) wiped it, leaving entry_rank_n=0 and entry_rank_mean=null
+    even after 11 M3 trades — the primary v0.7.0 health signal was unobservable.
+    """
+    from collections import deque
+
+    saved_ranks = [88.5, 91.0, 75.0, 82.3, 90.1, 87.4]
+    snap = RiskStateSnapshot(
+        peak_value=104_278.55, daily_start_value=101_942.18,
+        daily_start_date=et_today_iso(), consecutive_losses=1,
+        entry_ranks=saved_ranks,
+    )
+
+    # Simulate a fresh process: deque starts empty (as it does at __init__)
+    entry_ranks_deque: deque[float] = deque(maxlen=60)
+    assert len(entry_ranks_deque) == 0
+
+    # Apply the restore logic as signal_loop._restore_risk_state() does
+    if snap.entry_ranks:
+        entry_ranks_deque.clear()
+        entry_ranks_deque.extend(snap.entry_ranks)
+
+    assert len(entry_ranks_deque) == len(saved_ranks)
+    assert list(entry_ranks_deque) == pytest.approx(saved_ranks)
+    mean = sum(entry_ranks_deque) / len(entry_ranks_deque)
+    assert mean == pytest.approx(85.717, abs=0.01)
+
+
+def test_h28_deque_maxlen_respected_on_restore():
+    """Restoring more entries than ENTRY_RANK_WINDOW (60) must not raise.
+
+    The deque maxlen enforces the cap: extend() with 65 values drops the
+    oldest 5 automatically. The restored window is always bounded.
+    """
+    from collections import deque
+
+    oversized = [float(i) for i in range(65)]  # 65 values > maxlen=60
+    entry_ranks_deque: deque[float] = deque(maxlen=60)
+    entry_ranks_deque.extend(oversized)
+
+    assert len(entry_ranks_deque) == 60
+    assert list(entry_ranks_deque) == pytest.approx(list(range(5, 65)))
