@@ -1,0 +1,5 @@
+{
+ "generated_at": "2026-09-26T10:56:26.205429+00:00",
+ "source": "github-actions live-snapshot relay",
+ "note": "Read-only mirror of production endpoints for cloud agents whose sandbox cannot reach Railway directly."
+}
