@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 14). v0.7.0 DEPLOYED Sep 21. M2 RETIRED (was measuring broken feature-serving pipeline). M3 starts n=0 today. Kelly INACTIVE (fraction=0.0, n=6 in window). Entry_rank_mean not yet observable — first v0.7.0 fills pending. W39 program review complete 2026-09-21.",
- "last_iteration_date": "2026-09-21",
- "active_hypothesis": "✅ v0.7.0 DEPLOYED (Sep 21 05:45 UTC). ROOT CAUSE: train/serve skew — OBV session-anchoring + WARMUP_BARS 300→1950. Entries were at ~46th pctile of model's own ranking vs top decile. v0.7.0 ships: feature pipeline v2, feature version guard, feature archive (99 sessions backfilled), retrained model (OOS IC15=0.1795, dir_acc=0.5605), fail-closed sector guards (24→57 tickers), working exit barriers (H14 deployed), functional Kelly block, entry_rank monitor (healthy ≥85). M2 RETIRED. M3 starts today n=0. Kelly: -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff, n_trades=6). W39: 0 new trades. Watchdog OK Sep 21 12:10 UTC. Integrity ALL GREEN Sep 21 11:25 UTC. H24/H25 still open. Railway worker BLOCKED week 14.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 15). v0.8.1 DEPLOYED (Sep 22-23). M3 n=11 (all Sep 21, Kelly hard-blocked since). Kelly PROBATION -0.2699 (entries blocked, rolloff ~Oct 1). entry_rank_n=0 → fixed by H28 (tonight). W40 nightly desk 2026-09-26.",
+ "last_iteration_date": "2026-09-26",
+ "active_hypothesis": "H28: persist _entry_ranks deque in RiskStateSnapshot so it survives patch deploys. Root event: v0.7.1/0.7.2/0.7.3 deployed Sep 21-22 reset the in-memory deque, leaving entry_rank_n=0 after 11 M3 fills — the primary v0.7.0 health signal was dark. Fix: add entry_ranks: list[float] field to RiskStateSnapshot with backward-compat default_factory=list. Restore into deque on startup. 4 new unit tests pass (roundtrip, backward-compat, deque-refill, maxlen-enforcement). Freeze-exempt: monitoring/observability only, no change to trade execution or sizing.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -21,11 +21,13 @@
   "integrity_sentinel_stale_rows": [],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
   "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
-  "watchdog_status": "OK — last tick 2026-09-21T12:11:00Z (fresh; pre-market Mon), 0 tick errors, no halt, v0.7.3, last_exit_at null (no v0.7.0 fills yet; market not yet open).",
+  "watchdog_status": "OK — last tick 2026-09-25T23:52:00Z (fresh), 0 tick errors, no halt. v0.8.1 running. last_exit_at null (no open positions; Kelly blocked new entries since Sep 21).",
+  "v080_note": "Sep 22 2026. TWO OWNER-DIRECTED CHANGES. (1) KELLY PROBATION FREEZE FIX: KELLY_PROBE_MIN_N=30 (was: reused TICKER_IC_MIN_N=300). Root cause: probe bar was 3x above what production can produce (max 99 fills/ticker, bar at 300) — fourth recurrence (06-11, 06-30, 09-11→09-20, 09-22). Fix separates the evidence requirements: IC-block uses TICKER_IC_MIN_N=300 (high bar, rarely fires), probe uses KELLY_PROBE_MIN_N=30 (enough to rank names). (2) PROFIT-TARGET EXITS (EXIT_PROFIT_TARGET_MODE, env-gated, default OFF): target=annual_vol*0.05, stop=0.8x target, trail=0.9x target. Session timer becomes backstop ('session_close'). Stagnation exits suppressed. Signal-reversal stays OFF. Geometry (daily_vol 2.5%): stop=1.59%, trail=1.79%, target=1.98%, R:R=1.25. 348 tests pass (mode off); 13 new tests exercise mode on.",
+  "v081_note": "Sep 22-23 2026. Diagnostics fix: report the exit ladder that is actually running.",
   "kelly_probation_note": "W39: Kelly -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff as predicted). n_trades=6 in window (partial rolloff; some Sep 10-11 trades remain). kelly_mode='inactive' = no measured edge, sizing in conservative mode. Hard Kelly block (v0.7.0 commit D, KELLY_HARD_BLOCK_THRESHOLD=-0.25) added — block would fire at ≤-0.25; currently at 0.0 so not blocking. H24 (PRs #51-54) and H25 (PRs #56-57) still unmerged — structural boundary fixes still recommended but less urgent now that Kelly is inactive vs probation.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
-  "deployed_version": "0.7.3",
+  "deployed_version": "0.8.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -66,8 +68,16 @@
   "trailing_30_win_rate": 0.333,
   "trailing_30_net_pnl": -1494.23,
   "trailing_30_note": "IDs 207-236 (30 most recent closed trades under v0.6.x, Aug 21–Sep 11). 10W/20L, PF=0.265. FINAL v0.6.x T30 — all exits via max_hold (barriers dead code). Not carried forward; M3 (v0.7.0) window starts fresh today.",
-  "m3_v070_n": 0,
-  "m3_v070_note": "M3 measurement window starts Sep 21 2026 (v0.7.0 deploy). Gate: PF≥1.2@n≥100. Key early signal: entry_rank_mean ≥85 at /diagnostics on first fills. First trades pending (market opens ~13:30 UTC Sep 21).",
+  "m3_v070_n": 11,
+  "m3_v070_win_rate": 0.273,
+  "m3_v070_pf": 0.587,
+  "m3_v070_gross_profit": 468.33,
+  "m3_v070_gross_loss": 798.18,
+  "m3_v070_net_pnl": -329.85,
+  "m3_v070_expectancy": -29.99,
+  "m3_v070_exit_distribution": {"stop_loss": 1, "max_hold": 10, "trailing_stop": 0, "take_profit": 0, "session_close": 0},
+  "m3_v070_note": "n=11, ALL Sep 21 (deploy day). PF=0.587 (3W/8L), net -$329.85. Kelly fraction -0.2699 → hard block (≤-0.25) → entries blocked since Sep 21. Rolloff ~Oct 1 (Sep 21 + 10-day window). IMPORTANT: (1) First-ever non-max_hold exit: STX (ID 240) via stop_loss -$408.33 — ATR barriers from H14/v0.7.0 ARE working. (2) SNDK (ID 246) entered with ensemble=-0.069 (NEGATIVE on BUY) — second instance after JNJ ID 163, H12/H18a needed. (3) 11 trades on one day vs cap=6: mid-day v0.7.1 deploy reset n_trades_today (H15 unmerged, PR #35, 38+ days stale). (4) entry_rank_n=0 across all 11 trades: deque wiped by v0.7.1/0.7.2/0.7.3 patch deploys. H28 (tonight) fixes this. Do NOT act on PF signal until n≥100.",
+  "m3_v070_kelly_block_eta": "~Oct 1 2026 (Sep 21 + 10d). After rolloff: Kelly inactive (n<10), conservative sizing, no hard block. Watch for first new entries on Oct 1 AM.",
   "v070_note": "Sep 21 2026. STRATEGY CHANGE. Root cause fix: train/serve skew (OBV session-anchored, WARMUP_BARS 300→1950). Feature pipeline v2. Feature version guard (model refuses version mismatch — fail-closed). Feature archive + 99-session backfill (2026-04-22→09-11). Retrained model: val_ic 0.1830, dir_acc 0.5689; OOS IC15=0.1795, dir_acc=0.5605, per-ticker IC positive 100% of 75 tickers. Fail-closed sector guards: SECTOR_MAP 24→57 tickers, unknown→1 slot. Exit barriers deployed (H14): hold-window-scaled ATR (sqrt(30/390)=0.277), floors 0.25%/0.35%/0.35%, stop=2σ, TP/trail=3σ. Kelly entry block functional: KELLY_HARD_BLOCK_THRESHOLD=-0.25, exits unaffected, self-draining. Entry rank monitor: entry_rank_pctile per fill, entry_rank_mean/n/healthy at /diagnostics, healthy≥85. M3 clock resets.",
   "v071_note": "entry_rank_* fields surfaced at /diagnostics (were logged but not exported from whitelist).",
   "v072_note": "diagnostics export fix — entry_rank fields.",
@@ -459,6 +469,19 @@
  ],
  "completed_iterations": [
   {
+   "date": "2026-09-26",
+   "hypothesis_id": "H28",
+   "result": "IMPLEMENTED — entry_rank window persistence (freeze-exempt monitoring fix). Root event: v0.7.1/0.7.2/0.7.3 patch deploys on Sep 21-22 reset the in-memory _entry_ranks deque, leaving entry_rank_n=0 and entry_rank_mean=null at /diagnostics after 11 M3 fills — the primary v0.7.0 health signal was unobservable for 5 days. Fix: added entry_ranks: list[float] field to RiskStateSnapshot (backward-compat: old snapshots without the field load cleanly via dataclass default). _persist_risk_state() now includes list(_entry_ranks). _restore_risk_state() refills the deque from snap on startup. 4 unit tests added (roundtrip, backward-compat, deque-refill, maxlen-enforcement). All pass. 1 pre-existing sandbox failure unchanged. PR branch: feat/rnd-H28-persist-entry-rank-window. M3 current state: n=11 PF=0.587 WR=27.3% net -$329.85. Kelly hard-blocked (fraction -0.2699 ≤ -0.25), rolloff ~Oct 1. First ATR stop_loss exit observed (STX). SNDK negative-ensemble BUY confirmed (second instance). v0.8.0/0.8.1 deployed (Kelly probe fix + profit-target exits env-gated off). Integrity ALL GREEN Sep 25. Watchdog OK Sep 25 23:52 UTC.",
+   "tests_status": "4 new H28 tests pass. Pre-existing: 19/20 risk_state tests pass; 1 fails on src.config import (sandbox, pre-existing, not H28).",
+   "files_changed": [
+    "src/risk/risk_state_store.py",
+    "src/agents/signal_loop.py",
+    "tests/unit/test_risk_state_persistence.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-H28-persist-entry-rank-window"
+  },
+  {
    "date": "2026-09-21",
    "hypothesis_id": "W39_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W39 weekly review complete. ✅ v0.7.0 DEPLOYED Sep 21 05:45 UTC. ROOT CAUSE: train/serve skew (OBV session-anchoring, WARMUP_BARS 300→1950). Entries at ~46th pctile of model's own ranking vs top decile (measured: top decile WR 86.7% PF 10.55; 46th pctile WR 33.3% PF 0.34; production matched to the decimal). v0.7.0: feature pipeline v2, version guard, feature archive (99 sessions), retrained model (OOS IC15=0.1795), fail-closed sector guards (24→57 tickers), working exit barriers (H14), functional Kelly block (was hardcoded False), entry_rank monitor. M2 RETIRED (was measuring broken infra). M3 starts n=0 today. Kelly: -0.6661 probation → inactive 0.0 (Sep 20-21 rolloff, n_trades=6). W39: 0 new trades. Integrity ALL GREEN Sep 21. Watchdog OK. Railway worker week 14. 6 owner decisions needed.",
@@ -664,8 +687,8 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER MONITOR — CRITICAL — TODAY] Watch entry_rank_mean at /diagnostics on first v0.7.0 fills. Healthy ≥85. If reading ~50, halt trading and notify desk immediately — means skew fix did not hold.",
-  "[OWNER ACTION — CRITICAL, WEEK 14] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 14 consecutive weeks outstanding since Jul 15.",
+  "[OWNER MONITOR — CRITICAL] entry_rank_mean still null (0 fills recorded). H28 (tonight's PR) fixes the deque persistence — entry_rank_n will populate after first Oct 1 fills survive a deploy. Healthy ≥85. If reading ~50, halt and notify immediately.",
+  "[OWNER ACTION — CRITICAL, WEEK 15] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 15 consecutive weeks outstanding since Jul 15.",
   "[OWNER ACTION — HIGH] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly now 'inactive' (0.0) — less urgent than Sep 20 scenario, but structural guard should land before Kelly builds under M3.",
   "[OWNER ACTION — HIGH] Merge H25 cluster PRs #56, #57 (systemic Kelly guard). Both freeze-exempt.",
   "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT. Daily cap circumventable on any restart. 38 days stale.",

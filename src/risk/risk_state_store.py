@@ -31,7 +31,7 @@ the pre-existing behaviour; the cost of failing closed would be an outage.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 import structlog
@@ -64,6 +64,12 @@ class RiskStateSnapshot:
     halted: bool = False
     halt_reason: str = ""
     halt_time: str | None = None   # ISO timestamp, UTC
+    # Entry-rank percentile window (ENTRY_RANK_WINDOW most recent fills).
+    # In-memory only before this field; restarts wiped the sample and left
+    # entry_rank_n=0 even after dozens of M3 trades. Backward-compat: old
+    # snapshots omit this key — from_json's field-filter skips it and the
+    # default empty list applies, so a rollback cannot crash.
+    entry_ranks: list[float] = field(default_factory=list)
     version: int = STATE_VERSION
 
     def to_json(self) -> str:
