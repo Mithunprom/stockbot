@@ -27,6 +27,6 @@ __pycache__/
 # version mismatch — so carrying them costs ~55MB of the <100MB upload budget
 # to ship models that cannot be loaded. They stay in git; they just don't deploy.
 /models/lgbm/*
-!/models/lgbm/lgbm_ic_0.1830.pkl
-!/models/lgbm/lgbm_ic_0.1830.json
+!/models/lgbm/lgbm_ic_0.2063.pkl
+!/models/lgbm/lgbm_ic_0.2063.json
 !/models/lgbm/reference_distributions.json
