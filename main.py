@@ -792,7 +792,7 @@ def _load_ffsa_features() -> list[str]:
 # each filled entry sat in the model's own cross-section and surfaces a rolling
 # mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
 # near 46 and nothing reported it.
-APP_VERSION = "0.8.2"
+APP_VERSION = "0.8.3"
 
 app = FastAPI(
     title="StockBot API",
@@ -1173,6 +1173,9 @@ async def diagnostics() -> JSONResponse:
             "kelly_mode": summary.get("kelly_mode", "inactive"),
             "kelly_entries_blocked": summary.get("kelly_entries_blocked", False),
             "kelly_n_trades": summary.get("kelly_n_trades", 0),
+            "kelly_epoch": summary.get("kelly_epoch"),
+            "kelly_hard_block_threshold": summary.get("kelly_hard_block_threshold"),
+            "kelly_entries_hard_blocked": summary.get("kelly_entries_hard_blocked"),
             "kelly_lookback_days": summary.get("kelly_lookback_days"),
             "probation_entries_today": summary.get("probation_entries_today", 0),
             # Train/serve skew watch — the percentile each filled entry occupied

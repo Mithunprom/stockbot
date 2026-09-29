@@ -324,6 +324,62 @@ KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal work
 # bounded, not permanent.
 KELLY_HARD_BLOCK_THRESHOLD = -0.25
 
+# ── Kelly epoch — outcomes before this do not count toward the governor ──────
+#
+# HUMAN DECISION, 2026-09-29, authorised by the owner after being shown the
+# trade-off explicitly. This is a deliberate bypass of a risk control and is
+# recorded as such.
+#
+# Situation: kelly_fraction sat at -0.2699 against a -0.25 hard block, so ALL
+# entries (probation probes included) were refused. Every one of the 11
+# outcomes in the window came from a single session, 2026-09-21, and those
+# trades ran with `rs_vwap_dev` zero-filled — a serving defect fixed the
+# following week in v0.8.2. The governor was therefore measuring a
+# configuration that no longer exists and would have held the bot out of the
+# market until the sample aged out on 2026-10-01.
+#
+# Owner chose to re-seed rather than wait. The counter-argument is on the
+# record and remains valid: those 11 trades did lose $329.84, n=11 is a tiny
+# sample either way, and "the edge was bad but we fixed it" is exactly the
+# reasoning that gets people hurt. The block would have expired by itself in
+# under two days at zero cost.
+#
+# WHY AN EPOCH RATHER THAN DELETING ROWS: the `trades` table is the audit
+# trail and the integrity sentinel reconciles against it — nothing here
+# removes or edits a single trade. This only changes which outcomes the
+# POSITION SIZER considers representative. History stays intact and the
+# decision stays visible.
+#
+# THIS DOES NOT WEAKEN THE CONTROL GOING FORWARD. Trades closed after the
+# epoch accumulate normally, and if the measured edge is genuinely negative
+# the hard block re-arms on the new sample (pinned by
+# tests/unit/test_kelly_epoch.py).
+#
+# DEFAULTS TO EMPTY — deliberately. The epoch is set in the deployment
+# environment (`KELLY_EPOCH` on Railway), not committed as a code default,
+# because:
+#   1. A one-off operational override should live in operational config where
+#      `railway variables` shows it, not disguised as a code constant that
+#      every future reader inherits silently.
+#   2. Baking a date in breaks every test that builds outcomes relative to
+#      "now" — they get pruned as pre-epoch, and the suite that guards this
+#      very control goes green for the wrong reason.
+#   3. Reverting is unsetting one variable.
+KELLY_EPOCH_ISO = os.environ.get("KELLY_EPOCH", "")
+
+
+def _kelly_epoch() -> datetime | None:
+    """Parse KELLY_EPOCH_ISO, or None when unset/invalid (no filtering)."""
+    raw = (KELLY_EPOCH_ISO or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        logger.warning("kelly_epoch_unparseable", value=raw)
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
 # 15/20 tickers — they are noise. The gate therefore requires a large sample
@@ -857,6 +913,13 @@ class SignalLoop:
         from src.data.db import Trade as _T
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=KELLY_LOOKBACK_DAYS)
+        # Never seed from before the epoch — those outcomes measured a
+        # configuration that no longer exists (see KELLY_EPOCH_ISO). Applied
+        # here as well as in _prune_kelly_window so a restart cannot quietly
+        # resurrect them from the ledger.
+        epoch = _kelly_epoch()
+        if epoch is not None and epoch > cutoff:
+            cutoff = epoch
         try:
             async with self._sf() as session:
                 query = (
@@ -1167,6 +1230,12 @@ class SignalLoop:
             "kelly_entries_blocked": self._kelly_entries_blocked(),
             "kelly_hard_block_threshold": KELLY_HARD_BLOCK_THRESHOLD,
             "kelly_n_trades": len(self._sizing_recent_outcomes),
+            # A bypassed risk control must be VISIBLE. When set, outcomes before
+            # this timestamp are excluded from the governor — see
+            # KELLY_EPOCH_ISO for who authorised it and why.
+            "kelly_epoch": KELLY_EPOCH_ISO or None,
+            "kelly_hard_block_threshold": KELLY_HARD_BLOCK_THRESHOLD,
+            "kelly_entries_hard_blocked": self._kelly_entries_blocked(),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
             # Train/serve skew watch. entry_rank_mean is the average percentile
@@ -1924,9 +1993,12 @@ class SignalLoop:
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
 
     def _prune_kelly_window(self) -> None:
-        """Drop outcomes older than the lookback window."""
+        """Drop outcomes older than the lookback window, or before the epoch."""
         from datetime import timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(days=KELLY_LOOKBACK_DAYS)
+        epoch = _kelly_epoch()
+        if epoch is not None and epoch > cutoff:
+            cutoff = epoch
         pruned = [
             (ts, p) for ts, p in self._sizing_recent_outcomes
             if ts is not None and ts >= cutoff
