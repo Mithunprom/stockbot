@@ -196,6 +196,30 @@ async def archive_pending(lookback_days: int = 7) -> ArchiveResult:
 
             df = pd.DataFrame.from_records(records)
 
+            # Refuse to archive a session whose rows lack CROSS-SECTIONAL
+            # features. They are model inputs (rs_vwap_dev is one of the
+            # deployed 30) and can only be produced by the universe path; a
+            # session written by a per-ticker code path has them missing, and
+            # training on a mix teaches the model that the feature is zero for
+            # most of history and real only recently — worse than either
+            # consistent state.
+            #
+            # This happened: 2026-09-28 was archived by pre-v0.8.2 production
+            # and had to be deleted by hand. Skipping is safe — the day stays
+            # unarchived and a later run with a correct pipeline picks it up,
+            # whereas writing it silently poisons every future retrain.
+            if not any(c.startswith("rs_") for c in df.columns):
+                logger.error(
+                    "feature_archive_refusing_session_without_cross_sectional",
+                    day=day.isoformat(),
+                    rows=len(df),
+                    note="per-ticker feature path detected; see src/features/live.py",
+                )
+                result.errors.append(
+                    f"{day.isoformat()}: no cross-sectional (rs_*) features"
+                )
+                continue
+
             # Carry the close price alongside the features. ohlcv_1m is pruned
             # at 7 days, so without this the archive would hold features that no
             # future training run could ever label — forward_return has to be
