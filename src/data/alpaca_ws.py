@@ -532,9 +532,14 @@ class RestBarPoller:
         tickers: list[str],
         on_bar_callback: Callable[[str, datetime], Coroutine] | None = None,
         poll_interval: int = 60,
+        on_bars_callback: Callable[[dict], Coroutine] | None = None,
     ) -> None:
         self.tickers = [t for t in tickers if not _is_crypto(t)]
         self._on_bar = on_bar_callback
+        # Preferred: receives every ticker from the poll cycle at once so
+        # cross-sectional features can be computed. Falls back to the
+        # per-ticker callback only if unset.
+        self._on_bars = on_bars_callback
         self._poll_interval = poll_interval
         self._running = False
 
@@ -605,8 +610,22 @@ class RestBarPoller:
                         tickers=len(latest_per_ticker),
                     )
 
-                    # Trigger feature computation for each ticker with new data
-                    if self._on_bar:
+                    # Trigger feature computation for every ticker with new data
+                    # IN ONE BATCH. A per-ticker loop cannot produce the
+                    # cross-sectional rs_* features (they are relative to the
+                    # universe mean), which silently zero-filled rs_vwap_dev and
+                    # stopped the bot trading for seven sessions in Sep 2026.
+                    # See src/features/live.py.
+                    if self._on_bars:
+                        try:
+                            await self._on_bars(dict(latest_per_ticker))
+                        except Exception as exc:
+                            logger.warning(
+                                "rest_bar_feature_batch_error",
+                                tickers=len(latest_per_ticker),
+                                error=str(exc),
+                            )
+                    elif self._on_bar:
                         for ticker, bar_time in latest_per_ticker.items():
                             try:
                                 await self._on_bar(ticker, bar_time)

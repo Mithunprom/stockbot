@@ -105,6 +105,17 @@ async def lifespan(app: FastAPI):
         if _live_feature_computer is not None:
             await _live_feature_computer.on_bar(ticker, bar_time)
 
+    async def _on_1m_bars(bars: dict) -> None:
+        """Batch callback — the ONLY path that yields cross-sectional features.
+
+        rs_1m / rs_15m / rs_vwap_dev are defined against the universe mean, so
+        they exist only when the whole universe is computed together. The
+        per-ticker path zero-filled rs_vwap_dev and stopped trading for seven
+        sessions (see src/features/live.py).
+        """
+        if _live_feature_computer is not None:
+            await _live_feature_computer.on_bars(bars)
+
     rest_bar_poller = None
     if _ws_enabled:
         alpaca_stream = AlpacaDataStreamClient(tickers=universe, feed="iex")
@@ -120,6 +131,7 @@ async def lifespan(app: FastAPI):
             tickers=universe,
             on_bar_callback=_on_1m_bar,
             poll_interval=60,
+            on_bars_callback=_on_1m_bars,
         )
         stream_task = asyncio.create_task(
             rest_bar_poller.start(), name="rest_bar_poller"
@@ -780,7 +792,7 @@ def _load_ffsa_features() -> list[str]:
 # each filled entry sat in the model's own cross-section and surfaces a rolling
 # mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
 # near 46 and nothing reported it.
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.8.2"
 
 app = FastAPI(
     title="StockBot API",

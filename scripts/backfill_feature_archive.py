@@ -31,7 +31,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data import feature_archive as fa          # noqa: E402
-from src.features.indicators import compute_indicators  # noqa: E402
+from src.features.indicators import compute_indicators_for_universe  # noqa: E402
 
 ET = "America/New_York"
 
@@ -126,16 +126,45 @@ def main() -> None:
     per_day: dict[date, list[pd.DataFrame]] = {}
     skipped: list[str] = []
 
+    # Load every ticker FIRST, then compute the whole universe in one pass.
+    # compute_indicators_for_universe is required, not merely preferred: the
+    # cross-sectional features (rs_1m / rs_15m / rs_vwap_dev) are defined
+    # against the universe mean and a per-ticker loop cannot produce them. An
+    # archive built per-ticker silently omits them, so a model trained on it is
+    # trained with those inputs absent — which is how rs_vwap_dev ended up
+    # zero-filled on both sides at once. See src/features/live.py.
+    all_bars: dict[str, pd.DataFrame] = {}
     for i, tk in enumerate(tickers, 1):
         bars = load_bars(tk, args.start, args.end, cache)
         if bars is None or bars.empty:
             skipped.append(tk)
             continue
+        all_bars[tk] = bars
+        if i % 10 == 0:
+            print(f"  loaded {i}/{len(tickers)} tickers ...")
 
-        # full-history compute — matches training/backtest exactly
-        feats = compute_indicators(bars, shift=True)
+    if len(all_bars) < 2:
+        raise SystemExit(
+            f"only {len(all_bars)} ticker(s) loaded — cross-sectional features "
+            f"need a universe; refusing to write an archive without them"
+        )
+
+    print(f"\ncomputing indicators across {len(all_bars)} tickers (universe pass) ...")
+    results = compute_indicators_for_universe(all_bars, shift=True)
+    print(f"  computed {len(results)} tickers")
+
+    rs_cols = sorted({c for df in results.values() for c in df.columns
+                      if c.startswith("rs_")})
+    if not rs_cols:
+        raise SystemExit(
+            "universe pass produced no rs_* features — the archive would be "
+            "missing the cross-sectional inputs the model is trained on"
+        )
+    print(f"  cross-sectional features present: {rs_cols}")
+
+    for tk, feats in results.items():
         feats = feats.copy()
-        feats["close"] = bars["close"]
+        feats["close"] = all_bars[tk]["close"]
         feats["ticker"] = tk
         feats["ffsa_version"] = "v1"
         feats = feats.reset_index().rename(columns={"index": "time", "timestamp": "time"})
@@ -144,9 +173,6 @@ def main() -> None:
         sessions = feats["time"].dt.tz_convert(ET).dt.date
         for d, grp in feats.groupby(sessions):
             per_day.setdefault(d, []).append(grp)
-
-        if i % 10 == 0:
-            print(f"  {i}/{len(tickers)} tickers ... {len(per_day)} sessions so far")
 
     days = sorted(per_day)
     if args.skip_days:
