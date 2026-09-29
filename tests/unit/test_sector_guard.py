@@ -220,3 +220,63 @@ def test_sector_notionals_report_the_fail_closed_buckets():
     assert notionals["semis"] == pytest.approx(1000.0)
     assert notionals[UNMAPPED_SECTOR] == pytest.approx(1000.0)
     assert "other" not in notionals
+
+
+# ─── H28: probe-eligible tickers must all resolve to a named sector ──────────
+
+# Live diagnostics 2026-09-29: 32 probe-eligible tickers, of which 11 were
+# landing in UNMAPPED_SECTOR after the v0.7.0 fail-closed rewrite — which
+# silently applied max-position=1 and notional-cap=12.5% to all of them.
+# A full financials bucket (GS+JPM+WFC+MSCI+HOOD = 5 positions) was therefore
+# counting only 5 against the sector limit while MS and COIN were isolated in
+# unmapped — defeating the concentration guard on the financials side.
+H28_NEW_TICKERS: dict[str, str] = {
+    # tech
+    "CRM": "tech",
+    "CRWD": "tech",
+    "HPE": "tech",
+    "GLW": "tech",
+    # financials
+    "MS": "financials",
+    "COIN": "financials",
+    # healthcare
+    "MRK": "healthcare",
+    "COO": "healthcare",
+    # industrials
+    "NOC": "industrials",
+    "GNRC": "industrials",
+    # consumer
+    "CASY": "consumer",
+}
+
+
+@pytest.mark.parametrize("ticker,expected_sector", H28_NEW_TICKERS.items())
+def test_h28_probe_eligible_ticker_maps_to_named_sector(ticker, expected_sector):
+    """REGRESSION: 11 live probe-eligible tickers were landing in unmapped.
+
+    Each one got max-position=1 and notional-cap=12.5% instead of their true
+    sector's limits, silently defeating the concentration guard.
+    """
+    from src.execution.position_sizer import sector_of
+
+    assert sector_of(ticker) == expected_sector, (
+        f"{ticker} should map to {expected_sector!r} — not {sector_of(ticker)!r}"
+    )
+
+
+def test_h28_no_probe_eligible_ticker_lands_in_unmapped():
+    """All 32 tickers visible in live diagnostics must have a named bucket."""
+    from src.execution.position_sizer import sector_of
+
+    probe_eligible = [
+        "AMAT", "AVGO", "CASY", "CIEN", "COO", "CRWD", "CVX", "DELL",
+        "GLW", "GNRC", "GOOGL", "GS", "HPE", "JPM", "LITE", "MRK",
+        "MRNA", "MS", "NFLX", "NOC", "ORCL", "PFE", "PLTR",
+        "QCOM", "SMCI", "SNDK", "SNOW", "TER", "TSLA", "V",
+        "CRM", "COIN",  # from signal_gate_analysis in same snapshot
+    ]
+    unmapped = [t for t in probe_eligible if sector_of(t) == UNMAPPED_SECTOR]
+    assert unmapped == [], (
+        f"probe-eligible tickers still unmapped: {unmapped} — "
+        f"each one gets max-position=1 and cap=12.5% instead of true sector limits"
+    )
