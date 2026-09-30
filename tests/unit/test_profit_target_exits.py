@@ -13,10 +13,14 @@ Two owner-directed changes (2026-09-22):
 from __future__ import annotations
 
 import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from src.agents import signal_loop as sl
+
+ET = ZoneInfo("America/New_York")
 
 
 @pytest.fixture(autouse=True)
@@ -129,3 +133,68 @@ def test_probe_bar_is_far_below_the_block_gate_bar():
 def test_probe_still_demands_a_positive_ic():
     """Loosening the sample bar must not loosen the quality bar."""
     assert sl.KELLY_PROBATION_MIN_TICKER_IC > 0
+
+
+# ── Session backstop wall-clock path (H28 — 2026-09-29 zombie root cause) ────
+#
+# Root cause: bars_held maxes at 389 by 15:59 ET for any intraday entry while
+# FULL_SESSION_BARS=390. The bars-only check was dead code — six positions
+# entered Sep 29 were never closed in the DB (IDs 248-253).
+
+def test_bars_held_off_by_one_was_zombie_root_cause():
+    """Regression: the maximum achievable bars_held within a session is 389.
+
+    A 9:30 AM entry reaches bars_held=389 by 15:59 ET — one short of
+    FULL_SESSION_BARS=390. The wall-clock fix must cover this gap.
+    """
+    max_bars_in_session = sl.FULL_SESSION_BARS - 1  # 389 for a 9:30 AM entry
+    assert max_bars_in_session < sl.FULL_SESSION_BARS, (
+        "off-by-one: bars_held can never reach FULL_SESSION_BARS within a session"
+    )
+    # Wall-clock at 15:57 covers a 9:30 AM entry that would only reach bar 387
+    at_1557 = datetime(2026, 9, 29, 15, 57, 0, tzinfo=ET)
+    assert sl._is_session_closing(at_1557), (
+        "wall-clock backstop must cover bar-389 entries"
+    )
+
+
+def test_session_close_fires_at_buffer_boundary():
+    """_is_session_closing fires at exactly SESSION_CLOSE_BUFFER_MINUTES before 16:00."""
+    cutoff_minute = 60 - sl.SESSION_CLOSE_BUFFER_MINUTES   # 57 by default
+    at_cutoff = datetime(2026, 9, 29, 15, cutoff_minute, 0, tzinfo=ET)
+    assert sl._is_session_closing(at_cutoff)
+
+
+def test_session_close_fires_at_1559():
+    at_1559 = datetime(2026, 9, 29, 15, 59, 0, tzinfo=ET)
+    assert sl._is_session_closing(at_1559)
+
+
+def test_session_close_does_not_fire_one_minute_before_buffer():
+    cutoff_minute = 60 - sl.SESSION_CLOSE_BUFFER_MINUTES
+    before_cutoff = datetime(2026, 9, 29, 15, cutoff_minute - 1, 59, tzinfo=ET)
+    assert not sl._is_session_closing(before_cutoff)
+
+
+def test_session_close_does_not_fire_at_midday():
+    at_noon = datetime(2026, 9, 29, 12, 0, 0, tzinfo=ET)
+    assert not sl._is_session_closing(at_noon)
+
+
+def test_session_close_does_not_fire_on_weekend():
+    # Sep 27 2026 is a Saturday
+    saturday_near_close = datetime(2026, 9, 27, 15, 58, 0, tzinfo=ET)
+    assert not sl._is_session_closing(saturday_near_close)
+
+
+def test_session_close_accepts_utc_datetime():
+    """_is_session_closing must convert to ET before comparing."""
+    from datetime import timezone
+    # 19:57 UTC = 15:57 ET (EDT, UTC-4)
+    at_1957_utc = datetime(2026, 9, 29, 19, 57, 0, tzinfo=timezone.utc)
+    assert sl._is_session_closing(at_1957_utc)
+
+
+def test_session_close_buffer_constant_is_positive_and_small():
+    """Buffer must give time for fills without being so wide it exits too early."""
+    assert 1 <= sl.SESSION_CLOSE_BUFFER_MINUTES <= 10

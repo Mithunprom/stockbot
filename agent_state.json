@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 15). v0.8.1 DEPLOYED. M3 n=11 (all Sep 21). entry_rank_mean=96.9 ✅ skew fix confirmed. Kelly hard-blocked (fraction=-0.2699) since Sep 21 EOD; rolloff ~Oct 1. W40: 0 new trades Sep 22–28. v0.8.0 profit-target exits env-gated (freeze classification pending). Railway worker week 15. W40 program review complete 2026-09-28.",
- "last_iteration_date": "2026-09-28",
- "active_hypothesis": "v0.8.1 deployed (Sep 23). v0.8.0: (1) Kelly probe freeze fix — KELLY_PROBE_MIN_N 300→30 (structural fix, freeze-exempt; probe bar was 3× what system can produce); (2) profit-target exits (EXIT_PROFIT_TARGET_MODE env-gated, default OFF, owner-directed) — annual_vol×0.05 target, stop=0.8×target, trail=0.9×target, session backstop retained. M3 Day 1 (Sep 21): n=11, entry_rank_mean=96.9 ✅, first stop_loss STX ✅, SNDK negative-ensemble 2nd confirmed, H15 double-batch confirmed (11 vs 6). Kelly hard-blocked -0.2699 since Sep 21 EOD. No new trades Sep 22–28. Kelly rolloff ~Oct 1. PRs #68–71 opened (diagnostics, all freeze-exempt). v0.8.0 freeze classification pending (Decision #3). Railway worker BLOCKED week 15.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion BROKEN Sep 29; data_run criterion BLOCKED week 16). v0.8.1 DEPLOYED. 🚨 INTEGRITY CRITICAL Sep 29: 6 zombie DB rows IDs 248-253 (db_vs_broker mismatch). Root cause found: EXIT_PROFIT_TARGET_MODE=ON, FULL_SESSION_BARS=390 backstop dead code (off-by-one: bars_held max 389 for 9:30 AM entry). H28 fix implemented (wall-clock check at 15:57 ET). v0.8.5 deployed (archive fix). M3 n=11 (all Sep 21) + 6 zombie Sep 29 (unclosed). Kelly hard-blocked ~Oct 1 rolloff. W40 program review complete 2026-09-28. Nightly run 2026-09-30: H28 PR opened.",
+ "last_iteration_date": "2026-09-30",
+ "active_hypothesis": "H28 — session-close wall-clock backstop (zombie root cause fix). EXIT_PROFIT_TARGET_MODE=ON confirmed in Railway via diagnostics. FULL_SESSION_BARS=390 backstop was dead code: bars_held starts at 0 at entry, increments each bar, reaches at most 389 by 15:59 ET for a 9:30 AM entry — algebraically impossible to reach 390. 6 positions entered Sep 29 never exited. Fix: _is_session_closing() fires at 15:57 ET via wall-clock regardless of entry time. PR opened feat/rnd-H28-session-close-wall-clock-fix. 21/21 unit tests pass. v0.8.2: cross-sectional feature serving fix (Sep 28). v0.8.3: Kelly epoch re-seed (Sep 28). v0.8.4: retrain on cross-sectional archive (Sep 28). v0.8.5: archive session guard (Sep 28). M3 Day 2 (Sep 29): 6 entries but all zombie (IDs 248-253, no DB exit recorded). entry_rank_pctile=79.7 (unhealthy, threshold 85). Kelly hard-blocked -0.2699.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -11,21 +11,28 @@
   "snapshot_date": "2026-08-17",
   "integrity_clean_streak": 5,
   "integrity_clean_streak_started": "2026-07-24",
-  "integrity_clean_streak_ended": "2026-07-28",
-  "integrity_criterion_met": true,
+  "integrity_clean_streak_ended": "2026-09-29",
+  "integrity_criterion_met": false,
   "integrity_criterion_met_date": "2026-07-28",
+  "integrity_criterion_broken_date": "2026-09-29",
+  "integrity_criterion_broken_reason": "db_vs_broker: 6 zombie rows IDs 248-253. EXIT_PROFIT_TARGET_MODE=ON bars_held off-by-one. Repair needed (INTEGRITY_AUTO_REPAIR=true or manual with repair flag).",
   "integrity_sentinel_last_run": "2026-08-31T12:25:00Z",
-  "integrity_sentinel_status": "ALL GREEN Sep 21 11:25 UTC — 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (0 open positions). Integrity criterion MET and holding.",
-  "integrity_sentinel_critical_since": null,
-  "integrity_sentinel_critical_check": null,
-  "integrity_sentinel_stale_rows": [],
+  "integrity_sentinel_status": "🚨 CRITICAL Sep 29 — db_vs_broker MISMATCH. 6 rows open in DB (IDs 248-253) but NOT at broker. Root cause: EXIT_PROFIT_TARGET_MODE=ON, bars_held backstop off-by-one (max 389 < FULL_SESSION_BARS=390). Alpaca paper EOD-liquidated all 6 at market close; signal_loop stopped without writing DB exits; next-morning sync_from_broker purged from _positions but never wrote closed rows. These are permanent zombie rows until Integrity Sentinel repair runs. H28 wall-clock fix prevents recurrence. Integrity criterion BROKEN. Previous: ALL GREEN Sep 21 11:25 UTC.",
+  "integrity_sentinel_critical_since": "2026-09-29",
+  "integrity_sentinel_critical_check": "db_vs_broker (6 zombie rows IDs 248-253)",
+  "integrity_sentinel_stale_rows": ["ID 248 (Sep 29, zombie — no DB exit)", "ID 249 (Sep 29, zombie — no DB exit)", "ID 250 (Sep 29, zombie — no DB exit)", "ID 251 (Sep 29, zombie — no DB exit)", "ID 252 (Sep 29, zombie — no DB exit)", "ID 253 (Sep 29, zombie — no DB exit)"],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
   "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
   "watchdog_status": "Last confirmed OK Sep 21 (v0.7.3 at that time). v0.8.1 deployed Sep 23. Railway API blocked from cloud session — live status not fetchable this run. No halt events reported via GitHub. 0 open positions confirmed by PR #71 body.",
   "kelly_probation_note": "W40: Kelly fraction -0.2699 HARD-BLOCKED since Sep 21 EOD. Sep 21: 11 trades (3W/8L) worsened the fraction from 0.0 to -0.2699. Hard block threshold -0.25 — block active (kelly_entries_blocked=true). Rolloff ETA ~Oct 1 when Sep 21 trades age out of 10-day window. CRITICAL: PRs #35 (H15) + H24 cluster (PRs #51–54) + H25 cluster (PRs #56–57) MUST merge before entries resume. H24 and H25 still unmerged — structural risk persists.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
-  "deployed_version": "0.8.1",
+  "deployed_version": "0.8.5",
+  "v082_note": "Sep 28 2026. FREEZE-EXEMPT correctness fix. Root cause of 7 sessions of zero trades (Sep 21-28): cross-sectional features (rs_vwap_dev) require universe-batch computation but LiveFeatureComputer was using per-ticker path, zero-filling rs_vwap_dev → model predictions collapsed. Fix: compute cross-sectional features in batch during serving. Trade drought ended.",
+  "v083_note": "Sep 28 2026. FREEZE-EXEMPT. Kelly epoch re-seed: KELLY_EPOCH env var allows owner-authorized exclusion of pre-epoch outcomes from Kelly window (does NOT delete rows — audit trail preserved). Prevents corrupted pre-fix trades from permanently poisoning Kelly fraction.",
+  "v084_note": "Sep 28 2026. FREEZE-EXEMPT. Retrain on cross-sectional archive: model retrained on correct feature archive (with rs_vwap_dev properly computed). Ensures deployed model matches the feature pipeline fixed in v0.8.2.",
+  "v085_note": "Sep 28 2026. FREEZE-EXEMPT. Archive refuses sessions missing cross-sectional features: guard prevents silently archiving sessions that still have zero-filled rs_vwap_dev (corrupted pre-v0.8.2 sessions).",
+  "deployed_version_prev": "0.8.1",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -72,7 +79,8 @@
   "m3_v070_net_pnl": -329.85,
   "m3_v070_exit_distribution": {"max_hold": 10, "stop_loss": 1, "trailing_stop": 0, "take_profit": 0},
   "m3_v070_entry_rank_mean": 96.9,
-  "m3_v070_note": "M3 window started Sep 21 2026 (v0.7.0 deploy). n=11 (all Sep 21): 3W/8L, PF=0.587, net -$329.85, entry_rank_mean=96.9 ✅ SKEW FIX CONFIRMED. Corrections: ARM (ID 237, +$426.19) was missed in PR #68 count; corrected in PR #69 to n=11/PF=0.587/3W/8L. First stop_loss exit: STX (ID 240, -$408.33) ✅ — barriers working. SNDK (ID 246) entered LONG with ensemble_signal=-0.069 (negative ensemble, 2nd confirmed H18a anomaly). H15 double-batch confirmed: 11 trades vs cap=6. Kelly hard-blocked EOD Sep 21 (fraction=-0.2699). Sep 22–28: 0 new trades. ⚠️ CLOCK STATUS UNRESOLVED: v0.8.0 (Sep 23) profit-target exits merged at n=11 — if EXIT_PROFIT_TARGET_MODE=ON in Railway, M3 resets to Sep 23. n=11 is noise (PF requires ≥100 trades to be non-noise). Do not act on PF signal until n≥100.",
+  "m3_v070_note": "M3 window started Sep 21 2026 (v0.7.0 deploy). n=11 (all Sep 21): 3W/8L, PF=0.587, net -$329.85, entry_rank_mean=96.9 ✅ SKEW FIX CONFIRMED. Corrections: ARM (ID 237, +$426.19) was missed in PR #68 count; corrected in PR #69 to n=11/PF=0.587/3W/8L. First stop_loss exit: STX (ID 240, -$408.33) ✅ — barriers working. SNDK (ID 246) entered LONG with ensemble_signal=-0.069 (negative ensemble, 2nd confirmed H18a anomaly). H15 double-batch confirmed: 11 trades vs cap=6. Kelly hard-blocked EOD Sep 21 (fraction=-0.2699). Sep 22–28: 0 new trades (cross-sectional feature serving bug — v0.8.2 fix). Sep 29: 6 entries (IDs 248-253) but ALL ZOMBIE (DB exits never written — H28 root cause). entry_rank_pctile=79.7 Sep 29 (unhealthy, threshold 85). ⚠️ CLOCK: EXIT_PROFIT_TARGET_MODE=ON confirmed in Railway — M3 resets to Sep 23 (n=0 post-v0.8.0 clean trades). n=11 is noise (PF requires ≥100 trades to be non-noise). Do not act on PF signal until n≥100.",
+  "m3_sep29_zombie_note": "Sep 29: 6 entries (IDs 248-253), 0 recorded exits. EXIT_PROFIT_TARGET_MODE=ON but FULL_SESSION_BARS=390 backstop was dead code (bars_held off-by-one: max 389 < 390). No profit-target or stop-loss exits fired (flat day). Market closed, signal_loop stopped, Alpaca paper EOD-liquidated all 6. sync_from_broker next morning dropped from _positions but never wrote DB exits. H28 (wall-clock 15:57 ET check) prevents recurrence. These rows need Integrity Sentinel repair before they can be included in M3.",
   "v070_note": "Sep 21 2026. STRATEGY CHANGE. Root cause fix: train/serve skew (OBV session-anchored, WARMUP_BARS 300→1950). Feature pipeline v2. Feature version guard (model refuses version mismatch — fail-closed). Feature archive + 99-session backfill (2026-04-22→09-11). Retrained model: val_ic 0.1830, dir_acc 0.5689; OOS IC15=0.1795, dir_acc=0.5605, per-ticker IC positive 100% of 75 tickers. Fail-closed sector guards: SECTOR_MAP 24→57 tickers, unknown→1 slot. Exit barriers deployed (H14): hold-window-scaled ATR (sqrt(30/390)=0.277), floors 0.25%/0.35%/0.35%, stop=2σ, TP/trail=3σ. Kelly entry block functional: KELLY_HARD_BLOCK_THRESHOLD=-0.25, exits unaffected, self-draining. Entry rank monitor: entry_rank_pctile per fill, entry_rank_mean/n/healthy at /diagnostics, healthy≥85. M3 clock resets.",
   "v071_note": "entry_rank_* fields surfaced at /diagnostics (were logged but not exported from whitelist).",
   "v072_note": "diagnostics export fix — entry_rank fields.",
@@ -107,6 +115,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H28",
+   "hypothesis": "Session-close wall-clock backstop: EXIT_PROFIT_TARGET_MODE sets hold_cap=FULL_SESSION_BARS=390, but bars_held starts at 0 at entry and can accumulate at most 389 by 15:59 ET (for a 9:30 AM entry). The `bars >= 390` backstop check was algebraically impossible within a single session — dead code. Six positions entered Sep 29 were never closed in the DB (IDs 248-253): profit-target and stop-loss exits didn't fire (flat day); market closed; Alpaca paper EOD-liquidated all 6; signal_loop stopped; next-morning sync_from_broker purged _positions but never wrote DB exits. Fix: _is_session_closing() wall-clock check fires at 15:57 ET (SESSION_CLOSE_BUFFER_MINUTES=3) regardless of entry time, covering any bars_held value.",
+   "status": "implemented — PR opened 2026-09-30 (feat/rnd-H28-session-close-wall-clock-fix). FREEZE-EXEMPT: correctness fix preventing zombie positions. Does not change entry logic, sizing, or signal thresholds.",
+   "added": "2026-09-30",
+   "added_by": "Integrity Sentinel / nightly desk — Sep 29 db_vs_broker mismatch root cause analysis",
+   "pr_branch": "feat/rnd-H28-session-close-wall-clock-fix",
+   "pr_state": "PR OPENED 2026-09-30 — freeze-exempt correctness fix. 21 unit tests pass (8 new H28 tests + 13 existing profit-target tests). Full suite: 363 passed, 4 pre-existing env failures (missing API keys in sandbox), 3 skipped.",
+   "priority": "CRITICAL — merge immediately. Without this fix, any day EXIT_PROFIT_TARGET_MODE=ON and neither profit-target nor stop-loss fires (low-volatility day) will produce zombie rows. Sep 29 is evidence: 6 zombies in one session.",
+   "pm_priority": -5
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -466,6 +485,18 @@
  "v081_note": "Sep 23 2026. Diagnostics fix: /diagnostics reported old 30-bar ATR geometry after v0.8.0 changed the mode. Now reports actual running config including exit_mode, effective hold window, profit_target block parameters.",
  "completed_iterations": [
   {
+   "date": "2026-09-30",
+   "hypothesis_id": "H28",
+   "result": "IMPLEMENTED — H28 session-close wall-clock backstop. Root cause confirmed: EXIT_PROFIT_TARGET_MODE=ON in Railway (confirmed via diagnostics). FULL_SESSION_BARS=390 backstop was dead code: bars_held max 389 < 390 for any intraday entry. Sep 29: 6 positions (IDs 248-253) entered, never exited, Alpaca paper EOD-liquidated, DB rows left open — permanent zombie. Fix: SESSION_CLOSE_BUFFER_MINUTES=3 constant + _is_session_closing() wall-clock check (fires at 15:57 ET). _check_sizing_exit modified: `if bars >= hold_cap or at_session_close:`. 8 new unit tests added (test_bars_held_off_by_one_was_zombie_root_cause, etc.). Full suite: 363 passed, 4 pre-existing sandbox env failures (API keys), 3 skipped. FREEZE-EXEMPT. PR opened feat/rnd-H28-session-close-wall-clock-fix. v0.8.2-v0.8.5 version notes back-filled (cross-sectional feature serving fix, Kelly epoch, retrain, archive guard). Integrity criterion BROKEN (db_vs_broker, IDs 248-253). Repair needed.",
+   "tests_status": "21 passed (test_profit_target_exits.py). Full suite 363/4/3. 4 failures are pre-existing API key env issue in sandbox — confirmed pre-existing by checking same failures without H28 changes.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_profit_target_exits.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-H28-session-close-wall-clock-fix"
+  },
+  {
    "date": "2026-09-28",
    "hypothesis_id": "W40_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W40 weekly review complete. M3 Day 1 (Sep 21): n=11 (corrected from PR #68 n=10; ARM ID 237 +$426 missed), entry_rank_mean=96.9 ✅ SKEW FIX CONFIRMED (top decile), first stop_loss exit STX ✅ BARRIERS WORKING, SNDK ensemble=-0.069 2nd negative-ensemble long entry (H18a gap), H15 double-batch confirmed 11 vs cap=6. PF=0.587/3W/8L/net -$329.85 — noise (n<30). Kelly hard-blocked EOD Sep 21 (fraction=-0.2699, threshold -0.25). Sep 22–28: 0 new trades. v0.8.0 deployed Sep 23 (profit-target exits + Kelly probe freeze fix). v0.8.1 diagnostics fix. PRs #68–71 opened (all diagnostics, freeze-exempt). v0.8.0 freeze classification pending — EXIT_PROFIT_TARGET_MODE env status unconfirmed. Kelly rolloff ~Oct 1 — PRs #35/#51–57 must land first. Railway worker week 15. Integrity ALL GREEN. 6 owner decisions needed.",
@@ -681,6 +712,8 @@
   }
  ],
  "pending_tasks": [
+  "[OWNER ACTION — CRITICAL — IMMEDIATE] Merge H28 PR (feat/rnd-H28-session-close-wall-clock-fix). FREEZE-EXEMPT correctness fix. Without it, any EXIT_PROFIT_TARGET_MODE=ON low-vol session produces zombie rows. Sep 29 proof: 6 zombies in 1 session. 21 unit tests pass.",
+  "[OWNER ACTION — CRITICAL — IMMEDIATE] Integrity Sentinel repair: 6 zombie rows IDs 248-253 (Sep 29). Run with INTEGRITY_AUTO_REPAIR=true in Railway OR manually with repair flag (paper mode + JSON backup + email to owner). Integrity criterion BROKEN until repaired.",
   "[OWNER ACTION — CRITICAL — BEFORE OCT 1] Merge PR #35 (H15: persist n_trades_today). 47 days stale. Double-batch confirmed again Sep 21 (11 trades vs cap=6). Must be live before Kelly recovery ~Oct 1.",
   "[OWNER ACTION — CRITICAL — BEFORE OCT 1] Merge H24 cluster PRs #51, #52, #53, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly rolloff ~Oct 1 — same structural defect as Aug 31 re-activates without these.",
   "[OWNER ACTION — CRITICAL — BEFORE OCT 1] Merge H25 cluster PRs #56, #57 (systemic Kelly guard). Both freeze-exempt. Must be live before Kelly recovery.",
@@ -730,7 +763,7 @@
   ],
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
-   "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
+   "integrity_clean_5_days": "❌ BROKEN — 6 zombie rows IDs 248-253 (Sep 29, db_vs_broker mismatch). Integrity criterion was MET (Jul 24-28, continuing clean through Sep 21). BROKEN Sep 29 by EXIT_PROFIT_TARGET_MODE=ON bars_held off-by-one root cause. H28 fix prevents recurrence; Integrity Sentinel repair needed to close zombie rows and reset criterion.",
    "kelly_window_sane": "⚠️ HARD-BLOCKED — Kelly fraction -0.2699 (hard block active, threshold -0.25). Sep 21: 11 trades worsened fraction from 0.0 to -0.2699. Hard Kelly block (v0.7.0, KELLY_HARD_BLOCK_THRESHOLD=-0.25) is now firing. Rolloff ETA ~Oct 1. H24 (PRs #51-54) and H25 (PRs #56-57) still unmerged. CRITICAL: structural guards must be live before Kelly recovers.",
    "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (15 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
   }
