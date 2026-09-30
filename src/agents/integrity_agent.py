@@ -441,6 +441,25 @@ class IntegrityAgent:
 
         out: dict[str, Any] = {"exit_price": fill["price"]}
         qty = fill.get("qty") or shares
+
+        # Prefer the BROKER's entry fill over the ledger's entry_price. The
+        # entry write records the immediately-filled price, which is imprecise
+        # under partial fills — and the error is not symmetric: reconstructing
+        # the 2026-09-29 session from ledger entry prices understated losses by
+        # $4.21 while both winners came out exact, biasing recovered P&L upward.
+        # pnl_pct feeds the Kelly seed, so an optimistic bias here weakens a
+        # risk control. Derive both legs from the broker and the number is
+        # simply correct.
+        try:
+            entry_fill = await self._alpaca.get_closing_fill(
+                ticker, after=entry_time - timedelta(minutes=5), side="buy",
+            )
+        except Exception:
+            entry_fill = None
+        if entry_fill and entry_fill.get("price"):
+            entry_price = entry_fill["price"]
+            qty = entry_fill.get("qty") or qty
+
         # pnl needs a trustworthy entry price AND qty; without both, record the
         # exit price alone and leave the derived columns NULL.
         if entry_price and qty:

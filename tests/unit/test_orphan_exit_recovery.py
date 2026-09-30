@@ -20,15 +20,15 @@ from src.agents.integrity_agent import IntegrityAgent
 
 
 class _Alpaca:
-    def __init__(self, fill=None, raises=False):
-        self._fill, self._raises = fill, raises
+    def __init__(self, fill=None, raises=False, entry_fill=None):
+        self._fill, self._raises, self._entry = fill, raises, entry_fill
         self.calls = []
 
     async def get_closing_fill(self, ticker, after, side="sell"):
         self.calls.append((ticker, after, side))
         if self._raises:
             raise RuntimeError("broker unreachable")
-        return self._fill
+        return self._entry if side == "buy" else self._fill
 
 
 def _agent(alpaca=None):
@@ -116,3 +116,32 @@ def test_alert_channel_error_starts_clean_and_is_reportable():
 
     ag.last_alert_error = "SMTPAuthenticationError: 535 BadCredentials"
     assert "535" in ag.last_alert_error
+
+
+@pytest.mark.asyncio
+async def test_entry_leg_is_taken_from_the_broker_not_the_ledger():
+    """REGRESSION: ledger entry prices biased recovered P&L upward.
+
+    Reconstructing 2026-09-29 from ledger entry_price understated losses by
+    $4.21 while both winners came out exact. pnl_pct feeds the Kelly seed, so an
+    optimistic bias there weakens a risk control. Both legs must come from the
+    broker.
+    """
+    ag = _agent(_Alpaca(
+        fill={"price": 911.19, "qty": 13.10, "filled_at": None},
+        entry_fill={"price": 914.90, "qty": 13.10, "filled_at": None},
+    ))
+    # ledger carries a slightly wrong entry price
+    out = await ag._lookup_exit_fill(_orphan(ticker="STX", entry_price=914.74,
+                                            shares=13.10))
+
+    assert out["pnl"] == pytest.approx((911.19 - 914.90) * 13.10, abs=0.01)
+    assert any(c[2] == "buy" for c in ag._alpaca.calls), "entry leg not queried"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_ledger_entry_when_no_entry_fill():
+    ag = _agent(_Alpaca(fill={"price": 508.15, "qty": 23.87, "filled_at": None},
+                        entry_fill=None))
+    out = await ag._lookup_exit_fill(_orphan())
+    assert out["pnl"] == pytest.approx((508.15 - 504.81) * 23.87, abs=0.05)
