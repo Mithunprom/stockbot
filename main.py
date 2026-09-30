@@ -792,7 +792,7 @@ def _load_ffsa_features() -> list[str]:
 # each filled entry sat in the model's own cross-section and surfaces a rolling
 # mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
 # near 46 and nothing reported it.
-APP_VERSION = "0.8.7"
+APP_VERSION = "0.8.8"
 
 app = FastAPI(
     title="StockBot API",
@@ -1185,6 +1185,15 @@ async def diagnostics() -> JSONResponse:
             "entry_rank_mean": summary.get("entry_rank_mean"),
             "entry_rank_n": summary.get("entry_rank_n", 0),
             "entry_rank_healthy": summary.get("entry_rank_healthy"),
+            # Exit-threshold observability. NOTE: this endpoint re-exports an
+            # explicit WHITELIST of snapshot keys — adding a field to the
+            # signal-loop snapshot is NOT enough to make it visible here. That
+            # caught entry_rank_* (v0.7.1 -> v0.7.2) and then ticker_daily_vol
+            # (v0.8.6 -> v0.8.7), both times costing a deploy. Always verify a
+            # new field against the LIVE endpoint, not just the snapshot.
+            "ticker_daily_vol": summary.get("ticker_daily_vol"),
+            "computed_exits": summary.get("computed_exits"),
+            "daily_vol_cache_n": summary.get("daily_vol_cache_n"),
             "daytrade_count": summary.get("daytrade_count", 0),
             "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),
