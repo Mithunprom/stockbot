@@ -97,6 +97,11 @@ def create_scheduler(
         )
 
     # ── Integrity Sentinel: hourly ledger audit, 24/7 ────────────────────────
+    # NOTE: `run()` defaults to repair=False, so this job AUDITS ONLY unless
+    # INTEGRITY_AUTO_REPAIR=true is set in the environment. That combination
+    # detects-but-never-heals: on 2026-09-29 six orphaned rows were flagged
+    # `db_vs_broker` CRITICAL every hour for a day and nothing fixed them.
+    # Repair is additionally gated to paper mode inside _repair_allowed.
     if integrity_agent is not None:
         scheduler.add_job(
             integrity_agent.run,

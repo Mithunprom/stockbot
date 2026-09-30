@@ -292,6 +292,53 @@ class AlpacaOrderRouter:
             for p in positions
         ]
 
+    async def get_closing_fill(
+        self, ticker: str, after: "datetime", side: str = "sell",
+    ) -> dict[str, Any] | None:
+        """Most recent filled `side` order for `ticker` after `after`.
+
+        Lets the integrity agent reconstruct a real exit from the broker when
+        the exit path failed to write one. Before this existed, orphaned rows
+        were closed with pnl/pnl_pct left NULL on the reasoning that the exit
+        price was "unknowable" — it is not: the fill is in the broker's order
+        history. 2026-09-29 lost a whole session of P&L that way (+$28.13
+        across 6 trades, recoverable only by hand).
+
+        Returns {price, qty, filled_at} or None when no such fill exists.
+        """
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        loop = asyncio.get_event_loop()
+        client = self._get_client()
+        req = GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            symbols=[ticker.replace("/", "")],
+            after=after,
+            limit=100,
+        )
+        try:
+            orders = await loop.run_in_executor(None, client.get_orders, req)
+        except Exception as exc:
+            logger.warning("broker_order_history_failed", ticker=ticker, error=str(exc))
+            return None
+
+        want = side.lower()
+        fills = [
+            o for o in orders
+            if o.filled_at is not None
+            and o.filled_avg_price is not None
+            and (o.side.value if hasattr(o.side, "value") else str(o.side)).lower() == want
+        ]
+        if not fills:
+            return None
+        newest = max(fills, key=lambda o: o.filled_at)
+        return {
+            "price": float(newest.filled_avg_price),
+            "qty": float(newest.filled_qty or 0),
+            "filled_at": newest.filled_at,
+        }
+
     @staticmethod
     def _normalize_ticker(symbol: str) -> str:
         """Normalize Alpaca symbol to universe format.

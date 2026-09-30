@@ -1309,6 +1309,28 @@ class SignalLoop:
                 "take_profit": SIZING_TAKE_PROFIT_FLOOR,
             },
             "ticker_atr": {t: round(a, 4) for t, a in self._ticker_atr.items()},
+            # The actual vol fed to _atr_exits, and the barriers it produces.
+            # ticker_atr alone is a 1-MINUTE ratio and reading it as daily vol
+            # is a units trap; publishing the resolved value plus the computed
+            # levels makes "why did everything exit at once?" answerable from
+            # /diagnostics instead of from logs that rotate within hours
+            # (2026-09-29: six positions closed inside 8 seconds and the cause
+            # could not be established after the fact).
+            "ticker_daily_vol": {
+                t: round(self._daily_vol_for(t), 5)
+                for t in sorted(self._ticker_atr)[:12]
+            },
+            "computed_exits": {
+                t: {
+                    "daily_vol": round(self._daily_vol_for(t), 5),
+                    "stop": round(e[0], 5),
+                    "trail": round(e[1], 5),
+                    "target": round(e[2], 5),
+                }
+                for t in sorted(self._ticker_atr)[:12]
+                for e in [_atr_exits(self._daily_vol_for(t))]
+            },
+            "daily_vol_cache_n": len(self._ticker_daily_vol),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
