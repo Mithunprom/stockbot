@@ -64,6 +64,7 @@ class RiskStateSnapshot:
     halted: bool = False
     halt_reason: str = ""
     halt_time: str | None = None   # ISO timestamp, UTC
+    post_halt_trades_remaining: int = 0   # H30: trades left at reduced size
     version: int = STATE_VERSION
 
     def to_json(self) -> str:

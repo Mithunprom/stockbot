@@ -33,6 +33,13 @@ DASHBOARD_URL = "https://stockbot-production-cbde.up.railway.app/dashboard"
 
 LIVE_RISK_REPORT = Path("reports/risk/live.json")
 
+# Post-halt recovery ramp (H30): when a halt is lifted, size entries at
+# HALT_RECOVERY_SIZE_MULT for the first HALT_RECOVERY_N_TRADES entries.
+# Prevents the bot from immediately re-triggering the halt on resumption by
+# taking full-size positions into a still-impaired account.
+HALT_RECOVERY_N_TRADES: int = 6    # one full daily batch at reduced size
+HALT_RECOVERY_SIZE_MULT: float = 0.5  # 50% of normal Kelly-derived size
+
 
 # ─── Risk state ───────────────────────────────────────────────────────────────
 
@@ -90,6 +97,7 @@ class CircuitBreakers:
         self._halted: bool = False
         self._halt_reason: str = ""
         self._halt_time: datetime | None = None
+        self._post_halt_trades_remaining: int = 0
 
     @property
     def is_halted(self) -> bool:
@@ -363,17 +371,55 @@ class CircuitBreakers:
         )
         return True
 
+    @property
+    def post_halt_size_mult(self) -> float:
+        """Size multiplier during post-halt recovery (H30).
+
+        Returns HALT_RECOVERY_SIZE_MULT (0.5) for the first HALT_RECOVERY_N_TRADES
+        entries after a halt is lifted, then 1.0 thereafter.
+        """
+        return HALT_RECOVERY_SIZE_MULT if self._post_halt_trades_remaining > 0 else 1.0
+
+    def record_post_halt_entry(self) -> None:
+        """Decrement the post-halt recovery counter after each new entry.
+
+        Call this once per new entry while in recovery mode.  Safe to call
+        unconditionally — it is a no-op once the counter reaches zero.
+        """
+        if self._post_halt_trades_remaining > 0:
+            self._post_halt_trades_remaining -= 1
+            logger.info(
+                "post_halt_recovery_entry",
+                trades_remaining=self._post_halt_trades_remaining,
+                next_mult=self.post_halt_size_mult,
+            )
+
+    def restore_post_halt_counter(self, n: int) -> None:
+        """Restore the recovery counter from a persisted snapshot (H30).
+
+        Called by the signal loop on startup when loading RiskStateSnapshot.
+        """
+        self._post_halt_trades_remaining = max(0, n)
+
     def resume_trading(self, authorized_by: str) -> None:
         """Re-enable trading after a halt. REQUIRES human authorization.
 
         This method must never be called autonomously by any sub-agent.
+        Arms the post-halt recovery ramp: first HALT_RECOVERY_N_TRADES entries
+        will be sized at HALT_RECOVERY_SIZE_MULT of normal (H30).
         """
         if not authorized_by:
             raise ValueError("Human authorization required to resume trading")
         self._halted = False
         self._halt_reason = ""
         self._halt_time = None
-        logger.info("trading_resumed", authorized_by=authorized_by)
+        self._post_halt_trades_remaining = HALT_RECOVERY_N_TRADES
+        logger.info(
+            "trading_resumed",
+            authorized_by=authorized_by,
+            halt_recovery_trades=HALT_RECOVERY_N_TRADES,
+            halt_recovery_mult=HALT_RECOVERY_SIZE_MULT,
+        )
 
     # ── Risk report ───────────────────────────────────────────────────────────
 

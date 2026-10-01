@@ -282,6 +282,7 @@ class SizingResult:
     kelly_fraction: float
     portfolio_heat: float
     sector_heat: float
+    halt_recovery_mult: float = 1.0   # H30 post-halt ramp factor
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -297,6 +298,7 @@ class SizingResult:
                 "4_constraint": round(self.stage4_constraint_pct, 4),
                 "5_viable": self.stage5_viable,
                 "6_mode": self.stage6_mode,
+                "4c_halt_ramp": round(self.halt_recovery_mult, 3),
             },
             "inputs": {
                 "dir_prob": round(self.dir_prob, 4),
@@ -341,6 +343,7 @@ class SmartPositionSizer:
         portfolio_heat: float,
         sector_notionals: dict[str, float],
         kelly_fraction: float,
+        halt_recovery_mult: float = 1.0,
     ) -> SizingResult | None:
         """Run the full 6-stage sizing pipeline.
 
@@ -435,6 +438,13 @@ class SmartPositionSizer:
 
         stage4 = min(stage4, max_sector_room)
 
+        # ── Stage 4c: Post-halt recovery ramp (H30) ──────────────────────────
+        # When the circuit breaker is lifted, the first HALT_RECOVERY_N_TRADES
+        # entries are sized at HALT_RECOVERY_SIZE_MULT of normal to prevent
+        # immediately re-triggering the halt on an impaired account.
+        # halt_recovery_mult is 1.0 outside the recovery window (no effect).
+        stage4 = stage4 * halt_recovery_mult
+
         # ── Stage 5: Minimum Viable Check ────────────────────────────────────
         notional = stage4 * portfolio_value
         # Hard cap: $ cap on small accounts, % cap on larger ones
@@ -490,6 +500,7 @@ class SmartPositionSizer:
             kelly_fraction=kelly_fraction,
             portfolio_heat=portfolio_heat,
             sector_heat=sector_heat,
+            halt_recovery_mult=halt_recovery_mult,
         )
 
         logger.info(
@@ -500,6 +511,7 @@ class SmartPositionSizer:
             shares=shares,
             notional=round(final_notional, 2),
             stages=f"{stage1:.3f}→{stage2:.3f}→{stage3:.3f}→{stage4:.3f}",
+            halt_ramp=round(halt_recovery_mult, 3),
             dir_prob=round(dir_prob, 3),
             atr=round(atr_pct, 4),
             kelly=round(kelly_fraction, 3),
