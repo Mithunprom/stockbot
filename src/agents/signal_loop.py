@@ -2584,11 +2584,28 @@ class SignalLoop:
         Returns True only when a new entry order FILLED (used by the per-tick
         entry cap); exits and skips return False.
         """
-        if self._cb.is_halted:
-            return False
-
         ticker = sig.ticker
         has_position = ticker in self._pm._positions
+
+        # H13 — a HALT MUST NOT STRAND AN OPEN POSITION.
+        #
+        # This used to be an unconditional `if self._cb.is_halted: return False`
+        # at the top of the function. But the per-tick exit loop reaches exits
+        # THROUGH this same function (see _tick: it calls _act_on_signal for
+        # every held ticker), so the early return killed exits as well as
+        # entries. A halt therefore froze the book instead of de-risking it.
+        #
+        # Observed live 2026-09-30: `max_drawdown` halted the bot while six
+        # positions were open at ~70% heat with +$794 unrealised. They could not
+        # be closed by any code path — the exact failure the weekly reviews had
+        # carried as "HIGH: halt strands positions" since W32, unmerged for 41
+        # days as PRs #31/#32.
+        #
+        # A circuit breaker exists to STOP TAKING NEW RISK. Allowing an exit
+        # REDUCES risk, so blocking it inverts the control's purpose. Entries
+        # stay blocked; exits always run.
+        if self._cb.is_halted and not has_position:
+            return False
 
         # A/B conflict prevention: skip entry if the OTHER pipeline holds this ticker
         if not has_position and self._other_pm is not None:
