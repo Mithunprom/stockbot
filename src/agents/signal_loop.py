@@ -469,6 +469,42 @@ def _hold_window_vol(daily_vol: float, hold_bars: int) -> float:
 
 
 FULL_SESSION_BARS = 390             # 09:30–15:59 ET
+# Minutes before 16:00 ET at which the session_close backstop fires via the
+# wall-clock path.  3 minutes gives time for the exit order to fill before the
+# primary routing window closes.
+SESSION_CLOSE_BUFFER_MINUTES: int = 3
+
+
+def _is_session_closing(_now: datetime | None = None) -> bool:
+    """Return True when within SESSION_CLOSE_BUFFER_MINUTES of market close.
+
+    The bars_held backstop in EXIT_PROFIT_TARGET_MODE fires on
+    ``bars >= FULL_SESSION_BARS`` (390), but bars_held can accumulate at most
+    389 by 15:59 ET for a 9:30 AM entry — an off-by-one that made the backstop
+    dead code for every intraday entry.  This wall-clock check covers that gap:
+    it fires at 15:57 ET regardless of when the position was entered.
+
+    ``_now`` is injectable for tests; production passes nothing and the function
+    reads the current ET wall time.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+    et = ZoneInfo("America/New_York")
+    if _now is None:
+        _now = datetime.now(et)
+    elif _now.tzinfo is None:
+        _now = _now.replace(tzinfo=et)
+    else:
+        _now = _now.astimezone(et)
+
+    if _now.weekday() >= 5:  # Saturday/Sunday
+        return False
+    cutoff_minute = 60 - SESSION_CLOSE_BUFFER_MINUTES  # 57 with default buffer
+    return (_now.hour, _now.minute) >= (15, cutoff_minute)
+
 
 # ── Owner-directed exit redesign (2026-09-22) ────────────────────────────────
 #
@@ -2452,8 +2488,15 @@ class SignalLoop:
             # `max_hold` so the exit mix stays readable — if the backstop is
             # still closing most trades, the target is set too far away and
             # the mode is not doing what it was asked to do.
+            #
+            # WALL-CLOCK PATH (H28 fix, 2026-09-30): bars_held can accumulate
+            # at most 389 by 15:59 ET (9:30 AM entry) — one short of
+            # FULL_SESSION_BARS=390, so `bars >= hold_cap` was dead code for
+            # every intraday entry. The wall-clock check fires at 15:57 ET
+            # regardless of entry time, covering the off-by-one.
             hold_cap = _effective_hold_bars()
-            if bars >= hold_cap:
+            at_session_close = EXIT_PROFIT_TARGET_MODE and _is_session_closing()
+            if bars >= hold_cap or at_session_close:
                 if not self._maybe_extend_hold(ticker, sig, unrealized):
                     reason = "session_close" if EXIT_PROFIT_TARGET_MODE else "max_hold"
                 # else: extension granted — bars_held reset to 0; don't exit
