@@ -861,6 +861,13 @@ class SignalLoop:
             await self._seed_kelly_from_db()
         except Exception:
             logger.exception("kelly_seed_startup_failed_continuing")
+        # H29: derive n_trades_today from DB entries so a restart mid-day
+        # cannot grant a second full daily allotment.  Fail-open: a DB
+        # hiccup leaves the counter at 0 (the pre-existing behaviour).
+        try:
+            await self._seed_trades_today_from_db()
+        except Exception:
+            logger.exception("trades_today_seed_startup_failed_continuing")
 
         logger.info(
             "signal_loop_started",
@@ -963,6 +970,64 @@ class SignalLoop:
                 )
         except Exception as exc:
             logger.warning("kelly_seed_failed", error=str(exc))
+
+    async def _seed_trades_today_from_db(self) -> None:
+        """Derive n_trades_today from the DB on startup (H29).
+
+        A restart resets _sizing_n_trades_today to 0, which can grant a second
+        full daily allotment on a mid-day redeploy.  Counting today's entries
+        directly from the ledger provides a lower-bound that fills the gap
+        while PR #35 (RiskStateSnapshot persistence) is pending.
+
+        Only ever RAISES the counter — never lowers it — so a concurrent
+        in-memory increment is not lost.  Fails open: a DB error or an
+        overnight restart (no entries today) leaves the counter unchanged.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:                                    # pragma: no cover
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+        from sqlalchemy import func, select as _sel
+
+        from src.data.db import Trade as _T, get_session_factory
+
+        et = ZoneInfo("America/New_York")
+        today_et_midnight = datetime.now(et).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        # Convert to UTC; entry_time in DB is timezone-aware.
+        today_utc_start = today_et_midnight.astimezone(timezone.utc)
+
+        try:
+            sf = get_session_factory()
+            query = _sel(func.count()).select_from(_T).where(
+                _T.entry_time >= today_utc_start
+            )
+            if self._pipeline_id:
+                query = query.where(_T.pipeline_id == self._pipeline_id)
+            async with sf() as session:
+                count: int = (await session.execute(query)).scalar() or 0
+        except Exception as exc:
+            logger.warning("trades_today_seed_db_error", error=str(exc))
+            return
+
+        if count > self._sizing_n_trades_today:
+            logger.info(
+                "trades_today_restored_from_db",
+                db_count=count,
+                prior_in_memory=self._sizing_n_trades_today,
+                pipeline=self._pipeline_id,
+                note="mid-day restart detected; daily cap restored from ledger",
+            )
+            self._sizing_n_trades_today = count
+        else:
+            logger.info(
+                "trades_today_db_seed_noop",
+                db_count=count,
+                in_memory=self._sizing_n_trades_today,
+                pipeline=self._pipeline_id,
+            )
 
     # ── Durable risk counters ────────────────────────────────────────────────
     #
