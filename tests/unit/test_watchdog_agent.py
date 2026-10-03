@@ -10,6 +10,9 @@ import pytest
 
 from src.agents.watchdog_agent import (
     EMAIL_DEDUPE_HOURS,
+    EXIT_PIPELINE_CRIT_PCT,
+    EXIT_PIPELINE_MIN_N,
+    EXIT_PIPELINE_WARN_PCT,
     WatchdogAgent,
     ZOMBIE_GRACE_BARS,
 )
@@ -222,3 +225,76 @@ class TestUniverseCheck:
         agent = _make_agent()
         agent._loop._universe = ["T%d" % i for i in range(75)]
         assert agent._check_universe_fresh()["status"] == "ok"
+
+
+class TestExitPipelineHealth:
+    """H31 — exit pipeline health check."""
+
+    def _make_sf(self, exit_reasons: list[str]):
+        """Build a mock session_factory returning rows with exit_reason values."""
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [(r,) for r in exit_reasons]
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+
+        sf = MagicMock()
+        sf.return_value = mock_ctx
+        return sf
+
+    def test_no_session_factory_skips_check(self):
+        agent = _make_agent()
+        assert agent._sf is None
+        result = asyncio.run(agent._check_exit_pipeline_health())
+        assert result["status"] == "ok"
+        assert "skipped" in result["detail"]
+
+    def test_below_min_n_is_ok(self):
+        """Too few trades — not enough data to alert."""
+        agent = _make_agent()
+        agent._sf = self._make_sf(
+            ["integrity_broker_reconcile"] * (EXIT_PIPELINE_MIN_N - 1)
+        )
+        result = asyncio.run(agent._check_exit_pipeline_health())
+        assert result["status"] == "ok"
+        assert "insufficient" in result["detail"]
+
+    def test_all_strategy_exits_is_ok(self):
+        reasons = ["max_hold", "stop_loss", "take_profit", "trailing_stop", "session_close"]
+        agent = _make_agent()
+        agent._sf = self._make_sf(reasons * 4)
+        result = asyncio.run(agent._check_exit_pipeline_health())
+        assert result["status"] == "ok"
+        assert "0/" in result["detail"]
+
+    def test_sep30_incident_pattern_warns(self):
+        """Sep-30 2026: 6/20 = 30% integrity_broker_reconcile — at warn threshold."""
+        reasons = ["integrity_broker_reconcile"] * 6 + ["max_hold"] * 14
+        agent = _make_agent()
+        agent._sf = self._make_sf(reasons)
+        result = asyncio.run(agent._check_exit_pipeline_health())
+        assert result["status"] in ("warn", "critical")
+
+    def test_majority_orphan_exits_is_critical(self):
+        n = 20
+        orphan = int(EXIT_PIPELINE_CRIT_PCT * n) + 1
+        reasons = (["integrity_broker_reconcile"] * orphan
+                   + ["max_hold"] * (n - orphan))
+        agent = _make_agent()
+        agent._sf = self._make_sf(reasons)
+        result = asyncio.run(agent._check_exit_pipeline_health())
+        assert result["status"] == "critical"
+        assert "MAJORITY" in result["detail"]
+
+    def test_constants_are_sane(self):
+        """Threshold ordering: MIN_N < lookback, WARN < CRIT <= 1."""
+        from src.agents.watchdog_agent import EXIT_PIPELINE_LOOKBACK
+        assert EXIT_PIPELINE_MIN_N < EXIT_PIPELINE_LOOKBACK
+        assert EXIT_PIPELINE_WARN_PCT < EXIT_PIPELINE_CRIT_PCT
+        assert EXIT_PIPELINE_CRIT_PCT <= 1.0

@@ -41,14 +41,22 @@ ZOMBIE_GRACE_BARS = 60          # bars past max_hold before a position is a zomb
 EMAIL_DEDUPE_HOURS = 4          # don't re-email an identical issue set within this
 ET = ZoneInfo("America/New_York")
 
+# H31 — exit pipeline health thresholds
+EXIT_PIPELINE_LOOKBACK = 20     # trailing trades to inspect
+EXIT_PIPELINE_WARN_PCT = 0.30   # >30% orphan-recovered exits → warn
+EXIT_PIPELINE_CRIT_PCT = 0.50   # >50% → critical (majority not strategy-driven)
+EXIT_PIPELINE_MIN_N = 5         # minimum sample before alert fires
+
 
 class WatchdogAgent:
     """Detect + self-heal + alert. Reads SignalLoop state in-process."""
 
-    def __init__(self, signal_loop: Any, pos_manager: Any, circuit_breakers: Any) -> None:
+    def __init__(self, signal_loop: Any, pos_manager: Any, circuit_breakers: Any,
+                 session_factory: Any = None) -> None:
         self._loop = signal_loop
         self._pm = pos_manager
         self._cb = circuit_breakers
+        self._sf = session_factory
         self._last_error_count = 0
         self._last_email_fingerprint = ""
         self._last_email_at: datetime | None = None
@@ -203,6 +211,66 @@ class WatchdogAgent:
                 "detail": "features fresh" if fresh else
                           "features stale — entries gated, check data pipeline"}
 
+    async def _check_exit_pipeline_health(self) -> dict[str, Any]:
+        """H31 — detect when the integrity-reconcile path is closing most positions.
+
+        The integrity agent (v0.8.6+) can recover orphaned exits from broker
+        fills and records them with exit_reason='integrity_broker_reconcile'.
+        A handful per month is expected. When this reason dominates the trailing
+        window (>30%) the normal exit pipeline is likely broken: stops/max_hold
+        are not firing in-process and the integrity agent is cleaning up instead.
+
+        The Sep-30 2026 incident is the canonical case: max_drawdown halted the
+        bot with 6 open positions and the old exit gate prevented those from
+        closing — 6/6 exits were eventually integrity-recovered over two days,
+        at prices and durations that have nothing to do with the strategy.
+        v0.9.0 fixed that specific root cause; this check confirms it stays fixed.
+        """
+        name = "exit_pipeline_health"
+        if self._sf is None:
+            return {"name": name, "status": "ok", "healed": False,
+                    "detail": "no session_factory — check skipped"}
+        try:
+            from sqlalchemy import select
+            from src.data.db import Trade
+
+            async with self._sf() as session:
+                rows = (
+                    await session.execute(
+                        select(Trade.exit_reason)
+                        .where(Trade.exit_time.is_not(None))
+                        .order_by(Trade.exit_time.desc())
+                        .limit(EXIT_PIPELINE_LOOKBACK)
+                    )
+                ).fetchall()
+
+            n = len(rows)
+            if n < EXIT_PIPELINE_MIN_N:
+                return {"name": name, "status": "ok", "healed": False,
+                        "detail": f"only {n} closed trades — insufficient sample"}
+
+            orphan_count = sum(
+                1 for (r,) in rows if r == "integrity_broker_reconcile"
+            )
+            orphan_pct = orphan_count / n
+            detail = (
+                f"{orphan_count}/{n} trailing exits via integrity_broker_reconcile "
+                f"({orphan_pct:.0%}) — "
+            )
+            if orphan_pct >= EXIT_PIPELINE_CRIT_PCT:
+                return {"name": name, "status": "critical", "healed": False,
+                        "detail": detail + "MAJORITY of exits are orphan-recovered; "
+                                  "normal exit pipeline (stops/max_hold) is likely broken"}
+            if orphan_pct >= EXIT_PIPELINE_WARN_PCT:
+                return {"name": name, "status": "warn", "healed": False,
+                        "detail": detail + "elevated orphan-exit rate; "
+                                  "check whether stops/max_hold are firing in-process"}
+            return {"name": name, "status": "ok", "healed": False,
+                    "detail": detail + "within normal range"}
+        except Exception as exc:
+            return {"name": name, "status": "warn", "healed": False,
+                    "detail": f"check failed (non-fatal): {exc}"}
+
     # ── Run cycle ───────────────────────────────────────────────────────────
 
     async def run(self, light: bool = False) -> dict[str, Any]:
@@ -220,6 +288,7 @@ class WatchdogAgent:
             checks.append(self._check_circuit_breaker())
             checks.append(self._check_data_fresh())
             checks.append(self._check_universe_fresh())
+            checks.append(await self._check_exit_pipeline_health())
 
         worst = "ok"
         for c in checks:

@@ -197,21 +197,24 @@ def test_catastrophic_threshold_only_ever_tightens_the_pdt_path():
 
 def _loop_with_open_long(daily_vol: float, entry_price: float = 100.0):
     """A SignalLoop holding one long that has not yet reached max_hold."""
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, patch
 
     from src.agents.signal_loop import SignalLoop
     from src.execution.position_manager import PositionManager
     from src.risk.circuit_breakers import CircuitBreakers
 
-    loop = SignalLoop(
-        universe=["AAPL"],
-        ensemble=MagicMock(),
-        alpaca=MagicMock(),
-        circuit_breakers=CircuitBreakers(),
-        pos_manager=PositionManager(initial_portfolio=100_000.0),
-        session_factory=MagicMock(),
-        feature_cols=[f"feat_{i}" for i in range(30)],
-    )
+    mock_settings = MagicMock()
+    mock_settings.alpaca_mode = "paper"
+    with patch("src.config.get_settings", return_value=mock_settings):
+        loop = SignalLoop(
+            universe=["AAPL"],
+            ensemble=MagicMock(),
+            alpaca=MagicMock(),
+            circuit_breakers=CircuitBreakers(),
+            pos_manager=PositionManager(initial_portfolio=100_000.0),
+            session_factory=MagicMock(),
+            feature_cols=[f"feat_{i}" for i in range(30)],
+        )
     loop._pm.portfolio_value = 100_000.0
     loop._entry_prices["AAPL"] = entry_price
     loop._entry_directions["AAPL"] = 1
