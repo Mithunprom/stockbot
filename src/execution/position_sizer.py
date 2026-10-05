@@ -72,6 +72,10 @@ SECTOR_MAP: dict[str, str] = {
     "TTD": "tech",
     "ANET": "tech",
     "DELL": "tech",
+    "CRM": "tech",    # Salesforce — enterprise SaaS; correlation with NOW/WDAY
+    "CRWD": "tech",   # CrowdStrike — security SaaS; correlated with tech cycle
+    "HPE": "tech",    # HP Enterprise — infra/server tech; correlated with DELL/ANET
+    "GLW": "tech",    # Corning — optical fiber/specialty glass; trades on photonics demand
     # Semiconductors / semicap / memory & storage / photonics.
     # Deliberately ONE bucket: these names share the same demand cycle and
     # trade as a single factor intraday. Splitting "semicap" or "photonics"
@@ -104,6 +108,8 @@ SECTOR_MAP: dict[str, str] = {
     "WFC": "financials",
     "MSCI": "financials",
     "HOOD": "financials",
+    "MS": "financials",   # Morgan Stanley — bulge-bracket; same cycle as GS/JPM
+    "COIN": "financials", # Coinbase — crypto exchange; treated as financials for cap purposes
     # Consumer
     "AMZN": "consumer",
     "TSLA": "consumer",
@@ -111,6 +117,7 @@ SECTOR_MAP: dict[str, str] = {
     "NFLX": "consumer",
     "APTV": "consumer",
     "GRMN": "consumer",
+    "CASY": "consumer",  # Casey's General Stores — convenience retail
     # Energy
     "XOM": "energy",
     "CVX": "energy",
@@ -122,11 +129,15 @@ SECTOR_MAP: dict[str, str] = {
     "PFE": "healthcare",
     "ABBV": "healthcare",
     "MRNA": "healthcare",
+    "MRK": "healthcare",  # Merck — large-cap pharma; same cycle as PFE/JNJ
+    "COO": "healthcare",  # Cooper Companies — med-devices; correlated with healthcare
     # Industrials / defense
     "LMT": "industrials",
     "LDOS": "industrials",
     "LII": "industrials",
     "ZBRA": "industrials",
+    "NOC": "industrials",  # Northrop Grumman — defense; same cycle as LMT/LDOS
+    "GNRC": "industrials", # Generac — backup power generators; industrials cycle
 }
 
 # Bucket for any ticker absent from SECTOR_MAP. It is a real bucket name so it

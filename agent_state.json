@@ -19,8 +19,16 @@
   "integrity_sentinel_critical_since": null,
   "integrity_sentinel_critical_check": null,
   "integrity_sentinel_stale_rows": [],
-  "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
-  "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
+  "integrity_sentinel_positions_resolved_aug3": [
+   "AMAT (id 120)",
+   "TSLA (id 122)",
+   "PLTR (id 124)",
+   "INTC (id 125)",
+   "AVGO (id 126)"
+  ],
+  "integrity_sentinel_positions_resolved_aug10": [
+   "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
+  ],
   "watchdog_status": "ALL OK Oct 5 13:35 UTC (v0.9.0). 7 checks pass: loop_tick_fresh, tick_errors, daily_reset, zombie_positions, circuit_breaker, data_fresh, universe_fresh. last_tick 13:49 UTC, last_exit Oct 2 14:49 (WDC stop_loss). 6 open positions: XOM/WFC/TER/COHR/CVX/NOC. Sept 30: CB halted (max_drawdown) — resolved by v0.9.0 Oct 1.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
@@ -29,8 +37,14 @@
   "m3_v080_n": 18,
   "m3_v080_win_rate": 0.556,
   "m3_v080_pf": 5.11,
-  "m3_v080_net_pnl": 3603.10,
-  "m3_v080_exit_distribution": {"integrity_broker_reconcile": 11, "stop_loss": 3, "take_profit": 1, "max_hold": 2, "trailing_stop": 1},
+  "m3_v080_net_pnl": 3603.1,
+  "m3_v080_exit_distribution": {
+   "integrity_broker_reconcile": 11,
+   "stop_loss": 3,
+   "take_profit": 1,
+   "max_hold": 2,
+   "trailing_stop": 1
+  },
   "m3_v080_note": "M3 window Sep 23 – present (v0.8.0 strategy config, EXIT_PROFIT_TARGET_MODE=ON confirmed). n=18: 10W/7L/1T, PF=5.11, net +$3,603.10. ⚠️ PRINCIPAL SKEPTIC FLAG: PF=5.11 is NOT edge evidence. 11/18 exits via integrity_broker_reconcile (positions stranded by Sep 30 CB halt and reconciled from broker fills after v0.8.6 repair). COHR +12%, MSTR +8%, LITE +8% were uncontrolled overnight holds. n=18 is noise; gate requires n≥100. Do not act on this PF.",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
@@ -43,7 +57,14 @@
   "n_open_positions_aug13": 0,
   "n_open_positions_aug10": 0,
   "n_open_positions_jul31": 6,
-  "open_positions_jul31": ["AVGO (id 126, +sentiment=0.60)", "INTC (id 125, sentiment=0.27)", "PLTR (id 124, sentiment=-0.97 ⚠)", "TSLA (id 122, ensemble=0.162 weak)", "AMAT (id 120)", "MSCI (id 119)"],
+  "open_positions_jul31": [
+   "AVGO (id 126, +sentiment=0.60)",
+   "INTC (id 125, sentiment=0.27)",
+   "PLTR (id 124, sentiment=-0.97 ⚠)",
+   "TSLA (id 122, ensemble=0.162 weak)",
+   "AMAT (id 120)",
+   "MSCI (id 119)"
+  ],
   "kelly_mode": "normal",
   "kelly_fraction_aug12": 0.2349,
   "kelly_fraction_jul31": -0.0464,
@@ -55,7 +76,7 @@
   "all_time_n_closed_note": "Updated Sep 14 (+12 since W37): IDs 225-236 (Sep 10-11). Was 197. Live API returned 100 most recent (IDs 137-236). Pre-M2 trades counted via historical state.",
   "all_time_win_rate": 0.445,
   "all_time_pf_stored": 0.77,
-  "all_time_pf_fill_corrected": 0.860,
+  "all_time_pf_fill_corrected": 0.86,
   "m2_v060_n": 110,
   "m2_v060_win_rate": 0.445,
   "m2_v060_pf": 0.857,
@@ -64,7 +85,13 @@
   "m2_v060_net_pnl": -804.19,
   "m2_v060_expectancy_per_trade": -7.31,
   "m2_v060_max_single_loss": -427.68,
-  "m2_v060_exit_distribution": {"max_hold": 110, "stop_loss": 0, "trailing_stop": 0, "take_profit": 0, "signal_reversal": 0},
+  "m2_v060_exit_distribution": {
+   "max_hold": 110,
+   "stop_loss": 0,
+   "trailing_stop": 0,
+   "take_profit": 0,
+   "signal_reversal": 0
+  },
   "m2_v060_note": "n=110 Aug 6–Sep 11 — RETIRED (v0.7.0 deployed Sep 21). WAS: PF=0.857, WR=44.5% (49W/1T/60L), net -$804.19. RETIRED because this window measured a bot with corrupted feature serving (OBV session-anchoring bug; entries at ~46th pctile of model's own ranking). ALL 111 exits via max_hold (barriers were dead code). ALL entries were LONG (long-bias from +0.00034 mean shift in corrupted predictions). Not strategy evidence — infrastructure failure case study.",
   "trailing_30_pf": 0.265,
   "trailing_30_pf_stored": 0.265,
@@ -76,7 +103,12 @@
   "m3_v070_win_rate": 0.273,
   "m3_v070_pf": 0.587,
   "m3_v070_net_pnl": -329.85,
-  "m3_v070_exit_distribution": {"max_hold": 10, "stop_loss": 1, "trailing_stop": 0, "take_profit": 0},
+  "m3_v070_exit_distribution": {
+   "max_hold": 10,
+   "stop_loss": 1,
+   "trailing_stop": 0,
+   "take_profit": 0
+  },
   "m3_v070_entry_rank_mean": 96.9,
   "m3_v070_note": "M3 window started Sep 21 2026 (v0.7.0 deploy). n=11 (all Sep 21): 3W/8L, PF=0.587, net -$329.85, entry_rank_mean=96.9 ✅ SKEW FIX CONFIRMED. Corrections: ARM (ID 237, +$426.19) was missed in PR #68 count; corrected in PR #69 to n=11/PF=0.587/3W/8L. First stop_loss exit: STX (ID 240, -$408.33) ✅ — barriers working. SNDK (ID 246) entered LONG with ensemble_signal=-0.069 (negative ensemble, 2nd confirmed H18a anomaly). H15 double-batch confirmed: 11 trades vs cap=6. Kelly hard-blocked EOD Sep 21 (fraction=-0.2699). Sep 22–28: 0 new trades. ⚠️ CLOCK STATUS UNRESOLVED: v0.8.0 (Sep 23) profit-target exits merged at n=11 — if EXIT_PROFIT_TARGET_MODE=ON in Railway, M3 resets to Sep 23. n=11 is noise (PF requires ≥100 trades to be non-noise). Do not act on PF signal until n≥100.",
   "v070_note": "Sep 21 2026. STRATEGY CHANGE. Root cause fix: train/serve skew (OBV session-anchored, WARMUP_BARS 300→1950). Feature pipeline v2. Feature version guard (model refuses version mismatch — fail-closed). Feature archive + 99-session backfill (2026-04-22→09-11). Retrained model: val_ic 0.1830, dir_acc 0.5689; OOS IC15=0.1795, dir_acc=0.5605, per-ticker IC positive 100% of 75 tickers. Fail-closed sector guards: SECTOR_MAP 24→57 tickers, unknown→1 slot. Exit barriers deployed (H14): hold-window-scaled ATR (sqrt(30/390)=0.277), floors 0.25%/0.35%/0.35%, stop=2σ, TP/trail=3σ. Kelly entry block functional: KELLY_HARD_BLOCK_THRESHOLD=-0.25, exits unaffected, self-draining. Entry rank monitor: entry_rank_pctile per fill, entry_rank_mean/n/healthy at /diagnostics, healthy≥85. M3 clock resets.",
@@ -84,7 +116,7 @@
   "v072_note": "diagnostics export fix — entry_rank fields.",
   "v073_note": "forecast email opt-in: FORECAST_EMAIL_ENABLED defaults False (forecast_email_to also gates halt alerts; silencing by emptying recipients would silence halt page).",
   "frozen_config_n": 35,
-  "frozen_config_win_rate": 0.400,
+  "frozen_config_win_rate": 0.4,
   "frozen_config_pf": 0.636,
   "frozen_config_net_pnl": -1973,
   "frozen_config_max_drawdown_usd": 1856,
@@ -114,14 +146,36 @@
  },
  "hypothesis_queue": [
   {
+   "id": "H28",
+   "hypothesis": "SECTOR_MAP completeness — 11 probe-eligible/signal-gate tickers confirmed unmapped in live diagnostics Sep 29. After v0.7.0 fail-closed rewrite, SECTOR_MAP expanded to 57 tickers but 11 live probe_eligible tickers (CRM/CRWD/HPE/GLW/MS/COIN/MRK/COO/NOC/GNRC/CASY) still resolve to UNMAPPED_SECTOR, applying max-position=1 and notional-cap=12.5% instead of their true sector bucket limits. This silently defeats the concentration guard for these names: a full financials book (GS+JPM+WFC+MSCI+HOOD+MS+COIN) would only count 5 against the sector limit while MS/COIN were isolated in unmapped. Fix: add all 11 tickers to SECTOR_MAP with correct sector assignments. Supersedes H27 (PR #62) which was written Sep 18 and has stale merge conflicts after v0.7.0.",
+   "status": "implemented — PR pending (Sep 29, freeze-exempt structural correctness fix)",
+   "added": "2026-09-29",
+   "added_by": "nightly desk — live diagnostics Sep 29: tickers_probe_eligible=[32 tickers]; 11 resolve to UNMAPPED_SECTOR",
+   "pr_branch": "feat/rnd-H28-sector-map-probe-eligible",
+   "tests": "12 new tests (11 parametrized sector-of assertions + 1 full probe_eligible sweep). 358 passed/3 skipped.",
+   "priority": "HIGH — merge immediately. Kelly recovery ~Oct 1; concentration guard must be correct before entries resume. Freeze-exempt: structural correctness fix.",
+   "pm_priority": -4,
+   "freeze_exempt": true
+  },
+  {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
    "status": "implemented — 2 PRs open (freeze-exempt risk-control enhancements, Sep 8-12)",
    "added": "2026-09-08",
    "added_by": "nightly desk — post-mortem and pattern analysis of Aug 31 + Sep 10-11 Kelly dynamics",
    "sub_prs": {
-    "PR56": {"number": 56, "title": "Kelly unique trading days guard (KELLY_MIN_UNIQUE_DAYS=5)", "state": "OPEN", "date": "2026-09-08"},
-    "PR57": {"number": 57, "title": "Kelly cluster-day cap — limit per-day outcome contribution", "state": "OPEN", "date": "2026-09-12"}
+    "PR56": {
+     "number": 56,
+     "title": "Kelly unique trading days guard (KELLY_MIN_UNIQUE_DAYS=5)",
+     "state": "OPEN",
+     "date": "2026-09-08"
+    },
+    "PR57": {
+     "number": 57,
+     "title": "Kelly cluster-day cap — limit per-day outcome contribution",
+     "state": "OPEN",
+     "date": "2026-09-12"
+    }
    },
    "priority": "HIGH — systemic guard; addresses root cause more robustly than H24. Both freeze-exempt.",
    "pm_priority": -1
@@ -133,10 +187,30 @@
    "added": "2026-09-01",
    "added_by": "nightly desk — post-mortem of Aug 31 structural defect",
    "sub_prs": {
-    "PR51": {"number": 51, "title": "cap per-entry notional when Kelly window inactive (n<10)", "state": "OPEN", "date": "2026-09-01"},
-    "PR52": {"number": 52, "title": "Kelly rolloff probation guard — prevent full-sizing on window-empty day", "state": "OPEN", "date": "2026-09-03"},
-    "PR53": {"number": 53, "title": "intraday session realized-loss entry halt ($400 guard)", "state": "OPEN", "date": "2026-09-04"},
-    "PR54": {"number": 54, "title": "persist probation_entries_today across restarts", "state": "OPEN", "date": "2026-09-05"}
+    "PR51": {
+     "number": 51,
+     "title": "cap per-entry notional when Kelly window inactive (n<10)",
+     "state": "OPEN",
+     "date": "2026-09-01"
+    },
+    "PR52": {
+     "number": 52,
+     "title": "Kelly rolloff probation guard — prevent full-sizing on window-empty day",
+     "state": "OPEN",
+     "date": "2026-09-03"
+    },
+    "PR53": {
+     "number": 53,
+     "title": "intraday session realized-loss entry halt ($400 guard)",
+     "state": "OPEN",
+     "date": "2026-09-04"
+    },
+    "PR54": {
+     "number": 54,
+     "title": "persist probation_entries_today across restarts",
+     "state": "OPEN",
+     "date": "2026-09-05"
+    }
    },
    "priority": "CRITICAL — merge ALL 4 before ~Sep 12 when Aug 31 losses roll off Kelly window and defect can recur",
    "pm_priority": 0
@@ -414,8 +488,18 @@
    "added": "2026-09-15",
    "added_by": "nightly desk — motivated by Aug 31 / Sep 10-11 Kelly window sensitivity analysis",
    "sub_prs": {
-    "PR59": {"number": 59, "title": "feat(kelly): widen KELLY_LOOKBACK_DAYS 10→20 for 30-bar intraday horizon (H26)", "state": "OPEN", "date": "2026-09-15"},
-    "PR60": {"number": 60, "title": "H26: Kelly window sensitivity diagnostic (freeze-exempt)", "state": "OPEN", "date": "2026-09-16"}
+    "PR59": {
+     "number": 59,
+     "title": "feat(kelly): widen KELLY_LOOKBACK_DAYS 10→20 for 30-bar intraday horizon (H26)",
+     "state": "OPEN",
+     "date": "2026-09-15"
+    },
+    "PR60": {
+     "number": 60,
+     "title": "H26: Kelly window sensitivity diagnostic (freeze-exempt)",
+     "state": "OPEN",
+     "date": "2026-09-16"
+    }
    },
    "priority": "MEDIUM — freeze classification needed; diagnostic PR #60 is clearly exempt; strategy PR #59 needs owner classification",
    "pm_priority": -2
@@ -487,6 +571,16 @@
    "files_changed": [
     "docs/ROADMAP.md",
     "reports/program/2026-W41.md",
+    "agent_state.json"
+   ]
+  },
+  {
+   "date": "2026-09-29",
+   "hypothesis_id": "H28",
+   "result": "H28 IMPLEMENTED — SECTOR_MAP +11 probe-eligible tickers. Live diagnostics confirmed: EXIT_PROFIT_TARGET_MODE=ON (exit_mode=profit_target, profit_target.enabled=true). M3 clock RESETS to Sep 23 per governance (strategy change). M3 n=0 Sep 23–29. Kelly hard-blocked (fraction=-0.2699, threshold -0.25), rolloff ~Oct 1. Watchdog OK (last tick 00:09 UTC Sep 29, 0 errors). 11 tickers CRM/CRWD/HPE/GLW/MS/COIN/MRK/COO/NOC/GNRC/CASY were UNMAPPED_SECTOR post-v0.7.0. Added to correct sectors (tech/financials/healthcare/industrials/consumer). 12 new tests pass. 358/3 skipped total. Supersedes H27 (PR #62, Sep 18 — stale after v0.7.0). ⚠️ OWNER ACTIONS BEFORE OCT 1: merge PRs #35/#51-54/#56-57 (H15/H24/H25 structural guards). Railway worker week 16.",
+   "files_changed": [
+    "src/execution/position_sizer.py",
+    "tests/unit/test_sector_guard.py",
     "agent_state.json"
    ]
   },
@@ -593,13 +687,17 @@
    "date": "2026-08-04",
    "hypothesis_id": "EOD_CHECK_AUG04",
    "result": "MONITORING — MSCI (id 119) still open at EOD Aug 4 (21:25 UTC sentinel). 8+ calendar days open. db_vs_broker reconciles. Second PushNotification sent EOD. Railway worker week 6. Bot HALTED. M2 n=0.",
-   "files_changed": ["agent_state.json"]
+   "files_changed": [
+    "agent_state.json"
+   ]
   },
   {
    "date": "2026-08-04",
    "hypothesis_id": "MORNING_CHECK_AUG04",
    "result": "MONITORING — MSCI (id 119) ZOMBIE POSITION confirmed. Sentinel timestamp 2026-08-04T08:25:00Z. Status CRITICAL (stale_open_rows). MSCI entered Jul 27 13:40 UTC — now 8+ calendar days open. No auto-repair path. Owner notification sent. Railway worker still blocked week 6. Bot still HALTED. M2 v0.6.0 n=0.",
-   "files_changed": ["agent_state.json"]
+   "files_changed": [
+    "agent_state.json"
+   ]
   },
   {
    "date": "2026-08-03",
@@ -615,7 +713,9 @@
    "date": "2026-07-31",
    "hypothesis_id": "NIGHTLY_LOG_W32",
    "result": "MONITORING — Bot HALTED (max_drawdown circuit breaker since 2026-07-28; 6 open positions, heat 59.2%). M2 frozen-config: n=35 (+3 since Jul 27), PF=0.636 (was 0.741 at n=32 — WORSENING). New closed: NFLX +$349 (win, max_hold), WDC -$804 (loss, trailing_stop), MU -$435 (loss, trailing_stop; 5th recent MU loss). PLTR (id 124) flagged: sentiment=-0.969 on a long entry. Sentinel ALL GREEN 22:25 UTC Jul 30 (criterion 1 satisfied). H11 confirmed in PR #26 (DRAFT). Railway worker BLOCKED week 5.",
-   "files_changed": ["agent_state.json"]
+   "files_changed": [
+    "agent_state.json"
+   ]
   },
   {
    "date": "2026-07-27",
@@ -631,7 +731,9 @@
    "date": "2026-07-24",
    "hypothesis_id": "INTEGRITY_FILL_PNL_REPAIR",
    "result": "DEPLOYED — PR #20 (fix(integrity): heal residual fill-price pnl corruption v0.5.1) merged by owner at 05:36 UTC. 5 known corrupt rows healed. Fill-corrected trailing-30 PF=0.864 (stored 0.60).",
-   "files_changed": ["agent_state.json"],
+   "files_changed": [
+    "agent_state.json"
+   ],
    "pr_number": 20
   },
   {
