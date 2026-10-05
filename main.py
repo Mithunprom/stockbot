@@ -105,6 +105,17 @@ async def lifespan(app: FastAPI):
         if _live_feature_computer is not None:
             await _live_feature_computer.on_bar(ticker, bar_time)
 
+    async def _on_1m_bars(bars: dict) -> None:
+        """Batch callback — the ONLY path that yields cross-sectional features.
+
+        rs_1m / rs_15m / rs_vwap_dev are defined against the universe mean, so
+        they exist only when the whole universe is computed together. The
+        per-ticker path zero-filled rs_vwap_dev and stopped trading for seven
+        sessions (see src/features/live.py).
+        """
+        if _live_feature_computer is not None:
+            await _live_feature_computer.on_bars(bars)
+
     rest_bar_poller = None
     if _ws_enabled:
         alpaca_stream = AlpacaDataStreamClient(tickers=universe, feed="iex")
@@ -120,6 +131,7 @@ async def lifespan(app: FastAPI):
             tickers=universe,
             on_bar_callback=_on_1m_bar,
             poll_interval=60,
+            on_bars_callback=_on_1m_bars,
         )
         stream_task = asyncio.create_task(
             rest_bar_poller.start(), name="rest_bar_poller"
@@ -780,7 +792,7 @@ def _load_ffsa_features() -> list[str]:
 # each filled entry sat in the model's own cross-section and surfaces a rolling
 # mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
 # near 46 and nothing reported it.
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.9.0"
 
 app = FastAPI(
     title="StockBot API",
@@ -1161,6 +1173,9 @@ async def diagnostics() -> JSONResponse:
             "kelly_mode": summary.get("kelly_mode", "inactive"),
             "kelly_entries_blocked": summary.get("kelly_entries_blocked", False),
             "kelly_n_trades": summary.get("kelly_n_trades", 0),
+            "kelly_epoch": summary.get("kelly_epoch"),
+            "kelly_hard_block_threshold": summary.get("kelly_hard_block_threshold"),
+            "kelly_entries_hard_blocked": summary.get("kelly_entries_hard_blocked"),
             "kelly_lookback_days": summary.get("kelly_lookback_days"),
             "probation_entries_today": summary.get("probation_entries_today", 0),
             # Train/serve skew watch — the percentile each filled entry occupied
@@ -1170,6 +1185,15 @@ async def diagnostics() -> JSONResponse:
             "entry_rank_mean": summary.get("entry_rank_mean"),
             "entry_rank_n": summary.get("entry_rank_n", 0),
             "entry_rank_healthy": summary.get("entry_rank_healthy"),
+            # Exit-threshold observability. NOTE: this endpoint re-exports an
+            # explicit WHITELIST of snapshot keys — adding a field to the
+            # signal-loop snapshot is NOT enough to make it visible here. That
+            # caught entry_rank_* (v0.7.1 -> v0.7.2) and then ticker_daily_vol
+            # (v0.8.6 -> v0.8.7), both times costing a deploy. Always verify a
+            # new field against the LIVE endpoint, not just the snapshot.
+            "ticker_daily_vol": summary.get("ticker_daily_vol"),
+            "computed_exits": summary.get("computed_exits"),
+            "daily_vol_cache_n": summary.get("daily_vol_cache_n"),
             "daytrade_count": summary.get("daytrade_count", 0),
             "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),

@@ -169,6 +169,9 @@ class IntegrityAgent:
         self._last_email_fingerprint = ""
         self._last_email_at: datetime | None = None
         self.last_report: dict[str, Any] | None = None
+        # Last alerting failure, or None when the channel is healthy. Surfaced
+        # so a broken escalation path is observable without reading logs.
+        self.last_alert_error: str | None = None
 
     # ── Individual checks ───────────────────────────────────────────────────
 
@@ -368,7 +371,10 @@ class IntegrityAgent:
         grace_cutoff = datetime.now(timezone.utc) - timedelta(
             minutes=DB_BROKER_GRACE_MINUTES)
         result = await session.execute(
-            select(Trade.id, Trade.ticker, Trade.entry_time)
+            # entry_price/shares are carried so _lookup_exit_fill can price a
+            # recovered exit instead of closing the row with pnl NULL.
+            select(Trade.id, Trade.ticker, Trade.entry_time,
+                   Trade.entry_price, Trade.shares)
             .where(Trade.exit_time.is_(None))
         )
         open_rows = result.all()
@@ -376,8 +382,10 @@ class IntegrityAgent:
         only_broker = sorted(broker_tickers - db_tickers)
         # only_db orphans eligible to auto-close: DB-open, not at broker, past grace.
         orphans = [
-            {"id": tid, "ticker": tkr, "entry_time": str(et)}
-            for tid, tkr, et in open_rows
+            {"id": tid, "ticker": tkr, "entry_time": et,
+             "entry_price": float(ep) if ep is not None else None,
+             "shares": float(sh) if sh is not None else None}
+            for tid, tkr, et, ep, sh in open_rows
             if tkr not in broker_tickers
             and (et if et.tzinfo else et.replace(tzinfo=timezone.utc)) < grace_cutoff
         ]
@@ -398,6 +406,73 @@ class IntegrityAgent:
         if get_settings().alpaca_mode != "paper":
             return False
         return repair or os.environ.get("INTEGRITY_AUTO_REPAIR", "false").lower() == "true"
+
+    async def _lookup_exit_fill(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        """Reconstruct a real exit from the broker's fill history.
+
+        Returns the columns to write (exit_price / pnl / pnl_pct / shares), or
+        None when no closing fill can be found — in which case the caller keeps
+        them NULL rather than fabricating a number.
+        """
+        if self._alpaca is None:
+            return None
+        ticker = row.get("ticker")
+        entry_time = row.get("entry_time")
+        entry_price = row.get("entry_price")
+        shares = row.get("shares")
+        if not ticker or entry_time is None:
+            return None
+        if isinstance(entry_time, str):
+            try:
+                entry_time = datetime.fromisoformat(entry_time)
+            except ValueError:
+                return None
+        if entry_time.tzinfo is None:
+            entry_time = entry_time.replace(tzinfo=timezone.utc)
+
+        try:
+            fill = await self._alpaca.get_closing_fill(ticker, after=entry_time)
+        except Exception as exc:
+            logger.warning("integrity_exit_fill_lookup_failed",
+                           ticker=ticker, error=str(exc))
+            return None
+        if not fill or not fill.get("price"):
+            return None
+
+        out: dict[str, Any] = {"exit_price": fill["price"]}
+        qty = fill.get("qty") or shares
+
+        # Prefer the BROKER's entry fill over the ledger's entry_price. The
+        # entry write records the immediately-filled price, which is imprecise
+        # under partial fills — and the error is not symmetric: reconstructing
+        # the 2026-09-29 session from ledger entry prices understated losses by
+        # $4.21 while both winners came out exact, biasing recovered P&L upward.
+        # pnl_pct feeds the Kelly seed, so an optimistic bias here weakens a
+        # risk control. Derive both legs from the broker and the number is
+        # simply correct.
+        try:
+            entry_fill = await self._alpaca.get_closing_fill(
+                ticker, after=entry_time - timedelta(minutes=5), side="buy",
+            )
+        except Exception:
+            entry_fill = None
+        if entry_fill and entry_fill.get("price"):
+            entry_price = entry_fill["price"]
+            qty = entry_fill.get("qty") or qty
+
+        # pnl needs a trustworthy entry price AND qty; without both, record the
+        # exit price alone and leave the derived columns NULL.
+        if entry_price and qty:
+            pnl = (fill["price"] - float(entry_price)) * float(qty)
+            notional = float(entry_price) * float(qty)
+            out["pnl"] = pnl
+            if notional > 0:
+                out["pnl_pct"] = pnl / notional
+            out["shares"] = float(qty)
+        logger.info("integrity_exit_recovered_from_broker",
+                    ticker=ticker, exit_price=fill["price"],
+                    pnl=round(out.get("pnl", 0.0), 2))
+        return out
 
     async def _repair(self, session: Any, divergent: list[dict[str, Any]],
                       stale: list[dict[str, Any]],
@@ -466,15 +541,30 @@ class IntegrityAgent:
                 update(Trade).where(Trade.id == row["id"])
                 .values(exit_time=now, exit_reason="integrity_stale_cleanup")
             )
+        orphans_priced = 0
         for row in broker_orphans:
             # Broker is the source of truth for whether a position exists.
             # The position closed at the broker without a DB exit write
             # (redeploy lost _open_trade_ids, or a watchdog/broker-side close
-            # bypassed the exit path). Close the row; the true exit price is
-            # unknowable so pnl/pnl_pct stay NULL (kept out of Kelly + stats).
+            # bypassed the exit path).
+            #
+            # The exit price is NOT unknowable — it is in the broker's order
+            # history. This used to close the row with pnl/pnl_pct NULL, which
+            # silently discarded real results: on 2026-09-29 all six trades of
+            # a session closed at the broker with no DB write, and +$28.13 of
+            # genuine P&L existed only in Alpaca's fill records. Recover the
+            # fill first and fall back to NULL only when there is truly no fill
+            # to find.
+            vals: dict[str, Any] = {
+                "exit_time": now,
+                "exit_reason": "integrity_broker_reconcile",
+            }
+            fill = await self._lookup_exit_fill(row)
+            if fill is not None:
+                vals.update(fill)
+                orphans_priced += 1
             await session.execute(
-                update(Trade).where(Trade.id == row["id"])
-                .values(exit_time=now, exit_reason="integrity_broker_reconcile")
+                update(Trade).where(Trade.id == row["id"]).values(**vals)
             )
         await session.commit()
 
@@ -495,6 +585,7 @@ class IntegrityAgent:
         return {"pnl_pct_rewritten": len(divergent), "stale_closed": len(stale),
                 "fill_pnl_rewritten": len(healable_fill),
                 "broker_orphans_closed": len(broker_orphans),
+                "broker_orphans_priced": orphans_priced,
                 "kelly_reseeded": kelly_reseeded, "backup": str(backup_path)}
 
     # ── Run cycle ───────────────────────────────────────────────────────────
@@ -554,6 +645,9 @@ class IntegrityAgent:
             ],
             "repair": repair_result,
             "healed_any": any(c.get("healed") for c in checks),
+            # Health of the ESCALATION path itself. If this is non-null, the
+            # report you are reading did not reach anyone by email.
+            "alert_channel_error": self.last_alert_error,
         }
         self.last_report = report
 
@@ -614,8 +708,19 @@ class IntegrityAgent:
             )
             self._last_email_fingerprint = fingerprint
             self._last_email_at = now
-        except Exception:
-            logger.exception("integrity_email_failed")
+            self.last_alert_error = None
+        except Exception as exc:
+            # Record the failure on the agent so a DEAD ALERT CHANNEL is visible
+            # in the report and at /diagnostics. Previously this only produced a
+            # stack trace in the logs: on 2026-09-29 every CRITICAL integrity
+            # escalation silently went nowhere for a full day because the SMTP
+            # credential had expired (535 BadCredentials), and the only symptom
+            # was an absence of email — the least detectable failure mode there
+            # is. An alerting path that can fail silently is not an alerting
+            # path.
+            self.last_alert_error = f"{type(exc).__name__}: {exc}"
+            logger.error("integrity_email_failed_alerts_are_not_reaching_anyone",
+                         error=self.last_alert_error)
 
     def _send_email(self, subject: str, body: str) -> None:
         """Same SMTP path as the watchdog/forecast emails (proven in prod)."""

@@ -129,6 +129,78 @@ def test_live_warmup_reproduces_training_features(feature):
     )
 
 
+def test_every_model_feature_is_producible_by_the_serving_path():
+    """THE test that should have caught rs_vwap_dev.
+
+    The parametrised test above samples five features by name, so it could not
+    notice that `rs_vwap_dev` — one of the deployed model's 30 features — was
+    never produced at all by the per-ticker serving path. It is cross-sectional
+    (ticker VWAP deviation minus the universe mean), so only
+    compute_indicators_for_universe can compute it.
+
+    Result: it arrived missing on every bar, was zero-filled at scoring time,
+    prediction magnitudes collapsed below the entry threshold, and the bot
+    stopped trading for seven sessions while every health check stayed green.
+
+    This asserts coverage over the ACTUAL model feature list, so adding a
+    feature the serving path cannot supply fails here instead of in P&L.
+    """
+    import json
+    from pathlib import Path
+
+    from src.features.indicators import compute_indicators_for_universe
+
+    metas = sorted(Path("models/lgbm").glob("lgbm_ic_*.json"))
+    if not metas:
+        pytest.skip("no model metadata available")
+    # the checkpoint the loader would actually select
+    from src.models.lgbm import LGBMSignalModel
+    try:
+        chosen = LGBMSignalModel._select_checkpoint()
+        meta_path = Path(str(chosen)[:-4] + ".json")
+    except Exception:
+        meta_path = metas[-1]
+    model_features = json.loads(meta_path.read_text())["feature_cols"]
+
+    # Two tickers => a real universe, so cross-sectional features can exist.
+    bars = {"AAA": _synthetic_bars(), "BBB": _synthetic_bars()}
+    # decorrelate the second name so the universe mean is not degenerate
+    bars["BBB"]["close"] = bars["BBB"]["close"] * 1.03 + 2.0
+    produced = compute_indicators_for_universe(bars, shift=True)
+    assert produced, "universe compute produced nothing"
+
+    available = set()
+    for df in produced.values():
+        available |= set(df.columns)
+
+    missing = [f for f in model_features if f not in available]
+    assert not missing, (
+        f"the serving path cannot produce {missing} — the model would be scored "
+        f"with them zero-filled, silently. Either compute them in serving or "
+        f"drop them from the feature set."
+    )
+
+
+def test_cross_sectional_features_need_the_universe_path():
+    """Pins WHY the batch path is mandatory, so nobody 'simplifies' it back.
+
+    Reverting on_bars() to a per-ticker loop would reintroduce the outage.
+    """
+    from src.features.indicators import compute_indicators_for_universe
+
+    single = compute_indicators(_synthetic_bars(), shift=True)
+    assert not [c for c in single.columns if c.startswith("rs_")], (
+        "per-ticker compute unexpectedly produced rs_* features — if this "
+        "changes, update the batch-path rationale in src/features/live.py"
+    )
+
+    bars = {"AAA": _synthetic_bars(), "BBB": _synthetic_bars()}
+    bars["BBB"]["close"] = bars["BBB"]["close"] * 1.03 + 2.0
+    universe = compute_indicators_for_universe(bars, shift=True)
+    rs_cols = [c for c in next(iter(universe.values())).columns if c.startswith("rs_")]
+    assert rs_cols, "universe compute failed to produce any rs_* features"
+
+
 def test_warmup_is_long_enough_to_cover_a_session_anchor():
     """WARMUP_BARS must span multiple sessions or session-anchored features
     cannot be reconstructed for early-session bars."""

@@ -104,13 +104,32 @@ async def load_data(
     await init_db()
     session_factory = get_session_factory()
 
+    # Search order mirrors main._load_ffsa_features():
+    #   1. reports/drift/ffsa_*.json  — runtime-generated, most up to date
+    #   2. config/ffsa_features.json  — committed fallback
+    #
+    # The fallback is not optional in production. `.railwayignore` excludes
+    # /reports/, so reports/drift/ffsa_*.json is NEVER in the deployed image and
+    # this function used to raise FileNotFoundError on every run. RetrainAgent
+    # therefore failed at 08:00 ET for four months — its last success was
+    # 2026-05-28 — and the drought was misattributed entirely to the 3-day
+    # feature_matrix retention. Two independent causes; fixing only the
+    # retention would not have helped.
     ffsa_files = sorted(Path("reports/drift").glob("ffsa_*.json"), reverse=True)
-    if not ffsa_files:
-        raise FileNotFoundError("No FFSA report — run scripts/run_ffsa.py first")
-    with open(ffsa_files[0]) as f:
+    source = ffsa_files[0] if ffsa_files else Path("config/ffsa_features.json")
+    if not source.exists():
+        raise FileNotFoundError(
+            "No FFSA feature list: neither reports/drift/ffsa_*.json nor the "
+            "committed config/ffsa_features.json is present. "
+            "Run scripts/run_ffsa.py."
+        )
+    with open(source) as f:
         ffsa = json.load(f)
-    feature_cols: list[str] = ffsa["selected_features"][:top_n]
-    logger.info("Using %d FFSA features from %s", len(feature_cols), ffsa_files[0].name)
+    selected = ffsa.get("selected_features") or []
+    if not selected:
+        raise ValueError(f"FFSA report {source} has no selected_features")
+    feature_cols: list[str] = selected[:top_n]
+    logger.info("Using %d FFSA features from %s", len(feature_cols), source)
 
     from main import _DEFAULT_UNIVERSE
 

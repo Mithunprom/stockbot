@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.8.1 DEPLOYED. EXIT_PROFIT_TARGET_MODE=ON CONFIRMED (live diagnostics Sep 29: exit_mode=profit_target). M3 RESETS to Sep 23 (v0.8.0 strategy change). M3 n=0 Sep 23–29. Kelly hard-blocked (fraction=-0.2699); rolloff ~Oct 1. H28 IMPLEMENTED tonight: SECTOR_MAP +11 probe-eligible tickers (CRM/CRWD/HPE/GLW/MS/COIN/MRK/COO/NOC/GNRC/CASY). Railway worker week 16. W40 program review 2026-09-28.",
- "last_iteration_date": "2026-09-29",
- "active_hypothesis": "H28: SECTOR_MAP probe-eligible tickers (Sep 29). 11 tickers from live diagnostics probe_eligible/signal_gate were landing in UNMAPPED_SECTOR after v0.7.0 fail-closed rewrite — each getting max-position=1 and notional-cap=12.5% instead of true sector limits. Adds: CRM/CRWD/HPE/GLW (tech), MS/COIN (financials), MRK/COO (healthcare), NOC/GNRC (industrials), CASY (consumer). 12 new tests. 358 passed/3 skipped. Freeze-exempt: structural correctness, no change to entry logic or sizing. Supersedes H27 (PR #62) which has stale merge conflicts after v0.7.0.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.0 DEPLOYED. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by live take_profit exit). n=18 closed (Sep 23 window, PF=5.11 noise/halt-contaminated). Kelly epoch Sep 29 (owner-authorized). 6 open positions Oct 5. 9 commits W41: cascading incident cluster (rs_vwap_dev, CB halt, orphaned exits, RetrainAgent 4-month fix, SMTP failure). SMTP credential expired — alerts dead. Railway worker week 16. W41 program review complete 2026-10-05.",
+ "last_iteration_date": "2026-10-05",
+ "active_hypothesis": "v0.9.0 deployed (Oct 1). W41 cascading incident cluster resolved. v0.8.2: rs_vwap_dev cross-sectional serving fix (root cause: 7-session zero-trades Sep 22-28, silent). v0.8.3: Kelly epoch re-seed (owner-authorized Sep 29 — excludes Sep 21 trades from Kelly window). v0.8.4: retrain on corrected archive (OOS IC15=0.1839; freeze classification pending). v0.8.5: archive quality gate. v0.8.6: orphaned exit recovery from broker fills; SMTP credential failure surfaced (alert_channel_error). v0.8.7: both legs from broker. v0.8.8: diagnostics fix. v0.8.9: RetrainAgent FFSA path fixed (broken since May 28 — 4 months). v0.9.0: H13 halt-aware exits (live incident Sep 30 — halt stranded 6 positions at 70% heat; fixed position-scoped guard). M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by take_profit exit LITE ID 255). n=18 closed (noise; 11/18 exits integrity_broker_reconcile; PF=5.11 halt-contaminated). SMTP credential still unresolved. Railway worker BLOCKED week 16.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,11 +29,23 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "Last confirmed OK Sep 21 (v0.7.3 at that time). v0.8.1 deployed Sep 23. Railway API blocked from cloud session — live status not fetchable this run. No halt events reported via GitHub. 0 open positions confirmed by PR #71 body.",
-  "kelly_probation_note": "W40: Kelly fraction -0.2699 HARD-BLOCKED since Sep 21 EOD. Sep 21: 11 trades (3W/8L) worsened the fraction from 0.0 to -0.2699. Hard block threshold -0.25 — block active (kelly_entries_blocked=true). Rolloff ETA ~Oct 1 when Sep 21 trades age out of 10-day window. CRITICAL: PRs #35 (H15) + H24 cluster (PRs #51–54) + H25 cluster (PRs #56–57) MUST merge before entries resume. H24 and H25 still unmerged — structural risk persists.",
+  "watchdog_status": "ALL OK Oct 5 13:35 UTC (v0.9.0). 7 checks pass: loop_tick_fresh, tick_errors, daily_reset, zombie_positions, circuit_breaker, data_fresh, universe_fresh. last_tick 13:49 UTC, last_exit Oct 2 14:49 (WDC stop_loss). 6 open positions: XOM/WFC/TER/COHR/CVX/NOC. Sept 30: CB halted (max_drawdown) — resolved by v0.9.0 Oct 1.",
+  "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
-  "deployed_version": "0.8.1",
+  "deployed_version": "0.9.0",
+  "m3_v080_n": 18,
+  "m3_v080_win_rate": 0.556,
+  "m3_v080_pf": 5.11,
+  "m3_v080_net_pnl": 3603.1,
+  "m3_v080_exit_distribution": {
+   "integrity_broker_reconcile": 11,
+   "stop_loss": 3,
+   "take_profit": 1,
+   "max_hold": 2,
+   "trailing_stop": 1
+  },
+  "m3_v080_note": "M3 window Sep 23 – present (v0.8.0 strategy config, EXIT_PROFIT_TARGET_MODE=ON confirmed). n=18: 10W/7L/1T, PF=5.11, net +$3,603.10. ⚠️ PRINCIPAL SKEPTIC FLAG: PF=5.11 is NOT edge evidence. 11/18 exits via integrity_broker_reconcile (positions stranded by Sep 30 CB halt and reconciled from broker fills after v0.8.6 repair). COHR +12%, MSTR +8%, LITE +8% were uncontrolled overnight holds. n=18 is noise; gate requires n≥100. Do not act on this PF.",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -98,7 +110,7 @@
    "take_profit": 0
   },
   "m3_v070_entry_rank_mean": 96.9,
-  "m3_v070_note": "M3 window started Sep 21 2026 (v0.7.0 deploy). n=11 (all Sep 21): 3W/8L, PF=0.587, net -$329.85, entry_rank_mean=96.9 ✅ SKEW FIX CONFIRMED. Corrections: ARM (ID 237, +$426.19) was missed in PR #68 count; corrected in PR #69 to n=11/PF=0.587/3W/8L. First stop_loss exit: STX (ID 240, -$408.33) ✅ — barriers working. SNDK (ID 246) entered LONG with ensemble_signal=-0.069 (negative ensemble, 2nd confirmed H18a anomaly). H15 double-batch confirmed: 11 trades vs cap=6. Kelly hard-blocked EOD Sep 21 (fraction=-0.2699). Sep 22–28: 0 new trades. ⚠️ CLOCK STATUS UNRESOLVED: v0.8.0 (Sep 23) profit-target exits merged at n=11 — if EXIT_PROFIT_TARGET_MODE=ON in Railway, M3 resets to Sep 23. n=11 is noise (PF requires ≥100 trades to be non-noise). Do not act on PF signal until n≥100. ✅ EXIT_PROFIT_TARGET_MODE=ON CONFIRMED Sep 29 (live diagnostics exit_mode=profit_target, profit_target.enabled=true). M3 CLOCK RESET to Sep 23 per governance: v0.8.0 profit-target exits = strategy change. M3 n=0 from Sep 23 (0 new trades Sep 23–29). v0.8.0 M3 is the active measurement window.",
+  "m3_v070_note": "M3 window started Sep 21 2026 (v0.7.0 deploy). n=11 (all Sep 21): 3W/8L, PF=0.587, net -$329.85, entry_rank_mean=96.9 ✅ SKEW FIX CONFIRMED. Corrections: ARM (ID 237, +$426.19) was missed in PR #68 count; corrected in PR #69 to n=11/PF=0.587/3W/8L. First stop_loss exit: STX (ID 240, -$408.33) ✅ — barriers working. SNDK (ID 246) entered LONG with ensemble_signal=-0.069 (negative ensemble, 2nd confirmed H18a anomaly). H15 double-batch confirmed: 11 trades vs cap=6. Kelly hard-blocked EOD Sep 21 (fraction=-0.2699). Sep 22–28: 0 new trades. ⚠️ CLOCK STATUS UNRESOLVED: v0.8.0 (Sep 23) profit-target exits merged at n=11 — if EXIT_PROFIT_TARGET_MODE=ON in Railway, M3 resets to Sep 23. n=11 is noise (PF requires ≥100 trades to be non-noise). Do not act on PF signal until n≥100.",
   "v070_note": "Sep 21 2026. STRATEGY CHANGE. Root cause fix: train/serve skew (OBV session-anchored, WARMUP_BARS 300→1950). Feature pipeline v2. Feature version guard (model refuses version mismatch — fail-closed). Feature archive + 99-session backfill (2026-04-22→09-11). Retrained model: val_ic 0.1830, dir_acc 0.5689; OOS IC15=0.1795, dir_acc=0.5605, per-ticker IC positive 100% of 75 tickers. Fail-closed sector guards: SECTOR_MAP 24→57 tickers, unknown→1 slot. Exit barriers deployed (H14): hold-window-scaled ATR (sqrt(30/390)=0.277), floors 0.25%/0.35%/0.35%, stop=2σ, TP/trail=3σ. Kelly entry block functional: KELLY_HARD_BLOCK_THRESHOLD=-0.25, exits unaffected, self-draining. Entry rank monitor: entry_rank_pctile per fill, entry_rank_mean/n/healthy at /diagnostics, healthy≥85. M3 clock resets.",
   "v071_note": "entry_rank_* fields surfaced at /diagnostics (were logged but not exported from whitelist).",
   "v072_note": "diagnostics export fix — entry_rank fields.",
@@ -540,9 +552,28 @@
    "blocked_note": "needs_data_run on Railway (AGENT_WORKER_ENABLE=true required)"
   }
  ],
- "v080_note": "Sep 23 2026. Two owner-directed changes. (1) Kelly probe freeze fix (freeze-exempt): KELLY_PROBE_MIN_N 300→30. Root cause: 300-prediction bar was 3× what system can produce (max 99/ticker in production, median 90). Probe entry path structurally impossible — 4th recurrence. Fix: new constant KELLY_PROBE_MIN_N=30. (2) Profit-target exits (EXIT_PROFIT_TARGET_MODE env-gated, default OFF): rewires exit ladder. Target=annual_vol×0.05, stop=0.8×target, trail=0.9×target, session backstop retained. R:R=1.25. 348 tests pass mode OFF; 13 new tests mode ON. ⚠️ If EXIT_PROFIT_TARGET_MODE=ON in Railway: strategy change, M3 resets to Sep 23.",
+ "v080_note": "Sep 23 2026. Two owner-directed changes. (1) Kelly probe freeze fix (freeze-exempt): KELLY_PROBE_MIN_N 300→30. Root cause: 300-prediction bar was 3× what system can produce (max 99/ticker in production, median 90). Probe entry path structurally impossible — 4th recurrence. Fix: new constant KELLY_PROBE_MIN_N=30. (2) Profit-target exits (EXIT_PROFIT_TARGET_MODE env-gated, default OFF): rewires exit ladder. Target=annual_vol×0.05, stop=0.8×target, trail=0.9×target, session backstop retained. R:R=1.25. 348 tests pass mode OFF; 13 new tests mode ON. ⚠️ EXIT_PROFIT_TARGET_MODE=ON confirmed in production (LITE ID 255 exited take_profit Oct 2). M3 clock resets to Sep 23.",
  "v081_note": "Sep 23 2026. Diagnostics fix: /diagnostics reported old 30-bar ATR geometry after v0.8.0 changed the mode. Now reports actual running config including exit_mode, effective hold window, profit_target block parameters.",
+ "v082_note": "Sep 29 2026. rs_vwap_dev cross-sectional serving fix. LiveFeatureComputer was calling per-ticker compute in a loop — rs_vwap_dev (cross-sectional: ticker VWAP dev minus universe mean) was always zero-filled. All 50 tickers failed pred_return_too_small for 7 sessions (Sep 22-28); bot silent but watchdog/sentinel stayed green. Fix: batch on_bars() entry point. Root cause of zero-trade week.",
+ "v083_note": "Sep 29 2026. Kelly epoch re-seed (OWNER-AUTHORIZED). Sep 21 trades excluded from Kelly window via KELLY_EPOCH env var. Fraction -0.2699 resulted from the rs_vwap_dev serving bug — owner classified those outcomes as unrepresentative. TPM note on record: natural rolloff (~Oct 1) was 48h away at near-zero cost; owner chose epoch instead. Governance-compliant (owner-authorized bypass, documented in commit).",
+ "v084_note": "Sep 29 2026. Model retrain on corrected archive (rs_vwap_dev now correct). Trained on 109-session corrected archive. OOS IC15=0.1839 vs prior 0.1795. FREEZE CLASSIFICATION PENDING — strategy change (new checkpoint) or freeze-exempt (corrects feature skew opened by v0.8.2)? Owner decision needed. Either classification: M3 clock stays Sep 23 (v0.8.0 is the earlier reset).",
+ "v085_note": "Sep 29 2026. Archive quality gate: training pipeline now refuses sessions missing rs_* features (rejects pre-v0.8.2 sessions from training archive).",
+ "v086_note": "Sep 30 2026. Orphaned exit recovery + SMTP failure surfaced. Sep 30 CB halt stranded 6 positions; ledger showed them open; Integrity Sentinel detected db_vs_broker CRITICAL but repair=False — detecting forever, not fixing. Fix: AlpacaBroker.get_closing_fill() recovers PnL from broker fills. Also: every CRITICAL alert email was bouncing on expired SMTP credential; surfaced as alert_channel_error field in sentinel report. SMTP STILL UNRESOLVED.",
+ "v087_note": "Sep 30 2026. Both exit legs (entry + exit) recovered from broker fills, not just the closing leg. Prevents PnL bias toward profitable positions.",
+ "v088_note": "Sep 30 2026. Diagnostics fix for exit-threshold fields (correct values now reported at /diagnostics for exit ladder).",
+ "v089_note": "Sep 30 2026. RetrainAgent FFSA path fix. train_lgbm.load_data() hard-required reports/drift/ffsa_*.json which .railwayignore excludes from the deployed image. RetrainAgent had raised FileNotFoundError at every 08:00 ET run for 4+ months (since May 28). Fix: fallback to config/ffsa_features.json. OPERATIONAL CHANGE: model can now hot-swap daily at 08:00 ET without a deploy — 'what model is live' can change silently; MIN_VAL_IC and pipeline-version guard are the only gates.",
+ "v090_note": "Oct 1 2026. H13 LIVE INCIDENT FIX. Sep 30: max_drawdown CB fired with 6 positions open at ~70% heat carrying +$794 unrealized. _act_on_signal() had unconditional if self._cb.is_halted: return False — exits went through same gate. Positions could not close. Same defect had been open as PRs #31/#32 for 41 days. Fix: guard is now position-scoped (if self._cb.is_halted and not has_position). Halt still blocks entries; exits and hold-updates always run. 381 tests pass.",
  "completed_iterations": [
+  {
+   "date": "2026-10-05",
+   "hypothesis_id": "W41_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW — W41 weekly review complete. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON — LITE ID 255 exited take_profit Oct 2). n=18 (PF=5.11 — NOISE; 11/18 exits integrity_broker_reconcile; halt-recovery contaminated). v0.9.0 deployed (Oct 1 — H13 halt-aware exits, live incident Sep 30). W41 9-commit cascade: (1) v0.8.2 rs_vwap_dev serving fix (root cause of 7-session zero-trade silence Sep 22-28); (2) v0.8.3 Kelly epoch owner-authorized; (3) v0.8.4 model retrain on corrected archive (freeze classification pending); (4) v0.8.5 archive quality gate; (5) v0.8.6 orphaned exit recovery + SMTP failure discovered; (6) v0.8.7 both legs from broker; (7) v0.8.8 diagnostics fix; (8) v0.8.9 RetrainAgent FFSA fix (4 months broken); (9) v0.9.0 H13 halt-aware exits. SMTP credential still expired — all CRITICAL alert emails silently failing, duration unknown. Integrity ALL GREEN Oct 5. Watchdog OK. 6 open positions. Railway worker week 16. 4 owner decisions needed.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W41.md",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-09-29",
    "hypothesis_id": "H28",
@@ -777,26 +808,24 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION — URGENT] Merge H28 PR (feat/rnd-H28-sector-map-probe-eligible): SECTOR_MAP +11 probe-eligible tickers. Freeze-exempt structural fix. Must land before Kelly recovery ~Oct 1. Supersedes H27 (PR #62 — close that PR).",
-  "[OWNER ACTION — CRITICAL — BEFORE OCT 1] Merge PR #35 (H15: persist n_trades_today). 47 days stale. Double-batch confirmed again Sep 21 (11 trades vs cap=6). Must be live before Kelly recovery ~Oct 1.",
-  "[OWNER ACTION — CRITICAL — BEFORE OCT 1] Merge H24 cluster PRs #51, #52, #53, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly rolloff ~Oct 1 — same structural defect as Aug 31 re-activates without these.",
-  "[OWNER ACTION — CRITICAL — BEFORE OCT 1] Merge H25 cluster PRs #56, #57 (systemic Kelly guard). Both freeze-exempt. Must be live before Kelly recovery.",
-  "[RESOLVED ✅] EXIT_PROFIT_TARGET_MODE=ON confirmed Sep 29 (live diagnostics exit_mode=profit_target). M3 clock resets to Sep 23.",
-  "[OWNER ACTION — CRITICAL, WEEK 15] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 15 consecutive weeks outstanding since Jul 15.",
-  "[OWNER ACTION — HIGH] Merge H24 cluster PRs #52, #53, #51, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly now 'inactive' (0.0) — less urgent than Sep 20 scenario, but structural guard should land before Kelly builds under M3.",
-  "[OWNER ACTION — HIGH] Merge H25 cluster PRs #56, #57 (systemic Kelly guard). Both freeze-exempt.",
-  "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). FREEZE-EXEMPT. Daily cap circumventable on any restart. 38 days stale.",
-  "[OWNER ACTION — HIGH] Merge PR #31 or #32 (H13 halt-aware exits). Owner must choose variant. 45 days stale.",
-  "[OWNER ACTION — MEDIUM — PR TRIAGE] Close superseded PRs: #36 (H14 incorporated in v0.7.0), #62 (H27 sector map superseded by fail-closed resolution), #42 (H19), #48 (H22). ~5 PRs can close immediately.",
-  "[OWNER ACTION — MEDIUM] Classify PR #43 (H18b SPY gate — strategy change candidate, must not merge during M3 freeze) and PR #41 (H18a vs H12 disambiguation).",
+  "[OWNER ACTION — CRITICAL — W41] Fix SMTP credential. All CRITICAL alert emails (halt, integrity escalation) silently bouncing on expired credential (535 BadCredentials). Sep 30 CB halt email almost certainly never delivered. Duration of outage unknown. Highest-priority action.",
+  "[OWNER ACTION — CRITICAL, WEEK 16] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 16 consecutive weeks outstanding since Jul 15.",
+  "[OWNER ACTION — HIGH] Classify v0.8.4 model retrain. New checkpoint on corrected archive (OOS IC15=0.1839). Strategy change or freeze-exempt (corrects feature skew v0.8.2 introduced)? Either classification: M3 clock stays Sep 23.",
+  "[OWNER ACTION — HIGH] Close superseded PRs #36, #42, #48, #62 and review direct-push governance. v0.8.3 (Kelly epoch) and v0.8.4 (retrain) should have been PRs per manifesto. v0.9.0 (live halt) was warranted emergency. ~5 PRs can close immediately.",
+  "[OWNER ACTION — HIGH] Verify RetrainAgent MIN_VAL_IC gate is set. v0.8.9 fixed the 4-month failure — RetrainAgent can now run. Model may hot-swap daily at 08:00 ET without a deploy. Owner should confirm MIN_VAL_IC and pipeline-version guard are set to desired thresholds.",
+  "[OWNER ACTION — HIGH] Merge PR #35 (H15: persist n_trades_today across restarts). 55+ days stale. Daily cap circumventable on any restart — confirmed H15 double-batch multiple times.",
+  "[OWNER ACTION — HIGH] Merge H24 cluster PRs #51, #52, #53, #54 (Kelly boundary structural fixes). ALL FREEZE-EXEMPT. Kelly epoch means these guard the rebuilding window.",
+  "[OWNER ACTION — HIGH] Merge H25 cluster PRs #56, #57 (systemic Kelly unique-days + cluster-day cap). Both freeze-exempt.",
+  "[RESOLVED ✅] H13 halt-aware exits — v0.9.0 Oct 1 (was open PRs #31/#32 for 41 days; live incident Sep 30 forced resolution).",
   "[RESOLVED ✅] v0.7.0 deployed Sep 21 — train/serve skew fixed, model retrained, sector guards fail-closed, exit barriers live, Kelly block functional.",
-  "[RESOLVED ✅] M2 gate — RETIRED (was measuring broken infra). M3 starts today.",
-  "[RESOLVED ✅] PR #36 (H14 dead stops) — incorporated in v0.7.0.",
-  "[RESOLVED ✅] Kelly block hardcoded False — fixed in v0.7.0.",
-  "[RESOLVED ✅] Kelly probation -0.6661 — inactive 0.0 (Sep 20-21 rolloff).",
+  "[RESOLVED ✅] rs_vwap_dev serving fix — v0.8.2 Sep 29 (root cause of 7-session zero-trade silence Sep 22-28).",
+  "[RESOLVED ✅] Kelly hard-block — epoch re-seed Sep 29 (owner-authorized).",
+  "[RESOLVED ✅] RetrainAgent FFSA path — v0.8.9 Sep 30 (4 months broken since May 28).",
+  "[RESOLVED ✅] EXIT_PROFIT_TARGET_MODE ambiguity — confirmed ON by live take_profit exit (LITE ID 255, Oct 2). M3 clock Sep 23 confirmed.",
+  "[RESOLVED ✅] M2 gate — RETIRED (was measuring broken infra). M3 starts Sep 23.",
   "[RESOLVED ✅] Halt lifted — confirmed by first new entry GS Aug 6.",
   "[RESOLVED ✅] MSCI zombie (id 119) — closed Aug 10 via v0.6.2.",
-  "[CODE RED — INTEGRITY MET ✅] Integrity criterion satisfied Jul 28. ALL GREEN Sep 21. Remaining: hypothesis_at_data_run (Railway worker week 14).",
+  "[CODE RED — INTEGRITY MET ✅] Integrity criterion satisfied Jul 28. ALL GREEN Oct 5. Remaining: hypothesis_at_data_run (Railway worker week 16).",
   "[Railway worker] Run H0 baseline (priority 0): python scripts/research_backtest.py --phase all",
   "[Railway worker] Run H2 backtest (priority 1): --phase spy_ma",
   "[Railway worker] Run H11 backtest (priority 2): IC-block gate validation",
@@ -811,7 +840,7 @@
  "blocked_by_token_limit": false,
  "governance": {
   "deploy_mode": "PR_REVIEW_REQUIRED",
-  "freeze_status": "FROZEN at v0.6.0 since 2026-08-02. No strategy merges until M2 matures (n>=100 on v0.6.0) or walk-forward-validated backtest justifies exception. Bug fixes, infra, docs always exempt. H14 (ATR scale) and H15 (trade cap) are freeze-exempt correctness fixes. v0.5.0 LGBM classification moot (M2 resets from v0.6.0); low-urgency to close formally.",
+  "freeze_status": "FROZEN at v0.8.0 since 2026-09-23 (M3 clock). No strategy merges until M3 matures (n>=100) or walk-forward-validated backtest justifies exception. Bug fixes, infra, monitoring always exempt. v0.9.0 (H13 halt-aware exits) was freeze-exempt safety fix. v0.8.4 retrain freeze classification PENDING (owner decision needed). v0.8.3 Kelly epoch was owner-authorized risk-control bypass. Structural guards H15/H24/H25 (PRs #35/#51-54/#56-57) are freeze-exempt and recommended for merge.",
   "note": "Per CLAUDE.md: no autonomous changes to live strategy/config. Agents research, implement, backtest, and open PRs; a human merges. Config staging: config/staging/."
  },
  "code_red": {
@@ -828,7 +857,7 @@
   "exit_criteria": "integrity clean 5 trading days + Kelly window sane + >=1 hypothesis at data_run",
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
-   "kelly_window_sane": "⚠️ HARD-BLOCKED — Kelly fraction -0.2699 (hard block active, threshold -0.25). Sep 21: 11 trades worsened fraction from 0.0 to -0.2699. Hard Kelly block (v0.7.0, KELLY_HARD_BLOCK_THRESHOLD=-0.25) is now firing. Rolloff ETA ~Oct 1. H24 (PRs #51-54) and H25 (PRs #56-57) still unmerged. CRITICAL: structural guards must be live before Kelly recovers.",
+   "kelly_window_sane": "✅ FRESH — Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded via KELLY_EPOCH env var. Window starts fresh at epoch date. Entries resumed Sep 29. CAVEAT: structural guards H24 (PRs #51-54) and H25 (PRs #56-57) still unmerged — structural risk persists as Kelly window rebuilds under M3. Monitor fraction closely as trades accumulate.",
    "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (15 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
   }
  }
