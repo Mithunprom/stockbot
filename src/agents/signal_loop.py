@@ -2578,6 +2578,83 @@ class SignalLoop:
 
         return reason
 
+    async def record_forced_exit(
+        self,
+        ticker: str,
+        fill_price: float,
+        exit_qty: float,
+        exit_time: datetime,
+        exit_reason: str,
+    ) -> None:
+        """Book an exit that closed OUTSIDE the normal exit path.
+
+        The watchdog's zombie force-exit deliberately bypasses the exit decision
+        logic — the whole point is that that logic may be the broken component.
+        But it also skipped every piece of BOOKKEEPING, which is what made the
+        2026-10-01/05 failure invisible: `close_position`, `record_return`,
+        `_consecutive_losses`, the Kelly outcome, `_clear_sizing_state` and the
+        ledger write were all missed, so a force-exit was indistinguishable from
+        a lost exit. The integrity agent found broker-flat/DB-open an hour later
+        and stamped `integrity_broker_reconcile` — the same label a genuinely
+        dropped exit gets. 14 of 18 exits read that way and nobody could tell
+        which were which.
+
+        Skipping `_clear_sizing_state` was the live hazard: `_bars_held`,
+        `_peak_prices` and `_entry_prices` survived the close, so the next entry
+        in that ticker inherited the previous trade's trailing peak and bar
+        count. Skipping `_consecutive_losses` also kept forced losses invisible
+        to that circuit breaker.
+
+        Deciding and recording are different things: this records a decision
+        already executed at the broker. Call it only AFTER a confirmed fill, and
+        expect the caller to tolerate failure — the position is already closed,
+        so a bookkeeping error must be logged, never raised.
+
+        Args:
+            ticker: Position that was force-closed.
+            fill_price: Actual exit fill price.
+            exit_qty: Quantity closed.
+            exit_time: Broker fill timestamp.
+            exit_reason: Distinct, searchable reason (e.g. "watchdog_force_exit")
+                — never reuse a ladder reason, or the exit mix lies again.
+        """
+        pos = self._pm._positions.get(ticker)
+        entry_price = (
+            pos.avg_entry_price if pos else self._entry_prices.get(ticker, fill_price)
+        )
+        entry_notional = exit_qty * entry_price if entry_price else exit_qty * fill_price
+        pnl = self._pm.close_position(ticker, fill_price)
+        self.last_exit_at = datetime.now(timezone.utc)  # watchdog beacon
+        self._consecutive_losses = self._consecutive_losses + 1 if pnl < 0 else 0
+        pnl_pct = pnl / max(entry_notional, 1.0)
+        self._pm.record_return(pnl_pct)
+        if self._sizing_mode:
+            stamped = exit_time if exit_time.tzinfo else exit_time.replace(
+                tzinfo=timezone.utc
+            )
+            self._sizing_recent_outcomes.append((stamped, pnl_pct))
+            if len(self._sizing_recent_outcomes) > 50:
+                self._sizing_recent_outcomes = self._sizing_recent_outcomes[-50:]
+            self._update_kelly()
+            self._clear_sizing_state(ticker)
+        await self._write_trade_exit(
+            ticker=ticker,
+            fill_price=fill_price,
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+            exit_qty=exit_qty,
+            exit_time=exit_time,
+            exit_reason=exit_reason,
+        )
+        logger.warning(
+            "forced_exit_recorded",
+            ticker=ticker,
+            reason=exit_reason,
+            fill_price=fill_price,
+            pnl=round(pnl, 2),
+            pnl_pct=round(pnl_pct, 5),
+        )
+
     def _clear_sizing_state(self, ticker: str) -> None:
         """Clear per-ticker sizing state after position close."""
         self._entry_directions.pop(ticker, None)

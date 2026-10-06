@@ -108,21 +108,36 @@ class WatchdogAgent:
                 "detail": "daily reset was missing — invoked _maybe_reset_daily_value()"}
 
     def _check_zombie_positions(self) -> dict[str, Any]:
-        from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+        """Flag positions the exit path has stopped managing.
+
+        The threshold MUST come from `_effective_hold_bars()`, not the raw
+        `SIZING_MAX_HOLD_BARS`. In `profit_target` mode the ladder deliberately
+        holds for the full session (390 bars) and the timer is only a backstop,
+        so comparing against the 30-bar constant declared every ordinary
+        position a zombie 90 bars in and force-sold it — with no ledger write
+        (see `_heal_zombies`). Between 2026-10-01 and 2026-10-05 that made
+        `integrity_broker_reconcile` 14 of 18 exits: the watchdog was doing the
+        exiting, the ladder was not, and the repair path hid it. Entries landed
+        at 09:40 ET and the kills at 11:10 ET — exactly 30+60 bars. The only two
+        genuine ladder exits in the window both fired under 90 bars.
+        """
+        from src.agents.signal_loop import _effective_hold_bars
         if not self._market_open():
             return {"name": "zombie_positions", "status": "ok", "healed": False,
                     "detail": "not applicable (market closed)"}
+        hold_cap = _effective_hold_bars()
+        threshold = hold_cap + ZOMBIE_GRACE_BARS
         bars_held: dict[str, int] = getattr(self._loop, "_bars_held", {}) or {}
         zombies = [
             t for t, bars in bars_held.items()
-            if bars >= SIZING_MAX_HOLD_BARS + ZOMBIE_GRACE_BARS
-            and t in self._pm._positions
+            if bars >= threshold and t in self._pm._positions
         ]
         if not zombies:
             return {"name": "zombie_positions", "status": "ok", "healed": False,
-                    "detail": "no positions past max_hold grace"}
+                    "detail": f"no positions past hold cap {hold_cap}+"
+                              f"{ZOMBIE_GRACE_BARS} grace"}
         return {"name": "zombie_positions", "status": "critical", "healed": False,
-                "detail": f"positions stuck past max_hold+{ZOMBIE_GRACE_BARS} bars: "
+                "detail": f"positions stuck past {hold_cap}+{ZOMBIE_GRACE_BARS} bars: "
                           f"{zombies} — exit path may be broken",
                 "zombies": zombies}
 
@@ -155,9 +170,44 @@ class WatchdogAgent:
                 if str(status) in ("filled", "partially_filled", "accepted", "new"):
                     healed.append(ticker)
                     logger.warning("watchdog_force_exit", ticker=ticker, status=str(status))
+                    await self._record_force_exit(ticker, pos, result)
             except Exception:
                 logger.exception("watchdog_force_exit_failed", ticker=ticker)
         return healed
+
+    async def _record_force_exit(self, ticker: str, pos: Any, result: Any) -> None:
+        """Book a completed force-exit in the ledger. Never raises.
+
+        The order has already filled by the time this runs, so a bookkeeping
+        failure must not propagate — losing the record is bad, but re-raising
+        would abort the heal loop and leave the REMAINING zombies open.
+
+        Only a confirmed fill carries a price. `accepted`/`new` are
+        acknowledgements, not fills: writing a guessed exit price for those is
+        how the ledger got corrupted before (2026-07-20). Those are left for the
+        integrity agent, which prices them from the broker's fill record.
+        """
+        if str(getattr(result, "status", "")) not in ("filled", "partially_filled"):
+            logger.info(
+                "watchdog_force_exit_unpriced",
+                ticker=ticker,
+                status=str(getattr(result, "status", "")),
+                detail="no fill price yet — integrity agent will price it from the broker",
+            )
+            return
+        fill_price = getattr(result, "filled_avg_price", None)
+        if not fill_price:
+            return
+        try:
+            await self._loop.record_forced_exit(
+                ticker=ticker,
+                fill_price=float(fill_price),
+                exit_qty=float(getattr(result, "filled_qty", 0) or pos.qty),
+                exit_time=getattr(result, "filled_at", None) or datetime.now(timezone.utc),
+                exit_reason="watchdog_force_exit",
+            )
+        except Exception:
+            logger.exception("watchdog_force_exit_bookkeeping_failed", ticker=ticker)
 
     def _check_circuit_breaker(self) -> dict[str, Any]:
         halted = getattr(self._cb, "_halted", False)

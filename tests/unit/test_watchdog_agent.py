@@ -67,8 +67,18 @@ class TestChecks:
         agent._loop.tick_error_count = 25
         assert agent._check_tick_errors()["status"] == "critical"
 
-    def test_zombie_detection_requires_grace(self):
+    def test_zombie_detection_requires_grace(self, monkeypatch):
+        """Timer mode: the threshold is max_hold + grace.
+
+        Pinned to EXIT_PROFIT_TARGET_MODE=False explicitly. The threshold now
+        tracks `_effective_hold_bars()`, which is 390 in profit-target mode —
+        this test asserts the TIMER-mode contract, and leaving it dependent on
+        an env default is what let the two constants drift apart unnoticed.
+        Profit-target mode is covered in test_watchdog_zombie_threshold.py.
+        """
+        from src.agents import signal_loop as _sl
         from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+        monkeypatch.setattr(_sl, "EXIT_PROFIT_TARGET_MODE", False)
         agent = _make_agent()
         agent._pm._positions = {"GOOGL": MagicMock()}
         # At max_hold but within grace → not a zombie yet
