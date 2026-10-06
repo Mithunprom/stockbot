@@ -588,10 +588,55 @@ class IntegrityAgent:
                 "broker_orphans_priced": orphans_priced,
                 "kelly_reseeded": kelly_reseeded, "backup": str(backup_path)}
 
+    # ── SMTP credential pre-flight probe (H28) ──────────────────────────────
+
+    def _probe_smtp_credentials(self) -> dict[str, Any]:
+        """Test SMTP auth without sending a message. Called on every audit cycle.
+
+        The SMTP credential can expire silently: ``last_alert_error`` is only set
+        when an actual send is attempted (i.e., when there is an integrity issue to
+        report). Between clean runs the alert path is untested — we discovered the
+        2026-09-29 credential expiry only because the Sep 30 CB halt generated an
+        alert that never arrived. A proactive login probe on each run surfaces the
+        failure in the report JSON even when integrity is healthy, giving the owner
+        a window to fix the credential *before* the next emergency.
+
+        Returns one of:
+          {"status": "not_configured", ...}  — SMTP not set up; no probe needed
+          {"status": "ok", ...}              — login succeeded
+          {"status": "error", "type": "auth"|"connection", "detail": "..."}
+        """
+        from src.config import get_settings
+        s = get_settings()
+        if not s.smtp_host or not s.smtp_user or not s.smtp_password:
+            return {"status": "not_configured",
+                    "detail": "SMTP not configured — no credentials in settings"}
+        try:
+            context = ssl.create_default_context()
+            if s.smtp_port == 465:
+                with smtplib.SMTP_SSL(
+                        s.smtp_host, s.smtp_port, context=context, timeout=10) as srv:
+                    srv.login(s.smtp_user, s.smtp_password)
+            else:
+                with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=10) as srv:
+                    srv.starttls(context=context)
+                    srv.login(s.smtp_user, s.smtp_password)
+            return {"status": "ok", "detail": "SMTP login verified"}
+        except smtplib.SMTPAuthenticationError as exc:
+            return {"status": "error", "type": "auth",
+                    "detail": f"SMTPAuthenticationError: {exc}"}
+        except (smtplib.SMTPException, OSError) as exc:
+            return {"status": "error", "type": "connection",
+                    "detail": f"{type(exc).__name__}: {exc}"}
+
     # ── Run cycle ───────────────────────────────────────────────────────────
 
     async def run(self, repair: bool = False) -> dict[str, Any]:
         """Full audit; optionally repair what the audit found (paper only)."""
+        smtp_probe = self._probe_smtp_credentials()
+        if smtp_probe["status"] == "error":
+            logger.error("integrity_smtp_credential_probe_failed",
+                         type=smtp_probe.get("type"), detail=smtp_probe["detail"])
         async with self._sf() as session:
             checks = [
                 await self._audit_pnl_pct(session),
@@ -634,6 +679,10 @@ class IntegrityAgent:
                 break
             if c["status"] != "ok":
                 worst = "warn"
+        # A broken SMTP path is a warn even when the ledger is clean — we
+        # cannot guarantee the owner would receive a CRITICAL alert.
+        if smtp_probe["status"] == "error" and worst == "ok":
+            worst = "warn"
 
         report = {
             "agent": AGENT_NAME,
@@ -648,6 +697,9 @@ class IntegrityAgent:
             # Health of the ESCALATION path itself. If this is non-null, the
             # report you are reading did not reach anyone by email.
             "alert_channel_error": self.last_alert_error,
+            # Proactive credential test: non-null even when integrity is clean.
+            # A failing probe means the next CRITICAL alert will be silently lost.
+            "smtp_credential_probe": smtp_probe,
         }
         self.last_report = report
 

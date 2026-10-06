@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.0 DEPLOYED. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by live take_profit exit). n=18 closed (Sep 23 window, PF=5.11 noise/halt-contaminated). Kelly epoch Sep 29 (owner-authorized). 6 open positions Oct 5. 9 commits W41: cascading incident cluster (rs_vwap_dev, CB halt, orphaned exits, RetrainAgent 4-month fix, SMTP failure). SMTP credential expired — alerts dead. Railway worker week 16. W41 program review complete 2026-10-05.",
- "last_iteration_date": "2026-10-05",
- "active_hypothesis": "v0.9.0 deployed (Oct 1). W41 cascading incident cluster resolved. v0.8.2: rs_vwap_dev cross-sectional serving fix (root cause: 7-session zero-trades Sep 22-28, silent). v0.8.3: Kelly epoch re-seed (owner-authorized Sep 29 — excludes Sep 21 trades from Kelly window). v0.8.4: retrain on corrected archive (OOS IC15=0.1839; freeze classification pending). v0.8.5: archive quality gate. v0.8.6: orphaned exit recovery from broker fills; SMTP credential failure surfaced (alert_channel_error). v0.8.7: both legs from broker. v0.8.8: diagnostics fix. v0.8.9: RetrainAgent FFSA path fixed (broken since May 28 — 4 months). v0.9.0: H13 halt-aware exits (live incident Sep 30 — halt stranded 6 positions at 70% heat; fixed position-scoped guard). M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by take_profit exit LITE ID 255). n=18 closed (noise; 11/18 exits integrity_broker_reconcile; PF=5.11 halt-contaminated). SMTP credential still unresolved. Railway worker BLOCKED week 16.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 17). v0.9.0 DEPLOYED. M3 n=24 (Sep 23–Oct 5, PF noise). Kelly 0.4544 normal (n=24 in window since epoch Sep 29). 0 open positions Oct 6. H28 PR #79 open (SMTP pre-flight probe, freeze-exempt). SMTP credential STILL unresolved but H28 makes it detectable. Railway worker week 17.",
+ "last_iteration_date": "2026-10-06",
+ "active_hypothesis": "H28: SMTP credential pre-flight probe (PR #79, Oct 6). Adds _probe_smtp_credentials() to IntegrityAgent — login-only SMTP test runs on every run() cycle, no message sent. Result in report['smtp_credential_probe']; probe failure downgrades status ok→warn even when ledger is clean. Freeze-exempt: monitoring only. 6 unit tests pass. Born from Sep 30 CB halt email going nowhere — SMTP 535 BadCredentials undetected for unknown duration.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -21,17 +21,19 @@
   "integrity_sentinel_stale_rows": [],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
   "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
-  "watchdog_status": "ALL OK Oct 5 13:35 UTC (v0.9.0). 7 checks pass: loop_tick_fresh, tick_errors, daily_reset, zombie_positions, circuit_breaker, data_fresh, universe_fresh. last_tick 13:49 UTC, last_exit Oct 2 14:49 (WDC stop_loss). 6 open positions: XOM/WFC/TER/COHR/CVX/NOC. Sept 30: CB halted (max_drawdown) — resolved by v0.9.0 Oct 1.",
+  "watchdog_status": "ALL OK Oct 6 01:10 UTC (v0.9.0 light_run). loop_tick_fresh, tick_errors pass. last_tick 01:37 UTC. 0 open positions (XOM/WFC/TER/COHR/CVX/NOC all closed Oct 5). Market closed.",
+  "watchdog_status_oct5": "ALL OK Oct 5 13:35 UTC (v0.9.0). 7 checks pass. 6 open positions: XOM/WFC/TER/COHR/CVX/NOC.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
   "deployed_version": "0.9.0",
-  "m3_v080_n": 18,
-  "m3_v080_win_rate": 0.556,
-  "m3_v080_pf": 5.11,
-  "m3_v080_net_pnl": 3603.10,
-  "m3_v080_exit_distribution": {"integrity_broker_reconcile": 11, "stop_loss": 3, "take_profit": 1, "max_hold": 2, "trailing_stop": 1},
-  "m3_v080_note": "M3 window Sep 23 – present (v0.8.0 strategy config, EXIT_PROFIT_TARGET_MODE=ON confirmed). n=18: 10W/7L/1T, PF=5.11, net +$3,603.10. ⚠️ PRINCIPAL SKEPTIC FLAG: PF=5.11 is NOT edge evidence. 11/18 exits via integrity_broker_reconcile (positions stranded by Sep 30 CB halt and reconciled from broker fills after v0.8.6 repair). COHR +12%, MSTR +8%, LITE +8% were uncontrolled overnight holds. n=18 is noise; gate requires n≥100. Do not act on this PF.",
+  "m3_v080_n": 24,
+  "m3_v080_win_rate": 0.583,
+  "m3_v080_pf": null,
+  "m3_v080_net_pnl": null,
+  "m3_v080_exit_distribution": {"integrity_broker_reconcile": 16, "stop_loss": 3, "take_profit": 2, "max_hold": 2, "trailing_stop": 1},
+  "m3_v080_oct5_trades": {"n": 6, "wins": 4, "losses": 2, "tickers": "XOM/WFC/TER/COHR/CVX/NOC", "exits": "5 integrity_broker_reconcile + 1 take_profit (CVX)", "kelly_fraction_at_run": 0.4544},
+  "m3_v080_note": "M3 window Sep 23–Oct 5 (v0.8.0 strategy config, EXIT_PROFIT_TARGET_MODE=ON). n=24 updated Oct 6: +6 new trades (IDs 266-271, Oct 5). 14W/9L/1T est. CVX take_profit confirms exit barriers working. ⚠️ PRINCIPAL SKEPTIC FLAG: 16/24 exits via integrity_broker_reconcile — Oct 5 positions appear to have been closed at 15:25 UTC (market close sweep). PF not computed (need dollar PnL for all rows). n=24 is noise; gate requires n≥100. Do not act on win-rate.",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -113,6 +115,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H28",
+   "hypothesis": "SMTP credential pre-flight probe: run a login-only SMTP connection on every IntegrityAgent.run() cycle (no message sent) to proactively detect credential expiry. A failing probe downgrades report status from ok to warn and populates smtp_credential_probe with the exception type and message. Born from the Sep 30 CB halt email going nowhere — SMTP 535 BadCredentials had been silently failing for an unknown duration; last_alert_error is only set on actual send failures, so the broken path was undetectable during clean-ledger stretches.",
+   "status": "implemented — PR #79 open (Oct 6, freeze-exempt monitoring)",
+   "added": "2026-10-06",
+   "added_by": "nightly desk — Sep 30 CB halt email silence post-mortem",
+   "pr_branch": "feat/rnd-H28-smtp-credential-probe",
+   "pr_number": 79,
+   "pr_state": "OPEN — freeze-exempt: monitoring infrastructure only, no strategy/sizing/risk-control changes.",
+   "priority": "HIGH — merge immediately. SMTP credential still unresolved; H28 makes the next expiry visible before the next emergency.",
+   "pm_priority": -4
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -481,6 +495,17 @@
  "v090_note": "Oct 1 2026. H13 LIVE INCIDENT FIX. Sep 30: max_drawdown CB fired with 6 positions open at ~70% heat carrying +$794 unrealized. _act_on_signal() had unconditional if self._cb.is_halted: return False — exits went through same gate. Positions could not close. Same defect had been open as PRs #31/#32 for 41 days. Fix: guard is now position-scoped (if self._cb.is_halted and not has_position). Halt still blocks entries; exits and hold-updates always run. 381 tests pass.",
  "completed_iterations": [
   {
+   "date": "2026-10-06",
+   "hypothesis_id": "H28",
+   "result": "IMPLEMENTED — PR #79 open (feat/rnd-H28-smtp-credential-probe). H28: SMTP credential pre-flight probe. Adds _probe_smtp_credentials() to IntegrityAgent — login-only SMTP test on every run() cycle (no message sent). Result in report['smtp_credential_probe']; probe failure downgrades status ok→warn. Freeze-exempt: monitoring only, zero strategy/sizing/risk-control changes. 6 new unit tests pass (not_configured, auth_failure/type=auth, connection_failure/type=connection, success, SSL port=465 uses SMTP_SSL, port=587 uses SMTP+STARTTLS). Full suite: 277 pass / 11 pre-existing sandbox failures / 0 new failures. M3 update: n=24 (Oct 5 added 6 trades: XOM/WFC/TER/COHR/CVX/NOC; 4W/2L; CVX take_profit confirmed). Kelly 0.4544 normal. 0 open positions. Integrity ALL GREEN Oct 6 01:25 UTC. Watchdog OK.",
+   "files_changed": [
+    "src/agents/integrity_agent.py",
+    "tests/unit/test_integrity_agent.py",
+    "agent_state.json"
+   ],
+   "pr_number": 79
+  },
+  {
    "date": "2026-10-05",
    "hypothesis_id": "W41_PROGRAM_REVIEW",
    "result": "PROGRAM_REVIEW — W41 weekly review complete. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON — LITE ID 255 exited take_profit Oct 2). n=18 (PF=5.11 — NOISE; 11/18 exits integrity_broker_reconcile; halt-recovery contaminated). v0.9.0 deployed (Oct 1 — H13 halt-aware exits, live incident Sep 30). W41 9-commit cascade: (1) v0.8.2 rs_vwap_dev serving fix (root cause of 7-session zero-trade silence Sep 22-28); (2) v0.8.3 Kelly epoch owner-authorized; (3) v0.8.4 model retrain on corrected archive (freeze classification pending); (4) v0.8.5 archive quality gate; (5) v0.8.6 orphaned exit recovery + SMTP failure discovered; (6) v0.8.7 both legs from broker; (7) v0.8.8 diagnostics fix; (8) v0.8.9 RetrainAgent FFSA fix (4 months broken); (9) v0.9.0 H13 halt-aware exits. SMTP credential still expired — all CRITICAL alert emails silently failing, duration unknown. Integrity ALL GREEN Oct 5. Watchdog OK. 6 open positions. Railway worker week 16. 4 owner decisions needed.",
@@ -706,7 +731,7 @@
   }
  ],
  "pending_tasks": [
-  "[OWNER ACTION — CRITICAL — W41] Fix SMTP credential. All CRITICAL alert emails (halt, integrity escalation) silently bouncing on expired credential (535 BadCredentials). Sep 30 CB halt email almost certainly never delivered. Duration of outage unknown. Highest-priority action.",
+  "[OWNER ACTION — CRITICAL — W41] Fix SMTP credential. All CRITICAL alert emails (halt, integrity escalation) silently bouncing on expired credential (535 BadCredentials). Sep 30 CB halt email almost certainly never delivered. Duration of outage unknown. Highest-priority action. H28 (PR #79) makes future expiries detectable proactively — merge PR #79 so the fix is visible in /integrity after credential is updated.",
   "[OWNER ACTION — CRITICAL, WEEK 16] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 16 consecutive weeks outstanding since Jul 15.",
   "[OWNER ACTION — HIGH] Classify v0.8.4 model retrain. New checkpoint on corrected archive (OOS IC15=0.1839). Strategy change or freeze-exempt (corrects feature skew v0.8.2 introduced)? Either classification: M3 clock stays Sep 23.",
   "[OWNER ACTION — HIGH] Close superseded PRs #36, #42, #48, #62 and review direct-push governance. v0.8.3 (Kelly epoch) and v0.8.4 (retrain) should have been PRs per manifesto. v0.9.0 (live halt) was warranted emergency. ~5 PRs can close immediately.",

@@ -308,3 +308,111 @@ class TestBrokerOrphanReconcile:
         # one UPDATE for the orphan close + the commit
         assert session.execute.await_count == 1
         assert session.commit.await_count == 1
+
+
+class TestSmtpCredentialProbe:
+    """H28: Integrity Sentinel proactively checks SMTP credentials on every run.
+
+    Born from the 2026-09-29 credential expiry: the Sep 30 CB halt email almost
+    certainly never reached the owner because 535 BadCredentials had been silently
+    failing for an unknown duration. ``last_alert_error`` is only set when an
+    alert is actually attempted — meaning the credential expiry is undetectable
+    during clean-ledger stretches. A login probe on every run surfaces it
+    proactively.
+    """
+
+    def _make_settings(self, host="", user="", password="", port=587):
+        from unittest.mock import MagicMock
+        s = MagicMock()
+        s.smtp_host = host
+        s.smtp_user = user
+        s.smtp_password = password
+        s.smtp_port = port
+        return s
+
+    def test_not_configured_when_no_smtp_host(self):
+        from unittest.mock import MagicMock, patch
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        settings = self._make_settings(host="", user="u@x.com", password="p")
+        with patch("src.config.get_settings", return_value=settings):
+            result = agent._probe_smtp_credentials()
+        assert result["status"] == "not_configured"
+
+    def test_not_configured_when_no_smtp_password(self):
+        from unittest.mock import MagicMock, patch
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        settings = self._make_settings(host="smtp.example.com", user="u@x.com", password="")
+        with patch("src.config.get_settings", return_value=settings):
+            result = agent._probe_smtp_credentials()
+        assert result["status"] == "not_configured"
+
+    def test_auth_failure_returns_error_type_auth(self):
+        import smtplib
+        from unittest.mock import MagicMock, patch
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        settings = self._make_settings(
+            host="smtp.example.com", user="u@x.com", password="expired", port=587)
+        mock_srv = MagicMock()
+        mock_srv.starttls.return_value = None
+        mock_srv.login.side_effect = smtplib.SMTPAuthenticationError(535, b"Bad credentials")
+        mock_smtp_cm = MagicMock()
+        mock_smtp_cm.__enter__ = MagicMock(return_value=mock_srv)
+        mock_smtp_cm.__exit__ = MagicMock(return_value=False)
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("smtplib.SMTP", return_value=mock_smtp_cm):
+            result = agent._probe_smtp_credentials()
+        assert result["status"] == "error"
+        assert result["type"] == "auth"
+        assert "535" in result["detail"] or "SMTPAuthentication" in result["detail"]
+
+    def test_connection_failure_returns_error_type_connection(self):
+        from unittest.mock import MagicMock, patch
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        settings = self._make_settings(
+            host="smtp.unreachable.local", user="u@x.com", password="p", port=587)
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("smtplib.SMTP", side_effect=OSError("Connection refused")):
+            result = agent._probe_smtp_credentials()
+        assert result["status"] == "error"
+        assert result["type"] == "connection"
+        assert "Connection refused" in result["detail"]
+
+    def test_successful_login_returns_ok(self):
+        from unittest.mock import MagicMock, patch
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        settings = self._make_settings(
+            host="smtp.example.com", user="u@x.com", password="valid", port=587)
+        mock_srv = MagicMock()
+        mock_srv.starttls.return_value = None
+        mock_srv.login.return_value = (235, b"OK")
+        mock_smtp_cm = MagicMock()
+        mock_smtp_cm.__enter__ = MagicMock(return_value=mock_srv)
+        mock_smtp_cm.__exit__ = MagicMock(return_value=False)
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("smtplib.SMTP", return_value=mock_smtp_cm):
+            result = agent._probe_smtp_credentials()
+        assert result["status"] == "ok"
+
+    def test_ssl_port_465_uses_smtp_ssl(self):
+        import smtplib
+        from unittest.mock import MagicMock, patch
+        from src.agents.integrity_agent import IntegrityAgent
+        agent = IntegrityAgent(session_factory=MagicMock())
+        settings = self._make_settings(
+            host="smtp.example.com", user="u@x.com", password="p", port=465)
+        mock_srv = MagicMock()
+        mock_srv.login.return_value = (235, b"OK")
+        mock_smtp_cm = MagicMock()
+        mock_smtp_cm.__enter__ = MagicMock(return_value=mock_srv)
+        mock_smtp_cm.__exit__ = MagicMock(return_value=False)
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("smtplib.SMTP_SSL", return_value=mock_smtp_cm) as mock_ssl, \
+             patch("smtplib.SMTP") as mock_plain:
+            agent._probe_smtp_credentials()
+        mock_ssl.assert_called_once()
+        mock_plain.assert_not_called()
