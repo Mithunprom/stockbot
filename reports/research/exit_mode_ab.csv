@@ -1,0 +1,3 @@
+mode,n,win_rate,exp_bps,PF,target,stop,trail,timer
+PRODUCTION (30-bar timer),42472,59.9,25.38,2.46,184,64,1,42223
+v0.8.0 profit-target,42472,55.0,26.29,1.54,1677,892,1569,38334
