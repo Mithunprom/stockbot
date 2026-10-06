@@ -380,6 +380,57 @@ def _kelly_epoch() -> datetime | None:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
+
+def _carried_overnight(entry: datetime | None, exit_: datetime | None) -> bool:
+    """True when a trade spanned an ET session boundary.
+
+    The exit design holds a position for at most one session — see
+    `_effective_hold_bars()`: "nothing carries overnight". A trade that did
+    carry therefore measures a configuration the bot does not intend to run,
+    the same disqualification the Kelly epoch exists to express.
+
+    This is not hypothetical. Six positions opened 2026-09-30 were stranded by
+    a bar-counted session backstop, closed 2026-10-02 for **+$3,916**, and the
+    integrity agent's post-repair re-seed fed that windfall into the governor:
+    Kelly went inactive → normal at f=0.454 on P&L produced by a defect. Three
+    names supplied all of it (COHR +$1,451, MSTR +$1,008, LITE +$968). Strip
+    the cohort and the same window is n=12, PF 0.89, −$90.71 — no edge at all.
+    Sizing up on a bug's payoff is the most expensive way to be wrong.
+
+    Compared in ET, not UTC: a US session opens and closes inside one ET date,
+    so an ET date change is exactly "a session boundary was crossed", whereas
+    UTC midnight falls mid-session (20:00 ET).
+
+    Known imprecision, in the safe direction: `integrity_broker_reconcile`
+    stamps `exit_time` with the agent's RUN time, not the broker fill time
+    (`integrity_agent.py:559`). A repair landing after ET midnight makes a
+    same-day close look like a carry. But a position entered in the 09:30–10:00
+    entry window whose close reached the ledger 14+ hours later is one we
+    cannot distinguish from a real carry — so dropping the sample is correct.
+    Erring here costs one outcome; erring the other way inflates position size.
+
+    Args:
+        entry: Trade entry timestamp (tz-aware; naive is read as UTC).
+        exit_: Trade exit timestamp (tz-aware; naive is read as UTC).
+
+    Returns:
+        True if entry and exit fall on different ET calendar dates. False when
+        either timestamp is missing — an unknown span is not evidence of a
+        carry, and the caller already drops rows with no exit.
+    """
+    if entry is None or exit_ is None:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover - py<3.9 fallback
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+    et = ZoneInfo("America/New_York")
+    if entry.tzinfo is None:
+        entry = entry.replace(tzinfo=timezone.utc)
+    if exit_.tzinfo is None:
+        exit_ = exit_.replace(tzinfo=timezone.utc)
+    return entry.astimezone(et).date() != exit_.astimezone(et).date()
+
 # Per-ticker live IC gate — stop trading names the model is provably wrong on.
 # Pattern study (May vs June windows): one-week per-ticker ICs flip sign in
 # 15/20 tickers — they are noise. The gate therefore requires a large sample
@@ -905,7 +956,9 @@ class SignalLoop:
         losses from May kept Kelly negative with no way to refresh).
 
         Filters by pipeline_id so each pipeline only sees its own history,
-        and excludes crypto tickers (old crypto trades had noise signals).
+        excludes crypto tickers (old crypto trades had noise signals), and
+        excludes trades that carried across an ET session boundary — those ran
+        under an exit rule the bot does not use (see `_carried_overnight`).
         """
         from datetime import timedelta
 
@@ -923,7 +976,7 @@ class SignalLoop:
         try:
             async with self._sf() as session:
                 query = (
-                    _sel(_T.exit_time, _T.pnl_pct)
+                    _sel(_T.entry_time, _T.exit_time, _T.pnl_pct)
                     .where(
                         _T.exit_time.isnot(None),
                         _T.exit_time >= cutoff,
@@ -938,10 +991,19 @@ class SignalLoop:
                     query = query.where(_T.pipeline_id == self._pipeline_id)
 
                 result = await session.execute(query)
-                rows = [
-                    (ts, float(p)) for ts, p in result.all()
+                fetched = [
+                    (entry, ts, float(p)) for entry, ts, p in result.all()
                     if ts is not None and p is not None
                 ]
+                # Drop session-boundary carries: they measure an exit rule the
+                # bot does not run, and the integrity agent's post-repair
+                # re-seed feeds them straight into sizing. See
+                # `_carried_overnight`.
+                rows = [
+                    (ts, p) for entry, ts, p in fetched
+                    if not _carried_overnight(entry, ts)
+                ]
+                n_carried = len(fetched) - len(rows)
 
             if rows:
                 self._sizing_recent_outcomes = list(reversed(rows))
@@ -949,6 +1011,7 @@ class SignalLoop:
                 logger.info(
                     "kelly_seeded_from_db",
                     n_trades=len(rows),
+                    n_overnight_carries_excluded=n_carried,
                     lookback_days=KELLY_LOOKBACK_DAYS,
                     kelly=round(self._kelly_fraction, 4),
                     mode=self._kelly_mode(),
@@ -958,6 +1021,7 @@ class SignalLoop:
                 logger.info(
                     "kelly_no_recent_history",
                     pipeline=self._pipeline_id,
+                    n_overnight_carries_excluded=n_carried,
                     lookback_days=KELLY_LOOKBACK_DAYS,
                     note=f"Kelly governor inactive until {KELLY_MIN_TRADES}+ recent trades",
                 )

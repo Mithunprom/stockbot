@@ -792,7 +792,13 @@ def _load_ffsa_features() -> list[str]:
 # each filled entry sat in the model's own cross-section and surfaces a rolling
 # mean at /diagnostics.entry_rank_mean. Healthy >= 85; the v0.6.x window sat
 # near 46 and nothing reported it.
-APP_VERSION = "0.9.0"
+# v0.9.1 — the Kelly governor stops seeding itself from overnight carries. Six
+# positions stranded on 2026-09-30 closed on 2026-10-02 for +$3,916; the
+# integrity agent's post-repair re-seed turned that into kelly_fraction=+0.4544
+# (mode `normal`). The same 10-day window without the carries is n=12, PF 0.89,
+# f=-0.0467 (mode `probation`). SIZING CHANGES ON DEPLOY — smaller, probe-gated
+# entries. No change to entry/exit logic and no statistic resets.
+APP_VERSION = "0.9.1"
 
 app = FastAPI(
     title="StockBot API",
