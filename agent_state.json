@@ -1,6 +1,6 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.0 DEPLOYED. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by live take_profit exit). n=18 closed (Sep 23 window, PF=5.11 noise/halt-contaminated). Kelly epoch Sep 29 (owner-authorized). 6 open positions Oct 5. 9 commits W41: cascading incident cluster (rs_vwap_dev, CB halt, orphaned exits, RetrainAgent 4-month fix, SMTP failure). SMTP credential expired — alerts dead. Railway worker week 16. W41 program review complete 2026-10-05.",
- "last_iteration_date": "2026-10-05",
+ "last_iteration_date": "2026-10-07",
  "active_hypothesis": "v0.9.0 deployed (Oct 1). W41 cascading incident cluster resolved. v0.8.2: rs_vwap_dev cross-sectional serving fix (root cause: 7-session zero-trades Sep 22-28, silent). v0.8.3: Kelly epoch re-seed (owner-authorized Sep 29 — excludes Sep 21 trades from Kelly window). v0.8.4: retrain on corrected archive (OOS IC15=0.1839; freeze classification pending). v0.8.5: archive quality gate. v0.8.6: orphaned exit recovery from broker fills; SMTP credential failure surfaced (alert_channel_error). v0.8.7: both legs from broker. v0.8.8: diagnostics fix. v0.8.9: RetrainAgent FFSA path fixed (broken since May 28 — 4 months). v0.9.0: H13 halt-aware exits (live incident Sep 30 — halt stranded 6 positions at 70% heat; fixed position-scoped guard). M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by take_profit exit LITE ID 255). n=18 closed (noise; 11/18 exits integrity_broker_reconcile; PF=5.11 halt-contaminated). SMTP credential still unresolved. Railway worker BLOCKED week 16.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -113,6 +113,21 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H28",
+   "hypothesis": "Exit-Path Health Monitor: surface the strategy_exit_rate (fraction of recent exits handled by the strategy's own barriers vs. the Integrity Sentinel's integrity_broker_reconcile reconciliation) as a live diagnostic. M3 observation: 20/25 exits (80%) were integrity_broker_reconcile — the strategy's stop/target/session_close path is nearly inactive under EXIT_PROFIT_TARGET_MODE=ON. This diagnostic makes that gap visible at /diagnostics without changing any trade execution.",
+   "status": "implemented — PR open (Oct 7, freeze-exempt diagnostics)",
+   "added": "2026-10-07",
+   "added_by": "nightly desk — M3 exit distribution analysis: 20/25 exits integrity_broker_reconcile (80%). Alpaca EOD close at 4pm ET fires before the strategy's session_close bar (390 bars), so the Sentinel reconciles positions the strategy loop never exited.",
+   "pr_branch": "feat/rnd-H28-exit-health-monitor",
+   "freeze_exempt": true,
+   "freeze_exempt_reason": "Pure diagnostics — adds compute_exit_health() and _maybe_refresh_exit_health() to signal_loop.py; surfaces result in /diagnostics. No change to entry logic, sizing, exit barriers, or risk controls.",
+   "implementation": "compute_exit_health(exit_reasons: list[str]) -> dict — module-level pure function. Queries last EXIT_HEALTH_LOOKBACK=30 closed trades from DB every 60 bars. Returns strategy_exit_rate, reconcile_exits, strategy_exits, status (ok/warning/insufficient_data/no_data), distribution. Threshold: strategy_exit_rate >= 0.30 = ok; < 0.30 (n>=10) = warning.",
+   "unit_tests": "tests/unit/test_exit_health_monitor.py — 11 tests: empty, all-strategy ok, all-reconcile warning, small-sample insufficient_data, boundary exactly 0.30 = ok, just-below 0.29 = warning, M3 realistic case, distribution accuracy, unknown-reasons-as-strategy, return-keys completeness.",
+   "expected_impact": "No change to live PnL or Sharpe. Adds exit_health dict to /diagnostics payload so the operator can monitor strategy_exit_rate in real time. When status=warning the loop emits a structured log event (exit_health_warning) so the Railway log stream captures it.",
+   "priority": "MEDIUM — diagnostic only; delivers observability for the M3 exit-path gap",
+   "m3_context": "M3 n=25 as of Oct 6: 20/25 exits integrity_broker_reconcile (rate=0.20 → status=warning by H28 thresholds). Root cause: Alpaca paper closes positions at EOD ~16:00 ET; Integrity Sentinel (hourly) discovers them before the strategy loop fires session_close at bar 390. Stops and targets do fire for extreme moves (WDC stop_loss, CVX take_profit) but most positions don't reach barriers within the session."
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -480,6 +495,16 @@
  "v089_note": "Sep 30 2026. RetrainAgent FFSA path fix. train_lgbm.load_data() hard-required reports/drift/ffsa_*.json which .railwayignore excludes from the deployed image. RetrainAgent had raised FileNotFoundError at every 08:00 ET run for 4+ months (since May 28). Fix: fallback to config/ffsa_features.json. OPERATIONAL CHANGE: model can now hot-swap daily at 08:00 ET without a deploy — 'what model is live' can change silently; MIN_VAL_IC and pipeline-version guard are the only gates.",
  "v090_note": "Oct 1 2026. H13 LIVE INCIDENT FIX. Sep 30: max_drawdown CB fired with 6 positions open at ~70% heat carrying +$794 unrealized. _act_on_signal() had unconditional if self._cb.is_halted: return False — exits went through same gate. Positions could not close. Same defect had been open as PRs #31/#32 for 41 days. Fix: guard is now position-scoped (if self._cb.is_halted and not has_position). Halt still blocks entries; exits and hold-updates always run. 381 tests pass.",
  "completed_iterations": [
+  {
+   "date": "2026-10-07",
+   "hypothesis_id": "H28",
+   "result": "IMPLEMENTED — H28: Exit-Path Health Monitor. Freeze-exempt diagnostic. Added compute_exit_health() pure function to signal_loop.py; _maybe_refresh_exit_health() async method queries last 30 closed trades from DB every 60 bars; exit_health dict surfaced in /diagnostics. 11 unit tests pass. PR opened on feat/rnd-H28-exit-health-monitor. Motivation: M3 analysis shows 20/25 exits (80%) via integrity_broker_reconcile — strategy exit path nearly inactive under EXIT_PROFIT_TARGET_MODE=ON (Alpaca EOD close fires before strategy session_close bar). H28 delivers continuous observability for this gap without changing any trade execution or risk controls. No live trades. No config changes. 60 tests pass total (4 pre-existing credential failures in SignalLoop integration tests unchanged).",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_exit_health_monitor.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-05",
    "hypothesis_id": "W41_PROGRAM_REVIEW",

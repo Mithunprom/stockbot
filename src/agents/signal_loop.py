@@ -650,6 +650,65 @@ def _effective_hold_bars() -> int:
     return FULL_SESSION_BARS if EXIT_PROFIT_TARGET_MODE else SIZING_MAX_HOLD_BARS
 
 
+# ── H28: exit-path health monitor ────────────────────────────────────────────
+
+EXIT_HEALTH_LOOKBACK = 30   # rolling window of closed trades to evaluate
+EXIT_HEALTH_REFRESH_BARS = 60   # re-query DB once per ~60 bars (~1 hour)
+EXIT_HEALTH_WARN_RATE = 0.30    # strategy_exit_rate below this → WARNING
+
+
+def compute_exit_health(exit_reasons: list[str]) -> dict:
+    """Compute exit-path health from a recent list of exit-reason strings.
+
+    Classifies exits as "strategy" (the pipeline's own barriers fired: stop,
+    target, timer) vs "reconcile" (integrity_broker_reconcile — the Integrity
+    Sentinel discovered a broker-closed position the strategy loop missed).
+    A high reconcile share means the exit path has a gap: most positions are
+    being closed by the broker at EOD while the strategy's session_close / target
+    barriers never fire.
+
+    Returns: n, strategy_exit_rate, strategy_exits, reconcile_exits,
+             status ("ok" | "warning" | "insufficient_data" | "no_data"),
+             distribution {reason: count}.
+    """
+    RECONCILE_REASON = "integrity_broker_reconcile"
+
+    n = len(exit_reasons)
+    if n == 0:
+        return {
+            "n": 0,
+            "strategy_exit_rate": None,
+            "strategy_exits": 0,
+            "reconcile_exits": 0,
+            "status": "no_data",
+            "distribution": {},
+        }
+
+    dist: dict[str, int] = {}
+    for r in exit_reasons:
+        dist[r] = dist.get(r, 0) + 1
+
+    reconcile_n = dist.get(RECONCILE_REASON, 0)
+    strategy_n = n - reconcile_n
+    rate = strategy_n / n
+
+    if n < 10:
+        status = "insufficient_data"
+    elif rate >= EXIT_HEALTH_WARN_RATE:
+        status = "ok"
+    else:
+        status = "warning"
+
+    return {
+        "n": n,
+        "strategy_exit_rate": round(rate, 3),
+        "strategy_exits": strategy_n,
+        "reconcile_exits": reconcile_n,
+        "status": status,
+        "distribution": dist,
+    }
+
+
 def _compute_daily_vols(tickers: list[str]) -> dict[str, float]:
     """Daily ATR(14)/price per ticker from daily bars (yfinance, batched).
 
@@ -886,6 +945,13 @@ class SignalLoop:
         # Live IC Tracker — set via set_ic_tracker() after construction
         # (tracker is created after signal loop in main.py startup sequence)
         self._ic_tracker: Any | None = None
+
+        # H28: exit-path health — tracks strategy vs reconcile exit share
+        self._exit_health: dict = {
+            "n": 0, "strategy_exit_rate": None, "strategy_exits": 0,
+            "reconcile_exits": 0, "status": "no_data", "distribution": {},
+        }
+        self._exit_health_refresh_countdown: int = 1  # refresh on first tick
 
     def set_ic_tracker(self, tracker: Any) -> None:
         """Attach a LiveICTracker instance for prediction recording.
@@ -1395,6 +1461,7 @@ class SignalLoop:
                 for e in [_atr_exits(self._daily_vol_for(t))]
             },
             "daily_vol_cache_n": len(self._ticker_daily_vol),
+            "exit_health": self._exit_health,
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -1742,6 +1809,7 @@ class SignalLoop:
         await self._maybe_refresh_daytrade_count()
         await self._maybe_refresh_daily_vol()
         await self._maybe_refresh_earnings_dates()
+        await self._maybe_refresh_exit_health()
 
     def _daily_vol_for(self, ticker: str) -> float:
         """True daily volatility fraction for exit sizing.
@@ -1818,6 +1886,39 @@ class SignalLoop:
         today = datetime.now(ZoneInfo("America/New_York")).date()
         delta = (earnings_date - today).days
         return -EARNINGS_BLACKOUT_DAYS <= delta <= EARNINGS_BLACKOUT_DAYS
+
+    async def _maybe_refresh_exit_health(self) -> None:
+        """Refresh the exit-path health summary from the trade ledger.
+
+        Queries the last EXIT_HEALTH_LOOKBACK closed trades and passes them
+        to compute_exit_health(). Runs once per EXIT_HEALTH_REFRESH_BARS ticks
+        (~1 hour). Fails open — a DB error leaves the previous snapshot.
+        """
+        self._exit_health_refresh_countdown -= 1
+        if self._exit_health_refresh_countdown > 0:
+            return
+        self._exit_health_refresh_countdown = EXIT_HEALTH_REFRESH_BARS
+        try:
+            from sqlalchemy import select as _sel
+            from src.data.db import Trade as _T
+            async with self._sf() as session:
+                result = await session.execute(
+                    _sel(_T.exit_reason)
+                    .where(_T.exit_time.isnot(None))
+                    .order_by(_T.exit_time.desc())
+                    .limit(EXIT_HEALTH_LOOKBACK)
+                )
+                reasons = [row[0] or "unknown" for row in result.all()]
+            self._exit_health = compute_exit_health(reasons)
+            if self._exit_health["status"] == "warning":
+                logger.warning(
+                    "exit_health_warning",
+                    strategy_exit_rate=self._exit_health["strategy_exit_rate"],
+                    reconcile_exits=self._exit_health["reconcile_exits"],
+                    n=self._exit_health["n"],
+                )
+        except Exception as exc:
+            logger.warning("exit_health_refresh_failed", error=str(exc))
 
     async def _maybe_refresh_ticker_ic(self) -> None:
         """Refresh the per-ticker live IC cache from the IC tracker (hourly)."""
