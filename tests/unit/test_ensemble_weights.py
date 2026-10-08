@@ -57,17 +57,24 @@ def test_h4_renorm_lgbm_and_sentiment_only():
 
 
 def test_renorm_all_active_returns_same_proportions():
-    """When all models are active, each weight is the default / total = default."""
+    """All models active → the baseline allocation, unchanged.
+
+    Compares against HISTORICAL_ALLOCATION rather than `EnsembleWeights()`.
+    The method rescales from that baseline; the live defaults became 1/0/0/0 on
+    2026-10-07 (owner decision), so reading the defaults here would assert that
+    "all four active" yields LightGBM-only — which is the opposite of what this
+    test exists to check.
+    """
+    from src.models.ensemble import HISTORICAL_ALLOCATION
+
     w = EnsembleWeights.renormalize_dropping_dead_models(
         {"lgbm", "transformer", "tcn", "sentiment"}
     )
-    defaults = EnsembleWeights()
-    total = defaults.lgbm + defaults.transformer + defaults.tcn + defaults.sentiment
-    assert math.isclose(total, 1.0, abs_tol=1e-9)
-    # All defaults already sum to 1.0 so renorm produces the same values
-    assert math.isclose(w.lgbm, defaults.lgbm, abs_tol=1e-4)
-    assert math.isclose(w.transformer, defaults.transformer, abs_tol=1e-4)
-    assert math.isclose(w.sentiment, defaults.sentiment, abs_tol=1e-4)
+    assert math.isclose(sum(HISTORICAL_ALLOCATION.values()), 1.0, abs_tol=1e-9)
+    # Baseline already sums to 1.0, so renorm is the identity here.
+    assert math.isclose(w.lgbm, HISTORICAL_ALLOCATION["lgbm"], abs_tol=1e-4)
+    assert math.isclose(w.transformer, HISTORICAL_ALLOCATION["transformer"], abs_tol=1e-4)
+    assert math.isclose(w.sentiment, HISTORICAL_ALLOCATION["sentiment"], abs_tol=1e-4)
     w.validate()
 
 
@@ -152,8 +159,14 @@ def test_from_staging_uses_defaults_when_keys_missing():
 
     w = EnsembleWeights.from_staging(path)
     w.validate()
-    # Defaults: lgbm=0.60, transformer=0.10, tcn=0.10, sentiment=0.20
-    assert math.isclose(w.lgbm, 0.60, abs_tol=1e-4)
+    # Must track the CURRENT defaults, not a literal. These fallbacks were
+    # hardcoded 0.60/0.10/0.10/0.20, so a staging file omitting a key would
+    # quietly resurrect a weight the owner had zeroed on 2026-10-07.
+    d = EnsembleWeights()
+    assert math.isclose(w.lgbm, d.lgbm, abs_tol=1e-4)
+    assert math.isclose(w.transformer, d.transformer, abs_tol=1e-4)
+    assert math.isclose(w.tcn, d.tcn, abs_tol=1e-4)
+    assert math.isclose(w.sentiment, d.sentiment, abs_tol=1e-4)
 
 
 def test_from_staging_reads_h4_staging_file(tmp_path):
@@ -193,8 +206,18 @@ def _make_signal(w: EnsembleWeights, lgbm_dir=1.0, lgbm_conf=0.8, si=0.5) -> flo
 
 
 def test_h4_weights_produce_stronger_signal_when_lgbm_and_si_agree():
-    """H4 weights give a higher ensemble signal than defaults when LGBM + sentiment both bullish."""
-    w_default = EnsembleWeights()
+    """H4 weights beat the HISTORICAL allocation when LGBM + sentiment agree.
+
+    Compares against HISTORICAL_ALLOCATION, not `EnsembleWeights()`. The point
+    of H4 was that dropping the two dead models concentrates weight into the
+    live ones — which only means anything relative to the diluted 0.60/0.10/
+    0.10/0.20 split. Against the current LightGBM-only default, H4 is WEAKER by
+    construction (it gives 0.25 back to sentiment), so reading the defaults here
+    would invert the test's premise rather than check it.
+    """
+    from src.models.ensemble import HISTORICAL_ALLOCATION
+
+    w_default = EnsembleWeights(**HISTORICAL_ALLOCATION)
     w_h4 = EnsembleWeights(lgbm=0.75, transformer=0.0, tcn=0.0, sentiment=0.25)
 
     # With default weights (effective, since transformer/TCN=0)

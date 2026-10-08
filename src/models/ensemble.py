@@ -133,12 +133,50 @@ class EnsembleSignal:
 
 # ─── Ensemble weights (updatable by Profit Agent) ────────────────────────────
 
+# The allocation in force until 2026-10-07, kept as the rescaling baseline for
+# `renormalize_dropping_dead_models`. It is deliberately NOT the live default
+# any more — see EnsembleWeights — but the method needs a non-degenerate prior
+# to rescale from, and the attribution reports on record were produced under
+# this split.
+HISTORICAL_ALLOCATION: dict[str, float] = {
+    "lgbm": 0.60,
+    "transformer": 0.10,
+    "tcn": 0.10,
+    "sentiment": 0.20,
+}
+
 @dataclass
 class EnsembleWeights:
-    lgbm: float = 0.60
-    transformer: float = 0.10
-    tcn: float = 0.10
-    sentiment: float = 0.20
+    """Owner decision 2026-10-07: LightGBM carries the signal alone.
+
+    Was 0.60 / 0.10 / 0.10 / 0.20. The 0.40 held by the other three did no
+    demonstrable work:
+      * Transformer and TCN were measured at live IC ~0.001 — indistinguishable
+        from a coin flip. The project already established why (the signal is
+        non-linear in a way tree models capture and these did not) and promoted
+        LightGBM to primary, but left their weight in place.
+      * Sentiment has NO IC measurement on record. It was never validated, and
+        it was the only weight costing money per inference call.
+    LightGBM is the one component with evidence behind it: backtest OOS IC
+    +0.173 with every ticker positive.
+
+    These are the DEFAULTS deliberately, not a staged proposal. Weight changes
+    applied via POST /admin/ensemble/apply-staged live only in memory, and this
+    project has been bitten repeatedly by state that resets on redeploy (Kelly
+    seed, risk counters, the IC cache). Encoding the decision here is what makes
+    it survive a restart. `/admin/ensemble/apply-staged` still works for
+    experiments and the Profit Agent still writes proposals to staging — note
+    that applying a future proposal would reintroduce these weights.
+
+    Equal-weighting is NOT the safe default here. Spreading weight across
+    components with no measured edge is a decision to dilute the only one that
+    has, and it reads as caution while doing the opposite.
+    """
+
+    lgbm: float = 1.0
+    transformer: float = 0.0
+    tcn: float = 0.0
+    sentiment: float = 0.0
 
     def validate(self) -> None:
         total = self.lgbm + self.transformer + self.tcn + self.sentiment
@@ -157,11 +195,16 @@ class EnsembleWeights:
         with open(staging_path) as f:
             data = json.load(f)
         weights = data.get("ensemble_weights") or data.get("proposed_weights", {})
+        # Missing keys fall back to the CURRENT defaults, not the pre-2026-10-07
+        # split. These used to be hardcoded 0.60/0.10/0.10/0.20, so a staging
+        # file that omitted a key would quietly resurrect a weight the owner had
+        # just zeroed.
+        d = cls()
         obj = cls(
-            lgbm=weights.get("lgbm", 0.60),
-            transformer=weights.get("transformer", 0.10),
-            tcn=weights.get("tcn", 0.10),
-            sentiment=weights.get("sentiment", 0.20),
+            lgbm=weights.get("lgbm", d.lgbm),
+            transformer=weights.get("transformer", d.transformer),
+            tcn=weights.get("tcn", d.tcn),
+            sentiment=weights.get("sentiment", d.sentiment),
         )
         obj.validate()
         return obj
@@ -185,16 +228,24 @@ class EnsembleWeights:
             EnsembleWeights with dead-model weights set to 0.0 and remaining
             weights rescaled to sum to 1.0.
 
+        Rescales from HISTORICAL_ALLOCATION, not from the current defaults. It
+        used to read `cls()`, which broke the moment the defaults became
+        1/0/0/0 on 2026-10-07: every model except LightGBM had a 0.0 prior, so
+        the method could no longer re-include anything and silently collapsed to
+        "LightGBM only" for any `active` set. Keeping an explicit baseline lets
+        it answer the question it exists to answer — "given this allocation,
+        drop the dead models and rescale" — independently of what is live.
+
         Example:
             >>> EnsembleWeights.renormalize_dropping_dead_models({"lgbm", "sentiment"})
             EnsembleWeights(lgbm=0.75, transformer=0.0, tcn=0.0, sentiment=0.25)
         """
-        defaults = cls()
+        base = HISTORICAL_ALLOCATION
         raw = {
-            "lgbm": defaults.lgbm if "lgbm" in active else 0.0,
-            "transformer": defaults.transformer if "transformer" in active else 0.0,
-            "tcn": defaults.tcn if "tcn" in active else 0.0,
-            "sentiment": defaults.sentiment if "sentiment" in active else 0.0,
+            "lgbm": base["lgbm"] if "lgbm" in active else 0.0,
+            "transformer": base["transformer"] if "transformer" in active else 0.0,
+            "tcn": base["tcn"] if "tcn" in active else 0.0,
+            "sentiment": base["sentiment"] if "sentiment" in active else 0.0,
         }
         total = sum(raw.values())
         if total < 1e-9:
@@ -374,9 +425,16 @@ class EnsembleEngine:
             except Exception as exc:
                 logger.warning("tcn_inference_failed", ticker=ticker, error=str(exc))
 
-        # Sentiment rolling index
+        # Sentiment rolling index — skipped entirely at zero weight.
+        #
+        # This used to run unconditionally, so a zeroed weight still paid for
+        # every hosted FinBERT call and multiplied the result by 0.0. Guarding
+        # on the weight is what turns the weight decision into an actual cost
+        # saving. Same reasoning would apply to the Transformer/TCN inference
+        # above, but those are local CPU work rather than a metered API, so the
+        # saving there is latency rather than spend.
         si = 0.0
-        if self._sentiment is not None:
+        if self._sentiment is not None and self.weights.sentiment > 0:
             si = await self._sentiment.rolling_sentiment_index(ticker, lookback_hours=24)
 
         # Weighted ensemble

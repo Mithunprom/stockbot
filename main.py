@@ -810,7 +810,17 @@ def _load_ffsa_features() -> list[str]:
 # being killed at ~90 minutes. Entry/exit LOGIC and all thresholds unchanged.
 # Residual: `session_close` is still bar-counted, so a stalled bar feed can
 # carry a position overnight. Wall-clock backstop still owed.
-APP_VERSION = "0.9.2"
+# v0.9.3 — LightGBM carries the signal alone. Owner decision 2026-10-07:
+# weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer and TCN were measured at
+# live IC ~0.001; sentiment was never measured. Set as DEFAULTS, not a staged
+# proposal, so the decision survives a redeploy. Sentiment inference is now
+# skipped at zero weight — it used to run unconditionally and be multiplied by
+# 0.0, so the metered FinBERT calls were being paid for either way.
+# WHAT CHANGES: candidate RANKING (sorted on |ensemble_signal|, which decides
+# which ticker gets the single daily probation probe). Entry gates read
+# lgbm_pred_return/lgbm_dir_prob directly and are UNCHANGED — no threshold
+# moves. Not backtested as a ranking change; paper is the measurement.
+APP_VERSION = "0.9.3"
 
 app = FastAPI(
     title="StockBot API",
