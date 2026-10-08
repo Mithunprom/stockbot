@@ -798,7 +798,19 @@ def _load_ffsa_features() -> list[str]:
 # (mode `normal`). The same 10-day window without the carries is n=12, PF 0.89,
 # f=-0.0467 (mode `probation`). SIZING CHANGES ON DEPLOY — smaller, probe-gated
 # entries. No change to entry/exit logic and no statistic resets.
-APP_VERSION = "0.9.1"
+# v0.9.2 — two risk controls that were decorative start working.
+#   * The watchdog was force-selling every position at 90 bars: its zombie check
+#     used SIZING_MAX_HOLD_BARS (30) while prod's ladder holds 390. 14 of 18
+#     exits Oct 1–7 were the repair path, not the ladder. Threshold now tracks
+#     `_effective_hold_bars()`, and force-exits are booked as
+#     `watchdog_force_exit` instead of leaving no record.
+#   * The per-ticker IC gate had never armed: TICKER_IC_MIN_N=300 against a
+#     7-day window over a table pruned at 7 days. Retention 7 → 120 days.
+# EXIT TIMING CHANGES ON DEPLOY — positions will run the full session instead of
+# being killed at ~90 minutes. Entry/exit LOGIC and all thresholds unchanged.
+# Residual: `session_close` is still bar-counted, so a stalled bar feed can
+# carry a position overnight. Wall-clock backstop still owed.
+APP_VERSION = "0.9.2"
 
 app = FastAPI(
     title="StockBot API",
