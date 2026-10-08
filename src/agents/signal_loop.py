@@ -438,6 +438,44 @@ def _carried_overnight(entry: datetime | None, exit_: datetime | None) -> bool:
 TICKER_IC_BLOCK_THRESHOLD = -0.05
 TICKER_IC_MIN_N = 300              # min filled predictions before the IC gate acts
 TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
+
+# The block gate reads a 30-DAY window with no `since` filter, matching the
+# probe (KELLY_PROBE_IC_WINDOW_DAYS). It used to read 7 days with
+# `since=_loop_started_at`, and the combination made TICKER_IC_MIN_N = 300
+# unreachable by construction — so neither this gate nor the positive-IC entry
+# requirement below has ever fired. `tickers_ic_blocked` is empty in every
+# production snapshot on record.
+#
+# Three independent caps, all of which had to go:
+#   1. `prediction_outcomes` was pruned at 7 days (db.py), so ANY window
+#      returned at most 7 days. Now 120 days. This was the real cause, and it
+#      is also what defeated the probe's 30-day widening in June.
+#   2. The 7-day window itself capped the sample near 67–99 per ticker at the
+#      observed ~12.9 filled predictions/ticker/trading-day.
+#   3. `since=_loop_started_at` reset the count to zero on EVERY restart, so
+#      even a correct window rebuilt from scratch after each deploy — ~2
+#      trading days just to clear the n>=20 floor in _compute_per_ticker_ic.
+#      This is why ticker_ic_tracked read 72 on 2026-10-02 and 0 on 10-06.
+#
+# Dropping `since` costs the protection it was added for: judging the current
+# pipeline by a PREVIOUS pipeline's record (Pipeline B's June history once
+# blocked 10/20 tickers on a freshly deployed Pipeline A). That risk is now
+# small and bounded — the rolling 30-day window ages out any prior incarnation
+# on its own, and A/B is disabled. The durable fix is a `pipeline_id` column on
+# `prediction_outcomes`, which does not exist yet; `since` was always a proxy
+# for it. The probe accepted exactly this trade-off in June for exactly this
+# reason, and keeping the two paths consistent matters more than the proxy.
+#
+# SAMPLE MATH, so the next reader does not have to re-derive it: ~12.9
+# predictions/ticker/trading-day × ~21 trading days in 30 calendar days ≈ 271
+# per ticker. That is just UNDER TICKER_IC_MIN_N = 300, so the gate will arm
+# only on the better-covered names at first and fully once 120-day retention
+# has accumulated. TICKER_IC_MIN_N is deliberately NOT lowered: 300 is the
+# noise protection the pattern study above paid for, and at n=300 the Spearman
+# standard error is still ~0.058 against a -0.05 threshold. Lowering the bar to
+# force the gate to arm sooner would make it fire on noise, which is the
+# failure the 15/20 sign-flip finding warned about.
+TICKER_IC_WINDOW_DAYS = 30
 # Entry now requires POSITIVE live IC once the sample is adequate (2026-07-07
 # diagnosis: the old "not strongly negative" bar never blocked anything while
 # AMD/WDC/AVGO/SMCI/ARM/SNDK bled −$605 combined). At n ≥ TICKER_IC_MIN_N a
@@ -455,7 +493,10 @@ TICKER_IC_MIN_ENTRY = 0.0          # live IC must exceed this to enter (n≥MIN_
 # 06-25 pushed Kelly to −0.28. The 30-day window yields ~600+/ticker (reachable)
 # and intentionally OMITS the `since=loop_started_at` filter so a redeploy can't
 # reset the sample count back below the bar and re-trigger the deadlock. The
-# block gate keeps the 7d + `since` behavior (judging only the live incarnation).
+# block gate now matches it on both counts (see TICKER_IC_WINDOW_DAYS); it used
+# to keep 7d + `since`, which is why it could never arm. NOTE the "~600+/ticker"
+# premise below was wrong for a reason nobody found at the time: the rows were
+# pruned at 7 days (db.py). That retention is now 120 days.
 KELLY_PROBE_IC_WINDOW_DAYS = 30
 
 # ...and that widening was still not enough. Measured 2026-09-22, with the 30d
@@ -1828,8 +1869,9 @@ class SignalLoop:
             return
         self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
         try:
+            # 30d, no `since` — see TICKER_IC_WINDOW_DAYS for why both changed.
             by_ticker = await self._ic_tracker._compute_per_ticker_ic(
-                window_days=7, since=self._loop_started_at,
+                window_days=TICKER_IC_WINDOW_DAYS,
             )
             self._ticker_ic = {
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
@@ -1840,13 +1882,19 @@ class SignalLoop:
             # governor). Skipped when Kelly is healthy to save a query.
             self._ticker_ic_probe = {}
             if self._kelly_mode() == "probation":
-                probe_by_ticker = await self._ic_tracker._compute_per_ticker_ic(
-                    window_days=KELLY_PROBE_IC_WINDOW_DAYS,
-                )
-                self._ticker_ic_probe = {
-                    t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
-                    for t, v in (probe_by_ticker or {}).items()
-                }
+                if KELLY_PROBE_IC_WINDOW_DAYS == TICKER_IC_WINDOW_DAYS:
+                    # Same window, same (absent) `since` → identical query.
+                    # Reuse rather than pay a second round-trip; the two gates
+                    # differ only in their thresholds, not their sample.
+                    self._ticker_ic_probe = dict(self._ticker_ic)
+                else:
+                    probe_by_ticker = await self._ic_tracker._compute_per_ticker_ic(
+                        window_days=KELLY_PROBE_IC_WINDOW_DAYS,
+                    )
+                    self._ticker_ic_probe = {
+                        t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
+                        for t, v in (probe_by_ticker or {}).items()
+                    }
             blocked = [
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD

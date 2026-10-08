@@ -450,7 +450,28 @@ _RETENTION_POLICIES: list[tuple[str, str, int]] = [
     ("signals", "time", 7),
     ("news_raw", "published_at", 7),        # 7 days (was 14)
     ("options_flow", "time", 7),            # NEW: was missing, grew forever
-    ("prediction_outcomes", "timestamp", 7), # FIXED: was "predicted_at" (wrong column name — never pruned)
+    # 120 days, NOT 7. This table is a MEASUREMENT RECORD, not a data cache —
+    # it is the only evidence of how the live model actually performed, and the
+    # 7-day blanket policy made every long-window IC query silently return 7
+    # days of data.
+    #
+    # That broke two risk gates. `KELLY_PROBE_IC_WINDOW_DAYS = 30` was
+    # introduced on the premise that 30 days "yields ~600+/ticker (reachable)";
+    # the measurement at signal_loop.py:478 found max 99 on ANY ticker and the
+    # probe's bar was lowered 300 → 30 to compensate. The cause was never
+    # found: the rows were being deleted at 7 days. The IC-block gate still
+    # asks for TICKER_IC_MIN_N = 300 against a table that can hold ~67–99 per
+    # ticker, so it has never fired once — `tickers_ic_blocked` is empty in
+    # every snapshot on record.
+    #
+    # Cost is negligible and this is NOT feature_matrix: ~690 rows/day
+    # (4,839 per 7d observed), so 120 days is ~83k narrow rows. The disk
+    # pressure that motivated aggressive retention came from feature_matrix.
+    #
+    # Milestone #3 ("validate live IC > 0.05") is also unanswerable on a 7-day
+    # rolling record — you cannot validate a 15-bar signal from a window that
+    # keeps deleting itself.
+    ("prediction_outcomes", "timestamp", 120),
 ]
 
 
