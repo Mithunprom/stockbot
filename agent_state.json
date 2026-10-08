@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.0 DEPLOYED. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by live take_profit exit). n=18 closed (Sep 23 window, PF=5.11 noise/halt-contaminated). Kelly epoch Sep 29 (owner-authorized). 6 open positions Oct 5. 9 commits W41: cascading incident cluster (rs_vwap_dev, CB halt, orphaned exits, RetrainAgent 4-month fix, SMTP failure). SMTP credential expired — alerts dead. Railway worker week 16. W41 program review complete 2026-10-05.",
- "last_iteration_date": "2026-10-05",
- "active_hypothesis": "v0.9.0 deployed (Oct 1). W41 cascading incident cluster resolved. v0.8.2: rs_vwap_dev cross-sectional serving fix (root cause: 7-session zero-trades Sep 22-28, silent). v0.8.3: Kelly epoch re-seed (owner-authorized Sep 29 — excludes Sep 21 trades from Kelly window). v0.8.4: retrain on corrected archive (OOS IC15=0.1839; freeze classification pending). v0.8.5: archive quality gate. v0.8.6: orphaned exit recovery from broker fills; SMTP credential failure surfaced (alert_channel_error). v0.8.7: both legs from broker. v0.8.8: diagnostics fix. v0.8.9: RetrainAgent FFSA path fixed (broken since May 28 — 4 months). v0.9.0: H13 halt-aware exits (live incident Sep 30 — halt stranded 6 positions at 70% heat; fixed position-scoped guard). M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by take_profit exit LITE ID 255). n=18 closed (noise; 11/18 exits integrity_broker_reconcile; PF=5.11 halt-contaminated). SMTP credential still unresolved. Railway worker BLOCKED week 16.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.0 DEPLOYED. M3 clock CONFIRMED Sep 23. n~20 closed (PF noise). Kelly probation fraction -0.1064 (14 trades, not hard-blocked). 0 open positions Oct 7. W41 positions all closed. H28 PR open (SECTOR_MAP round 2: ON/SNPS/FICO/CRM/COIN/MNST/NOC/RTX/PCG/CTVA). SMTP still unresolved. Railway worker week 17.",
+ "last_iteration_date": "2026-10-08",
+ "active_hypothesis": "H28: SECTOR_MAP Round 2 — 10 tickers confirmed in live M3 universe (CTVA/ON/SNPS/FICO in Oct-7 diagnostics; NOC was open position W41) were resolving to 'unmapped'. Added to correct correlation buckets: ON→semis, SNPS/CRM/FICO→tech, COIN→financials, MNST→consumer, NOC/RTX→industrials, PCG→utilities (new sector), CTVA→materials (new sector). 14 new unit tests pass. FREEZE-EXEMPT (structural correctness fix, pattern identical to H19/H22/H27). PR opened. Kelly fraction -0.1064 (probation, 14 trades, hard-block at -0.25 not triggered). CTVA (0.3438 ensemble) and FICO (-0.2038 ensemble) pass both gates but blocked by kelly_probation. NOTE: FICO has negative ensemble — H18a gap persists. Live integrity ALL GREEN Oct 7. Watchdog OK 23:10 UTC. alert_channel_error null in Oct-7 sentinel run.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -113,6 +113,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H28",
+   "hypothesis": "SECTOR_MAP Round 2 completeness — 10 tickers confirmed in the M3 live universe were resolving to 'unmapped' and subject to the strictest caps (1 position, 12.5% notional). Correct mapping: ON→semis (ON Semiconductor, shares semis demand cycle), SNPS→tech (Synopsys EDA software), FICO→tech (Fair Isaac analytics), CRM→tech (Salesforce), COIN→financials (Coinbase), MNST→consumer (Monster Beverage, H22 residual), NOC→industrials (Northrop Grumman — was open position W41 Oct 5 while unmapped), RTX→industrials (Raytheon, H27 residual), PCG→utilities (new sector; seen Sep-17 diagnostics + H27 residual), CTVA→materials (new sector; Corteva, seen Oct-7 diagnostics).",
+   "status": "implemented — PR open (2026-10-08, freeze-exempt structural fix)",
+   "added": "2026-10-08",
+   "added_by": "nightly desk — Oct-7 diagnostics showed CTVA/ON/SNPS/FICO in unmapped; W41 NOC was open position while unmapped",
+   "pr_branch": "feat/rnd-H28-sector-map-round2",
+   "pr_state": "OPEN — freeze-exempt: structural correctness fix. Pattern identical to H19/H22/H27. Adding a ticker loosens only the unmapped 1-position cap into the sector's 2-position cap — correct direction per position_sizer.py design comment. 14 new unit tests pass.",
+   "priority": "HIGH — merge immediately. CTVA/ON/SNPS/FICO currently in unmapped bucket; Kelly probation expected to lift soon.",
+   "pm_priority": -4
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -480,6 +491,16 @@
  "v089_note": "Sep 30 2026. RetrainAgent FFSA path fix. train_lgbm.load_data() hard-required reports/drift/ffsa_*.json which .railwayignore excludes from the deployed image. RetrainAgent had raised FileNotFoundError at every 08:00 ET run for 4+ months (since May 28). Fix: fallback to config/ffsa_features.json. OPERATIONAL CHANGE: model can now hot-swap daily at 08:00 ET without a deploy — 'what model is live' can change silently; MIN_VAL_IC and pipeline-version guard are the only gates.",
  "v090_note": "Oct 1 2026. H13 LIVE INCIDENT FIX. Sep 30: max_drawdown CB fired with 6 positions open at ~70% heat carrying +$794 unrealized. _act_on_signal() had unconditional if self._cb.is_halted: return False — exits went through same gate. Positions could not close. Same defect had been open as PRs #31/#32 for 41 days. Fix: guard is now position-scoped (if self._cb.is_halted and not has_position). Halt still blocks entries; exits and hold-updates always run. 381 tests pass.",
  "completed_iterations": [
+  {
+   "date": "2026-10-08",
+   "hypothesis_id": "H28",
+   "result": "IMPLEMENTED — SECTOR_MAP Round 2. Live data snapshot Oct 7 2026: integrity ALL GREEN (5 checks pass, alert_channel_error null), watchdog OK (last tick 23:39 UTC), Kelly fraction -0.1064 (probation, 14 trades in 10-day window, hard-block -0.25 not triggered, probation_entries_today=1). 0 open positions (all W41 positions closed). M3 n~20 (PF noise — still mostly integrity_broker_reconcile exits). Oct-7 diagnostics: CTVA (ensemble 0.3438) and FICO (ensemble -0.2038) pass both entry gates but blocked by kelly_probation. FICO negative ensemble is an H18a gap — logged. H28 adds 10 missing tickers to SECTOR_MAP: ON/SNPS/FICO/CRM→various, COIN→financials, MNST→consumer, NOC/RTX→industrials, PCG→utilities (new sector), CTVA→materials (new sector). 14 new unit tests pass; 5 pre-existing failures (numpy not in sandbox). PR opened on feat/rnd-H28-sector-map-round2. Principal Skeptic note: NOC was in unmapped bucket during live trading Oct 5 — this was a real structural gap, not hypothetical.",
+   "files_changed": [
+    "src/execution/position_sizer.py",
+    "tests/unit/test_h28_sector_map_round2.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-05",
    "hypothesis_id": "W41_PROGRAM_REVIEW",
