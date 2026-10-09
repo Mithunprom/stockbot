@@ -1436,6 +1436,9 @@ class SignalLoop:
                 for e in [_atr_exits(self._daily_vol_for(t))]
             },
             "daily_vol_cache_n": len(self._ticker_daily_vol),
+            # H32: per-gate blocking counts across all signals evaluated this tick.
+            # Answers "why is nothing trading?" from /diagnostics without logs.
+            "signal_gate_attribution": self._get_gate_attribution_snapshot(),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -2359,6 +2362,87 @@ class SignalLoop:
         signal_ok = (abs(pred_ret) > self._dynamic_cost_threshold()
                      and not (lo < dir_prob < hi))
         return signal_ok
+
+    def _entry_gate_reason(self, sig: EnsembleSignal) -> tuple[bool, str | None]:
+        """Return (passed, gate_name) for diagnostics — never for entry decisions.
+
+        Mirrors _sizing_entry_gate_open gate-for-gate, without side effects or
+        logger calls.  The production entry path is _sizing_entry_gate_open;
+        this method only exists so /diagnostics can report WHICH gate blocked
+        each evaluated signal, making "why is nothing trading?" answerable
+        without grepping logs.
+
+        H32 (2026-10-09): signal gate attribution diagnostic.
+        """
+        ticker = sig.ticker
+
+        if not self._data_fresh:
+            return False, "data_stale"
+        if not self._in_entry_window():
+            return False, "outside_entry_window"
+        if self._in_earnings_blackout(ticker):
+            return False, "earnings_blackout"
+        try:
+            from src.agents.news_risk_agent import news_risk_blocks_entries
+            if news_risk_blocks_entries():
+                return False, "news_risk"
+        except Exception:
+            pass
+        if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
+            return False, "daily_cap"
+        if self._ticker_cooldown.get(ticker, 0) > 0:
+            return False, "ticker_cooldown"
+        if self._kelly_entries_blocked():
+            return False, "kelly_hard_blocked"
+        if self._kelly_mode() == "probation":
+            ic, n = self._ticker_ic_probe.get(ticker, (0.0, 0))
+            probe_ok = (
+                self._probation_entries_today < 1
+                and n >= KELLY_PROBE_MIN_N
+                and ic >= KELLY_PROBATION_MIN_TICKER_IC
+            )
+            if not probe_ok:
+                return False, "kelly_probation"
+        if self._ticker_ic_blocked(ticker):
+            return False, "ticker_ic_blocked"
+        if len(self._pm._positions) >= MAX_OPEN_POSITIONS:
+            return False, "max_positions"
+        if self._pm.managed_heat >= PORTFOLIO_HEAT_CEILING:
+            return False, "heat_ceiling"
+        sector = sector_of(ticker)
+        sector_cap = max_positions_for_sector(sector)
+        if self._sector_position_count(ticker) >= sector_cap:
+            return False, "sector_cap"
+        pred_ret = float(sig.lgbm_pred_return)
+        dir_prob = float(sig.lgbm_dir_prob)
+        lo, hi = SIZING_DIR_PROB_DEAD_ZONE
+        if abs(pred_ret) <= self._dynamic_cost_threshold():
+            return False, "pred_return_too_small"
+        if lo < dir_prob < hi:
+            return False, "dir_prob_dead_zone"
+        return True, None
+
+    def _get_gate_attribution_snapshot(self) -> dict[str, Any]:
+        """Summarise which entry gate blocked each signal in _latest_signals.
+
+        Called by get_portfolio_summary() for /diagnostics — never for actual
+        entry decisions.
+        """
+        blocked_by: dict[str, int] = {}
+        n_would_trade = 0
+        for sig in self._latest_signals:
+            passed, reason = self._entry_gate_reason(sig)
+            if passed:
+                n_would_trade += 1
+            else:
+                key = reason or "unknown"
+                blocked_by[key] = blocked_by.get(key, 0) + 1
+        return {
+            "n_evaluated": len(self._latest_signals),
+            "n_would_trade": n_would_trade,
+            "n_blocked": len(self._latest_signals) - n_would_trade,
+            "blocked_by": blocked_by,
+        }
 
     def _update_kelly(self) -> None:
         """Recompute rolling Kelly fraction from recent trade outcomes.
