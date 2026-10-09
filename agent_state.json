@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.0 DEPLOYED. M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by live take_profit exit). n=18 closed (Sep 23 window, PF=5.11 noise/halt-contaminated). Kelly epoch Sep 29 (owner-authorized). 6 open positions Oct 5. 9 commits W41: cascading incident cluster (rs_vwap_dev, CB halt, orphaned exits, RetrainAgent 4-month fix, SMTP failure). SMTP credential expired — alerts dead. Railway worker week 16. W41 program review complete 2026-10-05.",
- "last_iteration_date": "2026-10-05",
- "active_hypothesis": "v0.9.0 deployed (Oct 1). W41 cascading incident cluster resolved. v0.8.2: rs_vwap_dev cross-sectional serving fix (root cause: 7-session zero-trades Sep 22-28, silent). v0.8.3: Kelly epoch re-seed (owner-authorized Sep 29 — excludes Sep 21 trades from Kelly window). v0.8.4: retrain on corrected archive (OOS IC15=0.1839; freeze classification pending). v0.8.5: archive quality gate. v0.8.6: orphaned exit recovery from broker fills; SMTP credential failure surfaced (alert_channel_error). v0.8.7: both legs from broker. v0.8.8: diagnostics fix. v0.8.9: RetrainAgent FFSA path fixed (broken since May 28 — 4 months). v0.9.0: H13 halt-aware exits (live incident Sep 30 — halt stranded 6 positions at 70% heat; fixed position-scoped guard). M3 clock CONFIRMED Sep 23 (EXIT_PROFIT_TARGET_MODE=ON confirmed by take_profit exit LITE ID 255). n=18 closed (noise; 11/18 exits integrity_broker_reconcile; PF=5.11 halt-contaminated). SMTP credential still unresolved. Railway worker BLOCKED week 16.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 16). v0.9.3 DEPLOYED. M3 clock Sep 23. n≈100 last-100 trades (41W/58L/1T — noise; 22/100 integrity_broker_reconcile; IDs 175-274). Kelly -0.1713 probation (epoch Sep 29). 0 open positions Oct 8. W42: v0.9.1 watchdog zombie fix, v0.9.2 IC gate fix, v0.9.3 LightGBM-only weights. SMTP: no alert_channel_error in Oct 8 integrity — likely resolved. H32 (signal gate attribution diagnostic) implemented Oct 9. Railway worker BLOCKED week 17.",
+ "last_iteration_date": "2026-10-09",
+ "active_hypothesis": "H32 (2026-10-09): signal gate attribution diagnostic — _entry_gate_reason() method and _get_gate_attribution_snapshot() expose per-gate blocking counts at /diagnostics without touching entry logic. Freeze-exempt (diagnostic only). 14 unit tests pass. PR opened. W42 catch-up: v0.9.1 Oct 6 — watchdog _check_zombie_positions used SIZING_MAX_HOLD_BARS=30 as zombie threshold in profit_target mode; force-killed 14/18 M3 positions as 'zombies' at 90 bars (should be 390); _effective_hold_bars() now used; record_forced_exit() added. v0.9.2 Oct 8 — IC gate triple fix: prediction_outcomes retention 7→120d, removed since=_loop_started_at, window cap 7→30d. v0.9.3 Oct 8 — LightGBM-only weights (1.0/0/0/0): Transformer IC≈0.001, TCN IC≈0.001, Sentiment never validated. 405 tests pass. SMTP: no alert_channel_error in Oct 8 integrity report — credential issue likely self-resolved. Railway worker BLOCKED week 17.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -21,11 +21,13 @@
   "integrity_sentinel_stale_rows": [],
   "integrity_sentinel_positions_resolved_aug3": ["AMAT (id 120)", "TSLA (id 122)", "PLTR (id 124)", "INTC (id 125)", "AVGO (id 126)"],
   "integrity_sentinel_positions_resolved_aug10": ["MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."],
-  "watchdog_status": "ALL OK Oct 5 13:35 UTC (v0.9.0). 7 checks pass: loop_tick_fresh, tick_errors, daily_reset, zombie_positions, circuit_breaker, data_fresh, universe_fresh. last_tick 13:49 UTC, last_exit Oct 2 14:49 (WDC stop_loss). 6 open positions: XOM/WFC/TER/COHR/CVX/NOC. Sept 30: CB halted (max_drawdown) — resolved by v0.9.0 Oct 1.",
-  "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
+  "watchdog_status": "ALL OK Oct 8 23:10 UTC (v0.9.3). last_tick 23:49 UTC. 0 open positions. ⚠️ NOTE: v0.9.1 Oct 6 — watchdog zombie check was incorrectly using SIZING_MAX_HOLD_BARS=30 threshold in profit_target mode (should be 390), force-killed 14/18 M3 positions as 'zombies' at 90 bars. Fixed in v0.9.1: _effective_hold_bars() used.",
+  "integrity_sentinel_status": "ALL GREEN Oct 8 23:25 UTC — no alert_channel_error (SMTP credential issue likely resolved). 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (0 open positions).",
+  "kelly_probation_note": "Oct 8: Kelly -0.1713 (probation; above hard-block -0.25). 15 trades in 10-day lookback. Epoch Sep 29 (owner-authorized). Entries in probation require probe: 1/day on tickers with IC ≥ 0.05 and n ≥ KELLY_PROBE_MIN_N. Structural guards (PRs #35, #51–57) still unmerged.",
+  "m3_last100_note": "IDs 175-274 (last 100 closed trades, Oct 8 snapshot): 41W/58L/1T, net +$901. Exit distribution: 72 max_hold / 22 integrity_broker_reconcile / 2 take_profit / 2 stop_loss / 1 trailing_stop / 1 session_close. PRINCIPAL SKEPTIC FLAG: 22% integrity_broker_reconcile exits inflate W/L ratio (forced reconciliation, not strategy signals). max_hold still dominant (72%) — confirms M3 exit pipeline health despite v0.9.1 zombie false-positive incident. n=100 raw but Sharpe/PF not reported (exit distribution dominated by non-strategy exits).",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
-  "deployed_version": "0.9.0",
+  "deployed_version": "0.9.3",
   "m3_v080_n": 18,
   "m3_v080_win_rate": 0.556,
   "m3_v080_pf": 5.11,
@@ -113,6 +115,59 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H32",
+   "hypothesis": "Signal gate attribution diagnostic: expose which specific entry gate is blocking each signal per tick at /diagnostics. Production /diagnostics showed '5/10 signals pass gates but all blocked by kelly_probation' — but gave no visibility into why signals fail before reaching the Kelly gate, or how many fail each gate. Two new side-effect-free methods mirror the production gate logic gate-for-gate: _entry_gate_reason(sig) → (passed, gate_name) and _get_gate_attribution_snapshot() → {n_evaluated, n_would_trade, n_blocked, blocked_by: {gate_name: count}}. Surface via get_portfolio_summary() → 'signal_gate_attribution' field at /diagnostics.",
+   "status": "implemented — PR #82 open (2026-10-09, freeze-exempt diagnostics)",
+   "added": "2026-10-09",
+   "added_by": "nightly desk — diagnostics showed kelly_probation blocking but no visibility into pre-Kelly gate failures",
+   "pr_branch": "feat/rnd-H32-gate-attribution",
+   "pr_number": 82,
+   "pr_state": "OPEN — freeze-exempt: diagnostic only. Mirrors production gate logic without side effects. 14 unit tests pass (422 total, 9 pre-existing yfinance failures).",
+   "priority": "HIGH — immediately actionable: directly answers 'why is nothing trading?' on every watchdog tick without log parsing",
+   "pm_priority": -5
+  },
+  {
+   "id": "H31",
+   "hypothesis": "Exit pipeline health check: validate that _check_sizing_exit() is actually being called on each open position each tick. The v0.9.1 zombie incident revealed that exit path can be silently misconfigured. Diagnostic: per-tick counter of positions evaluated by exit path vs positions held.",
+   "status": "implemented — PR #77 open (2026-10-03, freeze-exempt diagnostics)",
+   "added": "2026-10-03",
+   "added_by": "nightly desk — motivated by v0.9.1 zombie false-positive incident",
+   "pr_number": 77,
+   "priority": "MEDIUM — diagnostics"
+  },
+  {
+   "id": "H29",
+   "hypothesis": "Seed n_trades_today from DB on startup so mid-session restarts don't reset the daily trade cap. v0.9.1 restart mid-day had 0 n_trades_today despite prior activity.",
+   "status": "implemented — PR #76 open (2026-10-02, freeze-exempt risk-control fix)",
+   "added": "2026-10-02",
+   "added_by": "nightly desk",
+   "pr_number": 76,
+   "priority": "HIGH — risk-control enforcement fix"
+  },
+  {
+   "id": "H30",
+   "hypothesis": "Post-halt re-entry size ramp: after a CB halt clears, scale position sizes up from 25% → 50% → 100% over first 3 entries rather than resuming full size immediately.",
+   "status": "implemented — PR #75 open (2026-10-01, freeze-exempt risk-control enhancement)",
+   "added": "2026-10-01",
+   "added_by": "nightly desk — motivated by Sep 30 halt recovery",
+   "pr_number": 75,
+   "priority": "MEDIUM — risk-control improvement"
+  },
+  {
+   "id": "H28",
+   "hypothesis": "Exit-path health monitor + SMTP credential pre-flight. Three related improvements: (1) session-close wall-clock backstop for profit_target mode exits (PR #74, Sep 30 — residual gap), (2) exit pipeline health check (PR #80), (3) SMTP credential probe on startup (PR #79).",
+   "status": "implemented — PRs #74/#79/#80/#81 open (Sep 30 – Oct 8)",
+   "added": "2026-09-30",
+   "added_by": "nightly desk",
+   "sub_prs": {
+    "PR74": {"number": 74, "title": "session-close wall-clock backstop (profit_target mode)", "state": "OPEN", "date": "2026-09-30"},
+    "PR79": {"number": 79, "title": "H28 SMTP credential pre-flight probe", "state": "OPEN", "date": "2026-10-06"},
+    "PR80": {"number": 80, "title": "H28 exit-path health monitor", "state": "OPEN", "date": "2026-10-07"},
+    "PR81": {"number": 81, "title": "H28 SECTOR_MAP Round 2", "state": "OPEN", "date": "2026-10-08"}
+   },
+   "priority": "HIGH — SMTP resolved Oct 8 (no alert_channel_error), but pre-flight probe still valuable"
+  },
   {
    "id": "H25",
    "hypothesis": "Kelly window structural fragility — a single trading day's cluster of losses can dominate the 10-day fraction (Aug 31: 12 trades on one date drove fraction from -0.73 to -5.37). Two-part fix: (1) require Kelly window to span ≥5 distinct trading days before allowing full-size entries (KELLY_MIN_UNIQUE_DAYS=5); (2) cap any single trading day's contribution to the Kelly fraction (cluster-day cap). Together these prevent a one-day event from disabling the system for the full subsequent 10-day window.",
@@ -479,7 +534,20 @@
  "v088_note": "Sep 30 2026. Diagnostics fix for exit-threshold fields (correct values now reported at /diagnostics for exit ladder).",
  "v089_note": "Sep 30 2026. RetrainAgent FFSA path fix. train_lgbm.load_data() hard-required reports/drift/ffsa_*.json which .railwayignore excludes from the deployed image. RetrainAgent had raised FileNotFoundError at every 08:00 ET run for 4+ months (since May 28). Fix: fallback to config/ffsa_features.json. OPERATIONAL CHANGE: model can now hot-swap daily at 08:00 ET without a deploy — 'what model is live' can change silently; MIN_VAL_IC and pipeline-version guard are the only gates.",
  "v090_note": "Oct 1 2026. H13 LIVE INCIDENT FIX. Sep 30: max_drawdown CB fired with 6 positions open at ~70% heat carrying +$794 unrealized. _act_on_signal() had unconditional if self._cb.is_halted: return False — exits went through same gate. Positions could not close. Same defect had been open as PRs #31/#32 for 41 days. Fix: guard is now position-scoped (if self._cb.is_halted and not has_position). Halt still blocks entries; exits and hold-updates always run. 381 tests pass.",
+ "v091_note": "Oct 6 2026. WATCHDOG ZOMBIE FALSE-POSITIVE FIX. _check_zombie_positions() used SIZING_MAX_HOLD_BARS=30 as timeout threshold, but profit_target mode holds up to 390 bars (full session). Force-killed 14/18 M3 positions as 'zombies' at 90 bars — all were legitimate open positions. Fix: replaced constant with _effective_hold_bars() which returns 390 in profit_target mode. Also: record_forced_exit() added for audit trail on any future forced exits. Kelly epoch fix (cross-session overnight-carry outcomes excluded from seed). 389 tests pass.",
+ "v092_note": "Oct 8 2026. IC GATE TRIPLE FIX. Three independent bugs together caused the IC gate to never arm in production: (1) prediction_outcomes table had 7-day retention — IC window was 7d but data pruned same day; fixed to 120d. (2) _compute_per_ticker_ic() called with since=_loop_started_at — reset effective sample to zero on every restart; removed the since filter. (3) Window cap was 7 days, should match retention. All three combined: IC gate was structurally unreachable. 396 tests pass.",
+ "v093_note": "Oct 8 2026. LIGHTGBM-ONLY ENSEMBLE WEIGHTS (owner-directed). Ensemble weights: LGBM=1.0, Transformer=0.0, TCN=0.0, Sentiment=0.0. Evidence: Transformer/TCN IC≈0.001 (effectively zero), Sentiment never validated end-to-end. Removing 40% dead weight sharpens gate on LightGBM signal. 405 tests pass.",
  "completed_iterations": [
+  {
+   "date": "2026-10-09",
+   "hypothesis_id": "H32",
+   "result": "IMPLEMENTED — H32 signal gate attribution diagnostic. Two new side-effect-free methods in SignalLoop: _entry_gate_reason(sig) → (passed, gate_name) mirrors _sizing_entry_gate_open gate-for-gate without logger calls or side effects; _get_gate_attribution_snapshot() aggregates blocked_by counts across _latest_signals. Exposed at /diagnostics via get_portfolio_summary() signal_gate_attribution field: {n_evaluated, n_would_trade, n_blocked, blocked_by: {gate_name: count}}. 14 new unit tests pass (422 total, 9 pre-existing yfinance failures). Bug fixed: _seed_winning_kelly() in test needed wins+losses (all-win seeds → _kelly_fraction=0.0 → probation mode per _update_kelly() early-return when not wins or not losses). PR #82 opened. W42 state catch-up: v0.9.1 zombie fix, v0.9.2 IC gate triple fix, v0.9.3 LightGBM-only weights — 3 versions deployed since last agent_state.json update. SMTP: no alert_channel_error in Oct 8 integrity (likely self-resolved). 0 open positions. Kelly -0.1713 probation.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_gate_attribution.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-05",
    "hypothesis_id": "W41_PROGRAM_REVIEW",
