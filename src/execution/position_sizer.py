@@ -96,6 +96,12 @@ SECTOR_MAP: dict[str, str] = {
     "COHR": "semis",
     "CIEN": "semis",
     "FLEX": "semis",
+    # Semiconductors (continued) — EDA/semicap additions observed in M3 live universe
+    "ON": "semis",      # ON Semiconductor — PMIC/power semis; seen in Oct 2026 diagnostics
+    # Software / internet / platform tech (continued)
+    "CRM": "tech",      # Salesforce — enterprise cloud CRM
+    "SNPS": "tech",     # Synopsys — EDA software (chip-design tooling, not chips)
+    "FICO": "tech",     # Fair Isaac — analytics/decisioning software
     # Financials
     "JPM": "financials",
     "V": "financials",
@@ -104,6 +110,7 @@ SECTOR_MAP: dict[str, str] = {
     "WFC": "financials",
     "MSCI": "financials",
     "HOOD": "financials",
+    "COIN": "financials",   # Coinbase — crypto exchange / financial services
     # Consumer
     "AMZN": "consumer",
     "TSLA": "consumer",
@@ -111,6 +118,7 @@ SECTOR_MAP: dict[str, str] = {
     "NFLX": "consumer",
     "APTV": "consumer",
     "GRMN": "consumer",
+    "MNST": "consumer",     # Monster Beverage — H22 (PR #48) gap; seen in M3 live universe
     # Energy
     "XOM": "energy",
     "CVX": "energy",
@@ -127,6 +135,12 @@ SECTOR_MAP: dict[str, str] = {
     "LDOS": "industrials",
     "LII": "industrials",
     "ZBRA": "industrials",
+    "NOC": "industrials",   # Northrop Grumman — open position Oct 5 2026 while unmapped
+    "RTX": "industrials",   # Raytheon Technologies — H27 (PR #62) gap
+    # Utilities — new sector; PCG confirmed in Sep-17 diagnostics and H27 PR #62
+    "PCG": "utilities",
+    # Materials / agriculture — new sector; CTVA confirmed in Oct-7 diagnostics
+    "CTVA": "materials",    # Corteva Agriscience — agriculture/crop-protection chemicals
 }
 
 # Bucket for any ticker absent from SECTOR_MAP. It is a real bucket name so it
