@@ -855,6 +855,7 @@ async def root() -> JSONResponse:
             "trades":  "GET /trades",
             "positions_detail": "GET /positions/detail",
             "portfolio_summary": "GET /portfolio/summary",
+            "portfolio_performance": "GET /portfolio/performance",
             "diagnostics": "GET /diagnostics",
             "ab_status": "GET /ab/status",
             "resume_trading": "POST /admin/resume-trading?pipeline=all&authorized_by=admin",
@@ -1380,6 +1381,55 @@ async def get_trades(limit: int = 100, mode: str = "paper") -> JSONResponse:
         "trades": trade_list,
         "mode": mode,
         "count": len(trade_list),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/portfolio/performance")
+async def portfolio_performance(limit: int = 200, mode: str = "paper") -> JSONResponse:
+    """Exit-reason stratified performance summary (H28).
+
+    Answers the "is there real edge?" question by separating
+    integrity_broker_reconcile (halt-recovery) PnL from designed-exit PnL.
+
+    Returns overall, clean (ex reconcile), strategy-only, per-reason buckets,
+    and top-N concentration metrics.  All computation is pure-function — see
+    src/analysis/performance.py.
+    """
+    from sqlalchemy import select
+
+    from src.analysis.performance import compute_exit_stratification
+    from src.data.db import Trade, get_session_factory
+
+    try:
+        sf = get_session_factory()
+        async with sf() as session:
+            rows = await session.execute(
+                select(Trade)
+                .where(Trade.mode == mode)
+                .order_by(Trade.entry_time.desc())
+                .limit(limit)
+            )
+            trades = rows.scalars().all()
+            trade_list = [
+                {
+                    "ticker": t.ticker,
+                    "pnl": t.pnl,
+                    "exit_reason": t.exit_reason,
+                    "entry_time": t.entry_time.isoformat() if t.entry_time else None,
+                    "exit_time": t.exit_time.isoformat() if t.exit_time else None,
+                }
+                for t in trades
+            ]
+    except Exception as exc:
+        logger.warning("portfolio_performance_query_failed", error=str(exc))
+        trade_list = []
+
+    strat = compute_exit_stratification(trade_list)
+    return JSONResponse(content={
+        **strat,
+        "mode": mode,
+        "limit_requested": limit,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     })
 
