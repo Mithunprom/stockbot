@@ -1436,6 +1436,11 @@ class SignalLoop:
                 for e in [_atr_exits(self._daily_vol_for(t))]
             },
             "daily_vol_cache_n": len(self._ticker_daily_vol),
+            # Rolling window rolloff schedule and fraction trajectory.
+            # Shows when each exit-date bucket ages out, the projected fraction
+            # after that rolloff (assuming no new entries), and the earliest date
+            # Kelly goes inactive (n < KELLY_MIN_TRADES) so entries resume.
+            "kelly_window_forecast": self._kelly_window_forecast(),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -2139,6 +2144,130 @@ class SignalLoop:
         ]
         if len(pruned) != len(self._sizing_recent_outcomes):
             self._sizing_recent_outcomes = pruned
+
+    def _kelly_window_forecast(self) -> dict[str, Any]:
+        """Project the Kelly window rolloff schedule and fraction trajectory.
+
+        Pure computation — never mutates state.
+
+        Shows each exit-date bucket's rolloff date, the projected fraction after
+        that bucket ages out (assuming no new entries close), and the earliest
+        date Kelly becomes inactive (n < KELLY_MIN_TRADES) so the hard block
+        releases itself. This is the diagnostic for the self-draining deadlock
+        scenario described in the KELLY_HARD_BLOCK_THRESHOLD comment.
+
+        rolloff_date is approximate (± 1 day) because intraday exit times vary.
+        """
+        from collections import defaultdict
+        from datetime import timedelta
+
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+        tz = ZoneInfo("America/New_York")
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc - timedelta(days=KELLY_LOOKBACK_DAYS)
+        epoch = _kelly_epoch()
+        if epoch is not None and epoch > cutoff:
+            cutoff = epoch
+
+        outcomes: list[tuple[datetime, float]] = [
+            (ts, p) for ts, p in self._sizing_recent_outcomes
+            if ts is not None and ts >= cutoff
+        ]
+
+        if not outcomes:
+            return {
+                "window_n": 0,
+                "window_by_date": [],
+                "rolloff_trajectory": [],
+                "inactive_date": None,
+                "currently_hard_blocked": False,
+            }
+
+        def _projected_fraction(pnls: list[float]) -> float | None:
+            """Replicate _update_kelly formula; None → inactive (below min trades)."""
+            if len(pnls) < KELLY_MIN_TRADES:
+                return None
+            wins = [o for o in pnls if o > 0]
+            losses = [o for o in pnls if o < 0]
+            if not wins or not losses:
+                return 0.0
+            import statistics as _stats
+            p = len(wins) / len(pnls)
+            avg_win = _stats.mean(wins)
+            avg_loss = abs(_stats.mean(losses))
+            b = avg_win / max(avg_loss, 1e-9)
+            return (p * b - (1.0 - p)) / max(b, 1e-9)
+
+        by_date: dict[str, list[float]] = defaultdict(list)
+        for ts, pnl_pct in outcomes:
+            by_date[ts.astimezone(tz).strftime("%Y-%m-%d")].append(pnl_pct)
+
+        sorted_dates = sorted(by_date)  # oldest first
+
+        window_by_date = []
+        for d in sorted_dates:
+            pnls = by_date[d]
+            from datetime import date as _date
+            rolloff = (
+                datetime.strptime(d, "%Y-%m-%d").date()
+                + timedelta(days=KELLY_LOOKBACK_DAYS)
+            ).isoformat()
+            window_by_date.append({
+                "exit_date": d,
+                "n": len(pnls),
+                "wins": sum(1 for p in pnls if p > 0),
+                "losses": sum(1 for p in pnls if p < 0),
+                "net_pct": round(sum(pnls), 4),
+                "rolloff_date": rolloff,
+            })
+
+        # Simulate rolling off each exit-date bucket (oldest first).
+        trajectory = []
+        remaining = list(outcomes)
+        for entry in window_by_date:
+            et_date = entry["exit_date"]
+            after = [
+                (ts, p) for ts, p in remaining
+                if ts.astimezone(tz).strftime("%Y-%m-%d") != et_date
+            ]
+            pnls_after = [p for _, p in after]
+            frac = _projected_fraction(pnls_after)
+            n_after = len(pnls_after)
+            trajectory.append({
+                "rolloff_date": entry["rolloff_date"],
+                "date_removed": et_date,
+                "n_after": n_after,
+                "projected_fraction": round(frac, 4) if frac is not None else None,
+                "inactive_after": n_after < KELLY_MIN_TRADES,
+                "hard_blocked_after": (
+                    frac is not None and frac <= KELLY_HARD_BLOCK_THRESHOLD
+                ),
+            })
+            remaining = after
+
+        inactive_date: str | None = next(
+            (t["rolloff_date"] for t in trajectory if t["inactive_after"]),
+            None,
+        )
+
+        current_pnls = [p for _, p in outcomes]
+        current_frac = _projected_fraction(current_pnls)
+        currently_hard_blocked = (
+            current_frac is not None
+            and current_frac <= KELLY_HARD_BLOCK_THRESHOLD
+        )
+
+        return {
+            "window_n": len(outcomes),
+            "window_by_date": window_by_date,
+            "rolloff_trajectory": trajectory,
+            "inactive_date": inactive_date,
+            "currently_hard_blocked": currently_hard_blocked,
+        }
 
     def _in_entry_window(self) -> bool:
         """True if current ET time is within the allowed entry window."""
