@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 17+). v0.9.3 live (Oct 8, LGBM 100% ensemble). M3 v0.9.3: n=3 closed (PLTR trailing_stop -$10.92, SWKS session_close +$22.96, LITE stop_loss -$49.13), WR=0.333, PF=0.383 (noise, n<<100). 0 open positions. Integrity ALL GREEN Oct 12. KELLY HARD BLOCK: fraction=-0.4008 (< -0.25 threshold), all entries blocked. SELF-DRAIN forecast: Oct 5 batch (6 trades) rolls off ~Oct 16 → n drops from 10→4 < KELLY_MIN_TRADES → Kelly goes inactive → entries automatically resume. H29 (kelly_window_forecast diagnostic) deployed Oct 13 — adds rolloff trajectory + inactive_date to /diagnostics. PR pending. SMTP dead. Railway worker week 17+. Oct 13 nightly desk run.",
  "last_iteration_date": "2026-10-13",
- "active_hypothesis": "H29: Kelly window deadlock forecast diagnostic. PROBLEM: kelly_fraction=-0.4008 (< -0.25 hard block), all entries including probes blocked. Window has exactly 10 trades (KELLY_MIN_TRADES threshold) so Kelly stays active and hard-blocked; it cannot self-drain until a rolloff drops n below 10. ANALYSIS: Oct 5 batch (6 intraday trades: NOC/CVX/COHR/TER/WFC/XOM) rolls off ~Oct 16 → n drops 10→4 < KELLY_MIN_TRADES → Kelly goes inactive (per _kelly_entries_blocked() line 2125: inactive mode returns False → entries resume). After Oct 16: Kelly mode='inactive', fraction=0.0, entries allowed. Projected Oct 5 rolloff leaves only losses (QCOM-0.07%, MSTR-0.72%, PLTR-0.92%, LITE-4.02%) but n=4 < 10 → inactive, not hard-blocked. SOLUTION: H29 adds _kelly_window_forecast() to /diagnostics showing rolloff schedule, projected_fraction per step, inactive_date. Freeze-exempt (diagnostics only, no behavior change). PR pending. PRIOR CONTEXT: v0.9.3 deployed Oct 8 (LGBM 100% ensemble). M3 n=3 (PLTR trailing_stop -$10.92, SWKS session_close +$22.96, LITE stop_loss -$49.13). Integrity ALL GREEN Oct 12. SMTP dead. Railway worker week 17+.",
+ "active_hypothesis": "H29: Kelly window deadlock forecast diagnostic. PROBLEM: kelly_fraction=-0.4008 (< -0.25 hard block), all entries including probes blocked. Window has exactly 10 trades (KELLY_MIN_TRADES threshold) so Kelly stays active and hard-blocked; it cannot self-drain until a rolloff drops n below 10. ANALYSIS: Oct 5 batch (6 intraday trades: NOC/CVX/COHR/TER/WFC/XOM) rolls off ~Oct 16 → n drops 10→4 < KELLY_MIN_TRADES → Kelly goes inactive (per _kelly_entries_blocked() line 2125: inactive mode returns False → entries resume). After Oct 16: Kelly mode='inactive', fraction=0.0, entries allowed. Projected Oct 5 rolloff leaves only losses (QCOM-0.07%, MSTR-0.72%, PLTR-0.92%, LITE-4.02%) but n=4 < 10 → inactive, not hard-blocked. SOLUTION: H29 adds _kelly_window_forecast() to /diagnostics showing rolloff schedule, projected_fraction per step, inactive_date. Freeze-exempt (diagnostics only, no behavior change). PR #85 open. PRIOR CONTEXT: v0.9.3 deployed Oct 8 (LGBM 100% ensemble). M3 n=3 (PLTR trailing_stop -$10.92, SWKS session_close +$22.96, LITE stop_loss -$49.13). Integrity ALL GREEN Oct 12. SMTP dead. Railway worker week 17+.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -129,8 +129,8 @@
    "added": "2026-10-13",
    "added_by": "nightly desk — Kelly hard-block rolloff analysis Oct 13",
    "pr_branch": "feat/rnd-H29-kelly-window-forecast",
-   "pr_number": null,
-   "pr_state": "PENDING — freeze-exempt: diagnostics only, no change to entry/exit logic or risk controls.",
+   "pr_number": 85,
+   "pr_state": "OPEN — PR #85. Freeze-exempt: diagnostics only, no change to entry/exit logic or risk controls.",
    "priority": "HIGH — operators cannot see Kelly recovery ETA; Oct 16 self-drain is invisible without this",
    "pm_priority": 0
   },
