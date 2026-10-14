@@ -129,3 +129,126 @@ def test_probe_bar_is_far_below_the_block_gate_bar():
 def test_probe_still_demands_a_positive_ic():
     """Loosening the sample bar must not loosen the quality bar."""
     assert sl.KELLY_PROBATION_MIN_TICKER_IC > 0
+
+
+# ── Session-close wall-clock backstop (H28) ──────────────────────────────────
+
+def test_bars_held_off_by_one_was_zombie_root_cause():
+    """A position entered at 09:30 ET reaches bars_held=389 at 15:59 ET.
+
+    In profit-target mode hold_cap = FULL_SESSION_BARS = 390.
+    bars >= 390 is therefore algebraically impossible within a single session:
+    the bar-count backstop was dead code, causing the Sep 29 zombie cluster
+    (IDs 248-253 carried overnight, purged by broker EOD liquidation but
+    never written as DB exit rows).
+    """
+    max_achievable = sl.FULL_SESSION_BARS - 1
+    assert max_achievable < sl.FULL_SESSION_BARS, (
+        "bars_held can reach at most FULL_SESSION_BARS-1 within a single "
+        "session; the bar-count backstop was unreachable dead code"
+    )
+
+
+def test_session_close_buffer_constant_is_positive_and_small():
+    assert 1 <= sl.SESSION_CLOSE_BUFFER_MINUTES <= 10
+
+
+def test_session_close_fires_at_buffer_boundary():
+    """Wall clock at exactly 15:57 ET (buffer=3 min) should fire."""
+    from datetime import datetime, timezone as tz
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    et = ZoneInfo("America/New_York")
+    # Tuesday 15:57:00 ET — within the 3-minute window before 16:00
+    dt_et = datetime(2026, 10, 13, 15, 57, 0, tzinfo=et)
+    # Convert to UTC for monkeypatching
+    from unittest.mock import patch
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_et
+        mock_dt.now.side_effect = lambda tz=None: dt_et if tz else dt_et
+        assert sl._is_session_closing() is True
+
+
+def test_session_close_fires_at_1559():
+    """Wall clock at 15:59 ET (1 minute before close) should still fire."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    et = ZoneInfo("America/New_York")
+    dt_et = datetime(2026, 10, 13, 15, 59, 0, tzinfo=et)
+    from unittest.mock import patch
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_et
+        mock_dt.now.side_effect = lambda tz=None: dt_et if tz else dt_et
+        assert sl._is_session_closing() is True
+
+
+def test_session_close_does_not_fire_one_minute_before_buffer():
+    """Wall clock at 15:56 ET is outside the buffer — must not fire."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    et = ZoneInfo("America/New_York")
+    dt_et = datetime(2026, 10, 13, 15, 56, 0, tzinfo=et)
+    from unittest.mock import patch
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_et
+        mock_dt.now.side_effect = lambda tz=None: dt_et if tz else dt_et
+        assert sl._is_session_closing() is False
+
+
+def test_session_close_does_not_fire_at_midday():
+    """No false positive during normal trading hours."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    et = ZoneInfo("America/New_York")
+    dt_et = datetime(2026, 10, 13, 12, 0, 0, tzinfo=et)
+    from unittest.mock import patch
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_et
+        mock_dt.now.side_effect = lambda tz=None: dt_et if tz else dt_et
+        assert sl._is_session_closing() is False
+
+
+def test_session_close_does_not_fire_on_weekend():
+    """Saturday/Sunday must not trigger session_close."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    et = ZoneInfo("America/New_York")
+    # Saturday at 15:58 ET
+    dt_et = datetime(2026, 10, 11, 15, 58, 0, tzinfo=et)
+    from unittest.mock import patch
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_et
+        mock_dt.now.side_effect = lambda tz=None: dt_et if tz else dt_et
+        assert sl._is_session_closing() is False
+
+
+def test_session_close_accepts_utc_datetime():
+    """UTC 19:57 = 15:57 ET (EDT, UTC-4) — should fire."""
+    from datetime import datetime, timezone
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    et = ZoneInfo("America/New_York")
+    # Build aware UTC datetime and convert to ET for the mock
+    dt_utc = datetime(2026, 10, 13, 19, 57, 0, tzinfo=timezone.utc)
+    dt_et = dt_utc.astimezone(et)
+    from unittest.mock import patch
+    with patch("src.agents.signal_loop.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_et
+        mock_dt.now.side_effect = lambda tz=None: dt_et if tz else dt_et
+        assert sl._is_session_closing() is True

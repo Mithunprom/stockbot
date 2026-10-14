@@ -561,6 +561,7 @@ def _hold_window_vol(daily_vol: float, hold_bars: int) -> float:
 
 
 FULL_SESSION_BARS = 390             # 09:30–15:59 ET
+SESSION_CLOSE_BUFFER_MINUTES = 3   # fire session_close backstop at 15:57 ET
 
 # ── Owner-directed exit redesign (2026-09-22) ────────────────────────────────
 #
@@ -689,6 +690,26 @@ def _effective_hold_bars() -> int:
     window. The session bound itself always remains: nothing carries overnight.
     """
     return FULL_SESSION_BARS if EXIT_PROFIT_TARGET_MODE else SIZING_MAX_HOLD_BARS
+
+
+def _is_session_closing() -> bool:
+    """True when the wall clock is within SESSION_CLOSE_BUFFER_MINUTES of 16:00 ET.
+
+    bars_held reaches at most 389 (FULL_SESSION_BARS - 1) for a 09:30 entry, so
+    ``bars >= FULL_SESSION_BARS`` is algebraically impossible inside a single
+    session.  This wall-clock check is the actual backstop that prevents
+    profit-target positions from running overnight.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:  # Saturday or Sunday
+        return False
+    close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    delta_seconds = (close_et - now_et).total_seconds()
+    return 0 <= delta_seconds <= SESSION_CLOSE_BUFFER_MINUTES * 60
 
 
 def _compute_daily_vols(tickers: list[str]) -> dict[str, float]:
@@ -2565,7 +2586,8 @@ class SignalLoop:
             # still closing most trades, the target is set too far away and
             # the mode is not doing what it was asked to do.
             hold_cap = _effective_hold_bars()
-            if bars >= hold_cap:
+            at_session_close = EXIT_PROFIT_TARGET_MODE and _is_session_closing()
+            if bars >= hold_cap or at_session_close:
                 if not self._maybe_extend_hold(ticker, sig, unrealized):
                     reason = "session_close" if EXIT_PROFIT_TARGET_MODE else "max_hold"
                 # else: extension granted — bars_held reset to 0; don't exit
