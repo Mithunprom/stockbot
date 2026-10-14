@@ -12,10 +12,37 @@ except ImportError:
     _TORCH_AVAILABLE = False
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.agents import signal_loop as _sl
 from src.agents.signal_loop import SignalLoop
 from src.execution.position_manager import PositionManager
 from src.models.ensemble import EnsembleSignal
 from src.risk.circuit_breakers import CircuitBreakers
+
+
+@pytest.fixture(autouse=True)
+def _mid_session_clock():
+    """Pin the time of day to mid-session, keeping today's real date.
+
+    The wall-clock session backstop (`SESSION_FLAT_ET`, 15:55 ET) flattens any
+    open position. Without this, every exit test in this module would pass or
+    fail depending on what time of day the suite was run — green in the morning,
+    red after 15:55 ET. Only the clock is pinned, not the date, so all the
+    date-relative fixtures here keep working.
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    real_now = _dt.now
+    et = ZoneInfo("America/New_York")
+
+    def _now(tz=None):
+        base = real_now(tz) if tz is not None else real_now()
+        return base.replace(hour=11, minute=0, second=0, microsecond=0)
+
+    mock_dt = MagicMock(wraps=_dt)
+    mock_dt.now.side_effect = _now
+    with patch.object(_sl, "datetime", mock_dt):
+        yield
 
 
 def _make_loop(broadcast=None) -> SignalLoop:
@@ -359,15 +386,29 @@ def test_next_day_exits_unrestricted():
     loop._bars_held["AAPL"] = SIZING_MAX_HOLD_BARS
     loop._daytrade_count = 3   # no budget — irrelevant for overnight positions
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
-    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "max_hold"
+    # Carried position (entered on an earlier ET date), so the wall-clock
+    # session backstop flattens it as `session_close` before the bar cap is
+    # consulted. H5 still gets its extension attempt first (the backstop is
+    # OR'd with the cap, not checked before it) — this asserts what happens
+    # when no extension is granted. Pre-backstop this read "max_hold".
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "session_close"
 
 
 def test_stagnation_exit_frees_dead_capital():
-    """Stagnation logic fires when its threshold sits below max hold."""
+    """Stagnation logic fires when its threshold sits below max hold.
+
+    Same-day entry on a PDT-exempt account, which is production's situation at
+    ~$100k. This used to be a 2-day-old position on a $10k account: the carry
+    was how it dodged the PDT guard (which defers a same-day `stagnation`), but
+    a carried position is now flattened as `session_close` before stagnation can
+    be reached — correctly, since nothing may carry overnight. Note the
+    consequence: on a sub-$25k account a same-day stagnation exit is still
+    PDT-deferred, so stagnation is effectively unreachable there.
+    """
     import src.agents.signal_loop as sl
     loop = _make_loop()
-    loop._pm.portfolio_value = 10_000.0
-    _exit_fixture(loop, days_ago_entered=2)
+    loop._pm.portfolio_value = 100_000.0
+    _exit_fixture(loop, days_ago_entered=0)
     with patch.object(sl, "SIZING_STAGNATION_BARS", 100), \
          patch.object(sl, "SIZING_MAX_HOLD_BARS", 200):
         loop._bars_held["AAPL"] = 150
@@ -497,13 +538,18 @@ def test_h5_extensions_are_disabled_in_production():
     still tested below under an explicit patch) but must stay off by default.
     """
     from src.agents.signal_loop import MAX_HOLD_EXTENSIONS
+    # Carried position (entered on an earlier ET date), so the wall-clock
+    # session backstop flattens it as `session_close` before the bar cap is
+    # consulted. H5 still gets its extension attempt first (the backstop is
+    # OR'd with the cap, not checked before it) — this asserts what happens
+    # when no extension is granted. Pre-backstop this read "max_hold".
     assert MAX_HOLD_EXTENSIONS == 0
 
     loop = _make_loop()
     loop._pm.portfolio_value = 100_000.0
     sig = _h5_fixture(loop)
     # At max_hold with extensions off, the position must exit — not extend.
-    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "max_hold"
+    assert loop._check_sizing_exit("AAPL", 100.0, sig) == "session_close"
     assert loop._hold_extension_count.get("AAPL", 0) == 0
 
 
@@ -539,7 +585,12 @@ def test_h5_max_hold_fires_after_two_extensions():
 
     result = loop._check_sizing_exit("AAPL", 100.0, sig)
     # No more extensions available → must exit
-    assert result == "max_hold"
+    # Carried position (entered on an earlier ET date), so the wall-clock
+    # session backstop flattens it as `session_close` before the bar cap is
+    # consulted. H5 still gets its extension attempt first (the backstop is
+    # OR'd with the cap, not checked before it) — this asserts what happens
+    # when no extension is granted. Pre-backstop this read "max_hold".
+    assert result == "session_close"
 
 
 def test_h5_extension_denied_when_losing_more_than_hold_window_vol():
@@ -563,10 +614,15 @@ def test_h5_extension_denied_when_losing_more_than_hold_window_vol():
 
     hold_vol = _hold_window_vol(0.02, 30)
     stop, _trail, _tp = _atr_exits(0.02)
+    # Carried position (entered on an earlier ET date), so the wall-clock
+    # session backstop flattens it as `session_close` before the bar cap is
+    # consulted. H5 still gets its extension attempt first (the backstop is
+    # OR'd with the cap, not checked before it) — this asserts what happens
+    # when no extension is granted. Pre-backstop this read "max_hold".
     assert hold_vol < 0.007 < stop, "test setup no longer straddles the barriers"
 
     result = loop._check_sizing_exit("AAPL", 99.3, sig)
-    assert result == "max_hold"
+    assert result == "session_close"
     assert loop._hold_extension_count.get("AAPL", 0) == 0
 
 
@@ -579,7 +635,12 @@ def test_h5_extension_denied_when_signal_weak():
     sig = _h5_fixture(loop, pred_ret=0.001, dir_prob=0.75)
 
     result = loop._check_sizing_exit("AAPL", 100.0, sig)
-    assert result == "max_hold"
+    # Carried position (entered on an earlier ET date), so the wall-clock
+    # session backstop flattens it as `session_close` before the bar cap is
+    # consulted. H5 still gets its extension attempt first (the backstop is
+    # OR'd with the cap, not checked before it) — this asserts what happens
+    # when no extension is granted. Pre-backstop this read "max_hold".
+    assert result == "session_close"
     assert loop._hold_extension_count.get("AAPL", 0) == 0
 
 
@@ -590,7 +651,12 @@ def test_h5_extension_denied_when_dir_prob_in_dead_zone():
     sig = _h5_fixture(loop, pred_ret=0.009, dir_prob=0.55)
 
     result = loop._check_sizing_exit("AAPL", 100.0, sig)
-    assert result == "max_hold"
+    # Carried position (entered on an earlier ET date), so the wall-clock
+    # session backstop flattens it as `session_close` before the bar cap is
+    # consulted. H5 still gets its extension attempt first (the backstop is
+    # OR'd with the cap, not checked before it) — this asserts what happens
+    # when no extension is granted. Pre-backstop this read "max_hold".
+    assert result == "session_close"
     assert loop._hold_extension_count.get("AAPL", 0) == 0
 
 
@@ -826,7 +892,7 @@ def test_reversal_needs_sustained_confirmation():
         "destroyed the swing design (2026-07-07 diagnosis)"
     )
     loop = _make_loop()
-    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=0)
     loop._bars_held["AAPL"] = 10
 
     sig = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))
@@ -842,7 +908,7 @@ def test_reversal_needs_sustained_confirmation():
 def test_reversal_counter_resets_on_neutral_bar():
     """A non-confirmed bar resets the reversal streak."""
     loop = _make_loop()
-    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=1)
+    _exit_fixture(loop, "AAPL", entry_price=100.0, days_ago_entered=0)
     loop._bars_held["AAPL"] = 10
 
     opposite = EnsembleSignal(ticker="AAPL", timestamp=_stamp(0))

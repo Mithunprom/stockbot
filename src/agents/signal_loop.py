@@ -108,6 +108,16 @@ MAX_POSITIONS_PER_SECTOR = MAX_POSITIONS_PER_SECTOR_DEFAULT
 # 5-6, PF >16 vs 1.7, max DD 0.08%).
 ENTRY_WINDOW_ET = ((9, 40), (15, 30))
 
+# Wall-clock flatten time. 15:55 ET, not 16:00 — the exit needs room to fill
+# before the close, and a market order submitted at 15:59:30 may not.
+#
+# This is the backstop `_effective_hold_bars()` was always supposed to be. Its
+# docstring promises "nothing carries overnight", but it counts BARS: at a
+# 390-bar cap a position entered at 09:40 can only reach ~380 before the close,
+# so it necessarily survives into the next session. Enforcing the promise needs
+# a clock. See `_session_boundary_crossed`.
+SESSION_FLAT_ET = (15, 55)
+
 # H3: Earnings-calendar blackout — no new entries within N calendar days before
 # OR after a ticker's earnings date. Gap risk on 1-day holds from surprise
 # earnings moves is uncompensated: entry is blocked, existing positions may exit
@@ -2558,16 +2568,53 @@ class SignalLoop:
 
         bars = self._bars_held.get(ticker, 0)
         if reason is None:
+            # WALL-CLOCK BACKSTOP — the bar counter cannot be trusted with this.
+            #
+            # `_effective_hold_bars()` is 390 in profit-target mode, but
+            # `_bars_held` is never reset at a session boundary and only counts
+            # bars the loop actually processed. A position entered at 09:40 can
+            # therefore accumulate at most ~380 bars before the close, so it
+            # CANNOT reach the cap on its entry day — it trips at ~09:42 the
+            # next trading day instead. That is not a rare stalled-feed case:
+            # every position entered after 09:30 that does not hit its stop,
+            # trail or target carries overnight by construction.
+            #
+            # SWKS proved it on 2026-10-09: entered Friday 09:40 ET, closed
+            # Monday 09:42 ET, `session_close`, three calendar days and a
+            # weekend gap later. It happened to profit (+$22.96), exactly like
+            # the six positions stranded on 2026-09-30 happened to profit
+            # (+$3,916) — unhedged gap risk is not something to be lucky at
+            # twice. It only surfaced now because the watchdog used to
+            # force-sell everything at 90 bars (fixed in v0.9.2), which was
+            # accidentally preventing carries while corrupting the ledger.
+            #
+            # Time, not bars, so a stalled or sparse feed cannot defeat it.
+            #
+            # It is OR'd with the bar cap rather than checked before it, so H5
+            # still gets its say. H5 (`_maybe_extend_hold`) grants "one extra
+            # trading DAY" up to a 3-day cap — it is the one sanctioned
+            # multi-day path, and checking the backstop first would have
+            # silently made it dead code. It is inert today
+            # (MAX_HOLD_EXTENSIONS = 0), so this ordering costs nothing now and
+            # keeps H5 functional if it is ever re-enabled.
+            #
             # In profit-target mode the clock is a SESSION BACKSTOP, not the
             # exit rule: the position runs until it hits its target, its stop,
             # or the session ends. `session_close` is logged distinctly from
             # `max_hold` so the exit mix stays readable — if the backstop is
             # still closing most trades, the target is set too far away and
-            # the mode is not doing what it was asked to do.
+            # the mode is not doing what it was asked to do. A wall-clock
+            # flatten always logs `session_close`, in BOTH modes, because that
+            # is what it is.
             hold_cap = _effective_hold_bars()
-            if bars >= hold_cap:
+            must_flatten = self._session_boundary_crossed(ticker)
+            if bars >= hold_cap or must_flatten:
                 if not self._maybe_extend_hold(ticker, sig, unrealized):
-                    reason = "session_close" if EXIT_PROFIT_TARGET_MODE else "max_hold"
+                    reason = (
+                        "session_close"
+                        if (EXIT_PROFIT_TARGET_MODE or must_flatten)
+                        else "max_hold"
+                    )
                 # else: extension granted — bars_held reset to 0; don't exit
             # Stagnation: dead trade going nowhere — free up the capital.
             # Suppressed in profit-target mode: "flat after N bars" is exactly
@@ -2625,6 +2672,34 @@ class SignalLoop:
                 return None
 
         return reason
+
+    def _session_boundary_crossed(self, ticker: str) -> bool:
+        """True when an open position must be flat on wall-clock grounds.
+
+        Two conditions, both time-based so no bar counter can defeat them:
+
+        1. It is at or past SESSION_FLAT_ET — flatten before the close rather
+           than at it, leaving room for the order to fill.
+        2. The position was entered on an earlier ET date — it has ALREADY
+           carried. This is the catch-up arm: it closes a position that slipped
+           through (a restart, a halt, a sparse feed) on the next tick instead
+           of waiting for a bar count that may never arrive.
+
+        Args:
+            ticker: Open position to test.
+
+        Returns:
+            True if the position should be closed now for session reasons.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:  # pragma: no cover - py<3.9 fallback
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+        now = datetime.now(ZoneInfo("America/New_York"))
+        entry_date = self._entry_dates.get(ticker)
+        if entry_date is not None and entry_date < now.date():
+            return True
+        return (now.hour, now.minute) >= SESSION_FLAT_ET
 
     async def record_forced_exit(
         self,

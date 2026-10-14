@@ -820,7 +820,14 @@ def _load_ffsa_features() -> list[str]:
 # which ticker gets the single daily probation probe). Entry gates read
 # lgbm_pred_return/lgbm_dir_prob directly and are UNCHANGED — no threshold
 # moves. Not backtested as a ranking change; paper is the measurement.
-APP_VERSION = "0.9.3"
+# v0.9.4 — wall-clock session backstop. Nothing carries overnight, enforced by
+# the clock instead of a bar counter. `_effective_hold_bars()` promised this but
+# counted BARS: at a 390-bar cap a position entered at 09:40 can only reach ~380
+# before the close, so it necessarily survived into the next session. SWKS
+# proved it 2026-10-09 (Fri 09:40 → Mon 09:42, across a weekend gap). Positions
+# now flatten at 15:55 ET, and an already-carried position closes on the next
+# tick. H5 keeps its extension attempt first (inert at MAX_HOLD_EXTENSIONS=0).
+APP_VERSION = "0.9.4"
 
 app = FastAPI(
     title="StockBot API",
