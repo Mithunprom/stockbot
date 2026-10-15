@@ -1165,9 +1165,13 @@ async def diagnostics() -> JSONResponse:
         for sig in raw_signals[:10]:
             pred_ret = float(sig.lgbm_pred_return)
             dir_prob = float(sig.lgbm_dir_prob)
-            lo, hi = SIZING_DIR_PROB_DEAD_ZONE
-            passes_pred = abs(pred_ret) > cost_thr
-            passes_dir = not (lo < dir_prob < hi)
+            _, hi = SIZING_DIR_PROB_DEAD_ZONE
+            # Phase 5 long-only: both heads must agree bullish.
+            # pred_ret must be POSITIVE (not |pred_ret|) — a negative regression is
+            # bearish regardless of dir_prob, and the gate should not report it as
+            # "passing" when it would be blocked by the direction check at execution.
+            passes_pred = pred_ret > cost_thr
+            passes_dir = dir_prob >= hi
             passes_both = passes_pred and passes_dir
             cooldown_active = sig.ticker in loop._ticker_cooldown
             probation_block = probation_active and not (
@@ -1186,7 +1190,7 @@ async def diagnostics() -> JSONResponse:
                 "blocked_by": (
                     []
                     + (["pred_return_too_small"] if not passes_pred else [])
-                    + (["dir_prob_in_dead_zone"] if not passes_dir else [])
+                    + (["dir_prob_not_bullish"] if not passes_dir else [])
                     + (["ticker_cooldown"] if cooldown_active else [])
                     + (["kelly_probation"] if probation_block else [])
                     + (["managed_heat_too_high"] if summary.get("managed_heat", 0) >= 0.80 else [])
