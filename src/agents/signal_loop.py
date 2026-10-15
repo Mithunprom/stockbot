@@ -2362,12 +2362,26 @@ class SignalLoop:
             )
             return False
 
-        # Gate 6: Signal quality (threshold self-calibrates to the live model)
+        # Gate 6: Signal quality — Phase 5 long-only (threshold self-calibrates)
+        #
+        # Original form: abs(pred_ret) > threshold AND dir_prob outside dead zone.
+        # That form was written for a two-sided strategy: it passed both bullish
+        # (pred_ret > 0, dir_prob >= 0.60) AND bearish (pred_ret < 0, dir_prob <= 0.40)
+        # signals, relying on _act_on_signal's direction check to skip shorts.
+        #
+        # Phase 5 is long-only. The direction check in _act_on_signal drops any
+        # signal where pred_ret < 0 (direction = -1). But Gate 6 was also admitting
+        # the contradictory case: pred_ret > 0 (regression bullish → direction = +1
+        # → ENTERS) with dir_prob <= 0.40 (classification bearish). Both signals
+        # must agree for a conviction entry; disagreement means uncertainty, not edge.
+        #
+        # Fix: require both heads to be bullish —
+        #   regression: pred_ret > threshold (positive, not |pred_ret|)
+        #   classification: dir_prob >= 0.60 (P(up) in the high-confidence zone)
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
-        lo, hi = SIZING_DIR_PROB_DEAD_ZONE
-        signal_ok = (abs(pred_ret) > self._dynamic_cost_threshold()
-                     and not (lo < dir_prob < hi))
+        _, hi = SIZING_DIR_PROB_DEAD_ZONE
+        signal_ok = pred_ret > self._dynamic_cost_threshold() and dir_prob >= hi
         return signal_ok
 
     def _update_kelly(self) -> None:
