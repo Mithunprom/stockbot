@@ -2601,11 +2601,27 @@ class SignalLoop:
             # In profit-target mode the clock is a SESSION BACKSTOP, not the
             # exit rule: the position runs until it hits its target, its stop,
             # or the session ends. `session_close` is logged distinctly from
-            # `max_hold` so the exit mix stays readable — if the backstop is
-            # still closing most trades, the target is set too far away and
-            # the mode is not doing what it was asked to do. A wall-clock
-            # flatten always logs `session_close`, in BOTH modes, because that
-            # is what it is.
+            # `max_hold` so the exit mix stays readable. A wall-clock flatten
+            # always logs `session_close`, in BOTH modes, because that is what
+            # it is.
+            #
+            # THIS COMMENT USED TO SAY that a backstop closing most trades
+            # means the target is too far away. That is WRONG, and it cost a
+            # round of investigation. Measured 2026-10-15 over 57,979 real
+            # minute paths (scripts/profit_target_sweep.py, entries at the 90th
+            # cross-sectional percentile since 2026-07-15): at production's
+            # 0.05 fraction only 4.2% of trades exit on target and ~89% exit on
+            # the clock — and that is the near-optimal configuration.
+            # Expectancy is FLAT from 0.030 to 0.100 (19-20 bps, differences
+            # inside noise), while tightening the target to make it "reachable"
+            # is monotonically harmful: 0.025 -> 19.0 bps, 0.015 -> 15.6,
+            # 0.010 -> 12.6, a 37% loss of expectancy at the tightest setting.
+            #
+            # Note the trap in that data: PF is BEST at the tightest target
+            # (1.60) precisely where expectancy is worst, because a tight target
+            # manufactures many small wins and forgoes the large ones.
+            # Optimising the exit mix, or PF, selects the worst setting. The
+            # clock doing most of the work is the design working as intended.
             hold_cap = _effective_hold_bars()
             must_flatten = self._session_boundary_crossed(ticker)
             if bars >= hold_cap or must_flatten:
