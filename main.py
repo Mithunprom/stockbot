@@ -836,7 +836,13 @@ def _load_ffsa_features() -> list[str]:
 # (filled_at stamped, outcome left NULL so no IC query sees them), batch
 # 500 -> 1200, and a warning when a full batch yields nothing. Root cause of the
 # missing bars is upstream (ENABLE_ALPACA_WS=false) and NOT fixed here.
-APP_VERSION = "0.9.5"
+# v0.9.6 — EMAIL_ALERTS_ENABLED master kill switch for all outbound email
+# (owner request). Gated in all five senders: watchdog, circuit breakers,
+# integrity, news-risk, forecast. Breakers still fire and still require a manual
+# resume — only the notification is suppressed. Also records WHY the volume
+# spiked: the watchdog's 4h dedupe is in-memory, so six deploys in two days kept
+# re-sending identical alerts.
+APP_VERSION = "0.9.6"
 
 app = FastAPI(
     title="StockBot API",

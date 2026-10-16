@@ -47,6 +47,9 @@ class ForecastEmailAgent:
 
     def _smtp_ready(self) -> tuple[bool, str]:
         s = get_settings()
+        # Master kill switch — see Settings.email_alerts_enabled.
+        if not s.email_alerts_enabled:
+            return False, "email alerts disabled (EMAIL_ALERTS_ENABLED=false)"
         if not s.smtp_host or not s.smtp_user or not s.smtp_password:
             return False, "SMTP creds not configured (smtp_host/user/password)"
         if not s.forecast_email_to.strip():
@@ -55,6 +58,13 @@ class ForecastEmailAgent:
 
     def _send_email(self, subject: str, body: str) -> None:
         s = get_settings()
+        # Gated here as well as in `_smtp_ready`. This method is called
+        # directly (line ~108) and does not go through the readiness check, so
+        # the switch has to hold at the point of send — not only where the
+        # caller happens to look.
+        if not s.email_alerts_enabled:
+            logger.info("email_suppressed", sender="forecast", subject=subject)
+            return
         recipients = [r.strip() for r in s.forecast_email_to.split(",") if r.strip()]
         msg = EmailMessage()
         msg["Subject"] = subject

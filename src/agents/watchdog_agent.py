@@ -347,6 +347,12 @@ class WatchdogAgent:
         """Same SMTP path as the daily forecast email (proven in prod)."""
         from src.config import get_settings
         s = get_settings()
+        # Master kill switch — see Settings.email_alerts_enabled. A halt
+        # still fires and still needs a manual resume; only the
+        # notification is suppressed.
+        if not s.email_alerts_enabled:
+            logger.info("email_suppressed", sender="watchdog", subject=subject)
+            return
         if not s.smtp_host or not s.smtp_user or not s.smtp_password:
             logger.warning("watchdog_smtp_not_configured")
             return

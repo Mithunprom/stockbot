@@ -332,6 +332,12 @@ class NewsRiskAgent:
     def _send_email(self, subject: str, body: str) -> None:
         from src.config import get_settings
         s = get_settings()
+        # Master kill switch — see Settings.email_alerts_enabled. A halt
+        # still fires and still needs a manual resume; only the
+        # notification is suppressed.
+        if not s.email_alerts_enabled:
+            logger.info("email_suppressed", sender="news_risk", subject=subject)
+            return
         if not s.smtp_host or not s.smtp_user or not s.smtp_password:
             logger.warning("news_risk_smtp_not_configured")
             return

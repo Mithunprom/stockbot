@@ -88,6 +88,28 @@ class Settings(BaseSettings):
         False, description="Send the daily pre-market forecast digest"
     )
 
+    # MASTER KILL SWITCH for every outbound email: watchdog escalations,
+    # circuit-breaker halt alerts, integrity-sentinel escalations, news-risk
+    # warnings and the forecast digest.
+    #
+    # Turned off 2026-10-15 at the owner's request. Set deliberately as a flag
+    # rather than by clearing smtp_* or forecast_email_to, for two reasons: it
+    # does not destroy working credentials (they were broken for three weeks
+    # and only recently recovered), and it is greppable — "why am I not getting
+    # halt alerts" has one obvious answer instead of five silent ones.
+    #
+    # WHAT THIS COSTS, recorded so it is not a surprise later: a
+    # circuit-breaker halt now produces NO push notification. The breaker still
+    # fires and still requires a manual `resume_trading(authorized_by=...)` —
+    # nothing about the control changes — but you will only learn it happened
+    # by checking /dashboard, /status or /watchdog. Same for a dead signal loop
+    # and a broken exit path.
+    #
+    # Re-enable with: railway variables --set "EMAIL_ALERTS_ENABLED=true"
+    email_alerts_enabled: bool = Field(
+        True, description="Master switch for ALL outbound email (default on)"
+    )
+
     # ─── A/B Testing ──────────────────────────────────────────────────────────
     ab_test_enabled: bool = False
     ab_capital_split: float = 0.5  # fraction of capital for Pipeline A (rest → B)
