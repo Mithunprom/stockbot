@@ -827,7 +827,16 @@ def _load_ffsa_features() -> list[str]:
 # proved it 2026-10-09 (Fri 09:40 → Mon 09:42, across a weekend gap). Positions
 # now flatten at 15:55 ET, and an already-carried position closes on the next
 # tick. H5 keeps its extension attempt first (inert at MAX_HOLD_EXTENSIONS=0).
-APP_VERSION = "0.9.4"
+# v0.9.5 — the outcome-fill job was DEAD, not slow. Measured 2026-10-14: three
+# consecutive runs returned filled=0, errors=0. `.limit(500)` with no ORDER BY
+# re-selected the same unfillable rows forever, so the whole budget went to rows
+# that can never fill and new predictions were never measured. This is why live
+# IC read -0.024 vs backtest +0.173 — a FROZEN set, not a sample of the model.
+# Fixes: newest-first ordering, retirement of rows past 24h with no bars
+# (filled_at stamped, outcome left NULL so no IC query sees them), batch
+# 500 -> 1200, and a warning when a full batch yields nothing. Root cause of the
+# missing bars is upstream (ENABLE_ALPACA_WS=false) and NOT fixed here.
+APP_VERSION = "0.9.5"
 
 app = FastAPI(
     title="StockBot API",

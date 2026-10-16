@@ -38,6 +38,27 @@ IC_ESCALATION_CONSECUTIVE_DAYS = 5
 HORIZON_15M = 15
 HORIZON_30M = 30
 
+# Rows per fill batch. The job runs 4×/hour, 10:00–16:00 ET (scheduler.py) = 28
+# runs/session. Recording covers 75 tickers on every tick, so a session can
+# produce ~29,250 rows (75 × 390); 28 × 1200 = 33,600 clears that with modest
+# headroom. The old 500 capped out at 14,000 — permanently behind even with
+# perfect ordering.
+#
+# Not set higher: each row costs TWO price lookups, so a batch is ~2,400
+# queries, and db_query p95 has spiked to 5.4s on this database before. Keeping
+# per-run work bounded matters more than extra headroom.
+#
+# Raising this alone would have changed nothing — the old query burned the whole
+# budget on the same unfillable rows every run. Ordering and retirement are what
+# make the budget productive; this just makes it sufficient.
+FILL_BATCH_SIZE = 1200
+
+# A prediction with no ohlcv_1m bar this long after the fact will never get one;
+# bars do not arrive a day late. Past this age the row is RETIRED (see
+# fill_actual_returns) so it stops consuming the batch. Generous on purpose —
+# late backfills within the same session must still be allowed to land.
+UNFILLABLE_AFTER_HOURS = 24
+
 
 class LiveICTracker:
     """Tracks live prediction accuracy by comparing LightGBM predictions to
@@ -103,24 +124,64 @@ class LiveICTracker:
     # ── Fill actual returns ───────────────────────────────────────────────────
 
     async def fill_actual_returns(self) -> dict[str, Any]:
-        """Backfill actual forward returns for unfilled predictions.
+        """Backfill actual forward returns for unresolved predictions.
 
-        For each unfilled prediction older than 15 minutes:
+        For each unresolved prediction older than 15 minutes:
           - Look up the actual close price at timestamp + 15 bars from ohlcv_1m
           - Compute actual_return = (close_t+15 - close_t) / close_t
           - Update the row with actual_return_15m and filled_at
 
         Similarly for 30m returns on predictions older than 30 minutes.
 
+        THIS JOB WAS COMPLETELY DEAD, not merely slow. Measured on 2026-10-14:
+        three consecutive runs returned `filled_15m: 0, errors: 0`. The batch
+        selected rows with `.limit(500)` and NO ORDER BY, so Postgres returned
+        the same oldest unfilled rows every run. `_lookup_forward_return` needs
+        an ohlcv_1m bar within ±2 min of both t and t+15 and returns None
+        otherwise, which left the row untouched — so it was re-selected forever
+        and the entire budget was consumed by rows that can never fill. New
+        predictions were never reached, and retention deleted them unmeasured.
+        `errors: 0` made it look healthy: nothing threw, so nothing alerted.
+
+        That is why live IC read -0.024 against a backtest +0.173. The number
+        was not a 3% sample of the signal, it was a FROZEN set filled at some
+        point in the past and since aging out. It was never evidence about the
+        model.
+
+        Two changes make the budget productive:
+          1. `ORDER BY timestamp DESC` — newest first. Recent predictions are
+             the ones whose bars exist, and they are also the ones worth
+             measuring.
+          2. Rows past `UNFILLABLE_AFTER_HOURS` with no bars are RETIRED by
+             stamping `filled_at` while leaving `actual_return_15m` NULL, and
+             the query skips anything already stamped. Bars do not arrive a day
+             late; without this the same rows are retried until retention
+             removes them.
+
+        `filled_at` therefore now means "resolved" — filled OR retired. It is
+        written in exactly one other place and never read as a filter, so this
+        is safe; `actual_return_15m IS NOT NULL` remains the only test for
+        "has a measured outcome", which is what every IC query uses.
+
+        The root cause of the missing bars is upstream and NOT fixed here:
+        ohlcv_1m is sparse because ENABLE_ALPACA_WS=false is required for
+        deploys to pass healthcheck (Alpaca one-connection limit). This change
+        stops the backlog from hiding that; it does not create the bars.
+
         Returns:
-            Summary dict with counts of filled predictions.
+            Summary dict with attempted/filled/retired counts. `attempted` is
+            reported so "0 filled of 500 attempted" can never again look
+            identical to "0 filled of 0 attempted".
         """
         now = datetime.now(timezone.utc)
         cutoff_15m = now - timedelta(minutes=HORIZON_15M + 1)
         cutoff_30m = now - timedelta(minutes=HORIZON_30M + 1)
+        retire_before = now - timedelta(hours=UNFILLABLE_AFTER_HOURS)
 
         filled_15m = 0
         filled_30m = 0
+        retired_15m = 0
+        attempted_15m = 0
         errors = 0
 
         try:
@@ -129,10 +190,14 @@ class LiveICTracker:
                 result = await session.execute(
                     select(PredictionOutcome).where(
                         PredictionOutcome.actual_return_15m.is_(None),
+                        PredictionOutcome.filled_at.is_(None),   # skip retired
                         PredictionOutcome.timestamp <= cutoff_15m,
-                    ).limit(500)
+                    )
+                    .order_by(PredictionOutcome.timestamp.desc())
+                    .limit(FILL_BATCH_SIZE)
                 )
                 unfilled_15m = result.scalars().all()
+                attempted_15m = len(unfilled_15m)
 
                 for pred in unfilled_15m:
                     try:
@@ -143,6 +208,13 @@ class LiveICTracker:
                             pred.actual_return_15m = actual_ret
                             pred.filled_at = now
                             filled_15m += 1
+                        elif pred.timestamp <= retire_before:
+                            # No bar will ever arrive this late. Stamp
+                            # `filled_at` to retire the row (actual stays NULL,
+                            # so it is excluded from every IC query) and stop
+                            # it consuming the batch forever.
+                            pred.filled_at = now
+                            retired_15m += 1
                     except Exception as exc:
                         errors += 1
                         logger.debug(
@@ -153,12 +225,17 @@ class LiveICTracker:
                         )
 
                 # ── Fill 30m returns ──────────────────────────────────────────
+                # Retired rows cannot appear here: they keep actual_return_15m
+                # NULL, and this query requires it to be set. No separate
+                # retirement arm is needed for the 30m leg.
                 result = await session.execute(
                     select(PredictionOutcome).where(
                         PredictionOutcome.actual_return_30m.is_(None),
                         PredictionOutcome.actual_return_15m.isnot(None),
                         PredictionOutcome.timestamp <= cutoff_30m,
-                    ).limit(500)
+                    )
+                    .order_by(PredictionOutcome.timestamp.desc())
+                    .limit(FILL_BATCH_SIZE)
                 )
                 unfilled_30m = result.scalars().all()
 
@@ -186,12 +263,24 @@ class LiveICTracker:
             return {"error": str(exc)}
 
         summary = {
+            "attempted_15m": attempted_15m,
             "filled_15m": filled_15m,
+            "retired_15m": retired_15m,
             "filled_30m": filled_30m,
             "errors": errors,
             "timestamp": now.isoformat(),
         }
-        if filled_15m > 0 or filled_30m > 0:
+        # A dead pipeline used to be indistinguishable from an idle one: both
+        # logged nothing and reported filled=0, errors=0. Warn when a full batch
+        # was attempted and nothing could be filled — that is the signature of
+        # missing ohlcv_1m bars, and it is the only outward sign of it.
+        if attempted_15m > 0 and filled_15m == 0:
+            logger.warning(
+                "ic_fill_yielded_nothing",
+                note="full batch attempted, zero filled — ohlcv_1m likely sparse",
+                **summary,
+            )
+        elif filled_15m > 0 or filled_30m > 0 or retired_15m > 0:
             logger.info("ic_actual_returns_filled", **summary)
         return summary
 
