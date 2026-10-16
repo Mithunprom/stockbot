@@ -8,7 +8,7 @@ stale per-ticker state behind for the next entry to inherit.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -58,12 +58,19 @@ def _loop():
 
 
 def _run(loop, price=95.0):
+    # RELATIVE to now, never an absolute date. This was
+    # `datetime(2026, 10, 5, 15, 10)` — fine when written, but
+    # `_update_kelly` calls `_prune_kelly_window`, which drops outcomes older
+    # than KELLY_LOOKBACK_DAYS (10). The test therefore passed for ten days and
+    # then began failing on a date with no code change behind it. Any test
+    # asserting on the Kelly window has to pin its timestamps to `now`.
+    exit_time = datetime.now(timezone.utc) - timedelta(minutes=5)
     return asyncio.run(
         loop.record_forced_exit(
             ticker="COHR",
             fill_price=price,
             exit_qty=10.0,
-            exit_time=datetime(2026, 10, 5, 15, 10, tzinfo=timezone.utc),
+            exit_time=exit_time,
             exit_reason="watchdog_force_exit",
         )
     )
