@@ -8,7 +8,7 @@ stale per-ticker state behind for the next entry to inherit.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -57,13 +57,18 @@ def _loop():
     return loop
 
 
-def _run(loop, price=95.0):
+def _run(loop, price=95.0, exit_time: datetime | None = None):
+    # Use a recent timestamp so the outcome survives _prune_kelly_window's
+    # KELLY_LOOKBACK_DAYS cutoff. A hardcoded date becomes a time-bomb once
+    # the date ages past the rolling window (as Oct-5 did on Oct-16).
+    if exit_time is None:
+        exit_time = datetime.now(timezone.utc) - timedelta(days=2)
     return asyncio.run(
         loop.record_forced_exit(
             ticker="COHR",
             fill_price=price,
             exit_qty=10.0,
-            exit_time=datetime(2026, 10, 5, 15, 10, tzinfo=timezone.utc),
+            exit_time=exit_time,
             exit_reason="watchdog_force_exit",
         )
     )

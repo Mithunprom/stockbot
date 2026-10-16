@@ -1345,6 +1345,14 @@ class SignalLoop:
             "kelly_entries_blocked": self._kelly_entries_blocked(),
             "kelly_hard_block_threshold": KELLY_HARD_BLOCK_THRESHOLD,
             "kelly_n_trades": len(self._sizing_recent_outcomes),
+            # How many more closed trades the window needs before Kelly activates.
+            # 0 means the governor is already measuring. Useful for anticipating
+            # the activation cliff: a burst of losses just after activation can
+            # drive the fraction deeply negative before the H24/H25 guards fire.
+            "kelly_trades_until_active": max(
+                0,
+                self._kelly_min_trades - len(self._sizing_recent_outcomes),
+            ),
             # A bypassed risk control must be VISIBLE. When set, outcomes before
             # this timestamp are excluded from the governor — see
             # KELLY_EPOCH_ISO for who authorised it and why.
