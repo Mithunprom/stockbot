@@ -20,7 +20,7 @@ import asyncio
 import logging
 import math
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine
 
 import numpy as np
@@ -107,6 +107,14 @@ MAX_POSITIONS_PER_SECTOR = MAX_POSITIONS_PER_SECTOR_DEFAULT
 # all-day entries + short holds beat late-only in BOTH legs (Sharpe 17-22 vs
 # 5-6, PF >16 vs 1.7, max DD 0.08%).
 ENTRY_WINDOW_ET = ((9, 40), (15, 30))
+
+# H33: After any stop_loss or trailing_stop fires in-session, block new entries
+# for this many minutes. Prevents stacking more heat when the session is already
+# going against every open position. Works best when PR #65 (ENTRY_SPREAD_MINS)
+# is also live: spread spaces the first entries; this guard halts the remainder
+# once a stop signals bad conditions. Evidence: 2026-10-16, all 6 entries in
+# 2.5 min at open, 5 stop/trail exits, net -$2,148 on a single session.
+ENTRY_POST_STOP_PAUSE_MINS: int = 30
 
 # Wall-clock flatten time. 15:55 ET, not 16:00 — the exit needs room to fill
 # before the close, and a market order submitted at 15:59:30 may not.
@@ -906,6 +914,9 @@ class SignalLoop:
         self._kelly_min_trades: int = KELLY_MIN_TRADES
         self._probation_entries_today: int = 0
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
+        # H33: wall-clock of first stop_loss/trailing_stop this session.
+        # None until the first stop fires. Cleared at session reset.
+        self._session_first_stop_at: datetime | None = None
 
         # Per-ticker live IC cache: ticker → (ic, n_predictions)
         # _ticker_ic: 7d window + since=loop_start, feeds the IC-BLOCK gate.
@@ -1353,6 +1364,21 @@ class SignalLoop:
             "kelly_entries_hard_blocked": self._kelly_entries_blocked(),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
+            # H33: post-stop pause state. None = no stop this session.
+            "session_first_stop_at": (
+                self._session_first_stop_at.isoformat()
+                if self._session_first_stop_at else None
+            ),
+            "post_stop_pause_active": (
+                self._session_first_stop_at is not None
+                and datetime.now(timezone.utc) < (
+                    self._session_first_stop_at + timedelta(minutes=ENTRY_POST_STOP_PAUSE_MINS)
+                )
+            ),
+            "post_stop_pause_resume_at": (
+                (self._session_first_stop_at + timedelta(minutes=ENTRY_POST_STOP_PAUSE_MINS)).isoformat()
+                if self._session_first_stop_at else None
+            ),
             # Train/serve skew watch. entry_rank_mean is the average percentile
             # of filled entries within the model's own cross-section. Healthy is
             # >= 85; the v0.6.x window sat near 46 while every other check
@@ -2311,6 +2337,25 @@ class SignalLoop:
             )
             return False
 
+        # Gate 2c: Post-stop pause (H33) — if a stop_loss or trailing_stop fired
+        # in this session, block new entries for ENTRY_POST_STOP_PAUSE_MINS
+        # minutes. A same-session stop is a direct signal that conditions are
+        # adverse; more heat into the same wind increases expected drawdown.
+        # Expires naturally: once the pause window passes, entries resume without
+        # any manual intervention. Resets at session open (daily reset).
+        if self._session_first_stop_at is not None:
+            pause_until = self._session_first_stop_at + timedelta(minutes=ENTRY_POST_STOP_PAUSE_MINS)
+            now_utc = datetime.now(timezone.utc)
+            if now_utc < pause_until:
+                logger.debug(
+                    "entry_blocked_post_stop_pause",
+                    ticker=ticker,
+                    stop_at=self._session_first_stop_at.isoformat(),
+                    pause_until=pause_until.isoformat(),
+                    resume_in_mins=round((pause_until - now_utc).total_seconds() / 60, 1),
+                )
+                return False
+
         # Gate 3: Kelly governor — negative recent expectancy → probation.
         # The probe uses the 30d IC cache (reachable across redeploys), NOT the
         # 7d block cache whose ~250-sample ceiling made n>=300 unsatisfiable and
@@ -3202,6 +3247,18 @@ class SignalLoop:
                 exit_reason = "signal_reversal"
                 if self._sizing_mode:
                     exit_reason = self._pending_exit_reasons.pop(ticker, "signal_reversal")
+                    # H33: record the session's first stop so Gate 2c can pause
+                    # subsequent entries for ENTRY_POST_STOP_PAUSE_MINS minutes.
+                    if exit_reason in ("stop_loss", "trailing_stop") and self._session_first_stop_at is None:
+                        stop_ts = filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=timezone.utc)
+                        self._session_first_stop_at = stop_ts
+                        logger.info(
+                            "session_first_stop_recorded",
+                            ticker=ticker,
+                            exit_reason=exit_reason,
+                            stop_at=stop_ts.isoformat(),
+                            pause_mins=ENTRY_POST_STOP_PAUSE_MINS,
+                        )
                     # Track outcome for recent win rate + Kelly computation
                     self._sizing_recent_outcomes.append(
                         (filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=timezone.utc), pnl_pct)
@@ -3556,6 +3613,7 @@ class SignalLoop:
             self._daily_start_value = self._pm.portfolio_value
             self._sizing_n_trades_today = 0
             self._probation_entries_today = 0
+            self._session_first_stop_at = None  # H33 reset
             self._ticker_cooldown.clear()
             self._pdt_deferred_logged.clear()
             self._prune_kelly_window()

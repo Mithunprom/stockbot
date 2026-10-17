@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 18). v0.9.4 DEPLOYED Oct 14 (direct push — governance breach W43). SESSION_FLAT_ET=15:55 ET backstop live; confirmed working Oct 15 (4 session_close exits at 15:55 ET). M3 v0.9.4 n=7 (Oct 8-15): 5W/2L, PF=11.67 (noise), net +$640.89. ✅ ALL exits genuine strategy exits. Kelly: inactive (f=0.0, n_trades=8, 2 trades until activation). Integrity ALL GREEN Oct 15 23:25 UTC. SMTP still dead. Railway worker week 18.",
- "last_iteration_date": "2026-10-16",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). 🚨 OCT 16 DISASTER: 6 entries in 2.5 min at open (Kelly inactive n=8, default sizing deployed 75% heat). 5 stop/trail exits, net -$2,148. Kelly hard-blocked at f=-0.6209. M3 v0.9.4 n=13 (Oct 8-16): 6W/7L, PF=0.35 (noise), net -$1,507. H33 IMPLEMENTED: Gate 2c post-stop-loss entry pause (30 min, FREEZE-EXEMPT). PR opened Oct 17. v0.9.5 IC fill fix (dead ORDER BY — live IC was frozen/invalid since v0.9.1). v0.9.6 EMAIL_ALERTS_ENABLED kill switch (owner Oct 15). SMTP still dead. Railway worker week 19.",
+ "last_iteration_date": "2026-10-17",
+ "active_hypothesis": "H33 Gate 2c post-stop-loss session entry pause (PR opened Oct 17). FREEZE-EXEMPT. After any stop_loss or trailing_stop fires in a session, block new entries for ENTRY_POST_STOP_PAUSE_MINS=30 minutes. Evidence: Oct 16 disaster — 6 entries in 2.5 min, Kelly inactive (n=8), default sizing. 5 stop/trail exits, net -$2,148 on one session. Combined with PR #65 (ENTRY_SPREAD_MINS=10), estimated savings ~$1,088. 13 unit tests, 13/13 pass. PR #89 (H29) has merge conflict — owner pushed same time-bomb fix 1e260ad directly to main. NOTE: H24/H25 guards (PRs #51-57) CRITICAL before Kelly recovers. v0.9.5/v0.9.6 are bug/infra fixes already deployed.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -51,19 +51,21 @@
    "pf": 1.99
   },
   "m3_v080_era_note": "M3 window Sep 23-Oct 7 RETIRED. n=27 closed (entries Sep 29-Oct 7; zero trades Sep 22-28 due to rs_vwap_dev bug). 22/27 exits (81%) were integrity_broker_reconcile — exit pipeline bug (watchdog zombie check compared bars_held vs SIZING_MAX_HOLD_BARS=30 in profit-target mode; positions force-sold at ~90 bars, not strategy exits). Fixed in v0.9.1 Oct 6. Genuine strategy exits: n=5 (WDC stop_loss −$513, CVX take_profit +$182, LITE take_profit +$968 [overnight carry], PLTR trailing_stop −$11, WFC session_close −$54), net +$572, PF=1.99. Full-window PF=4.62 is contaminated. Not strategy evidence. v0.9.3 (Oct 8) resets clock. Window retired.",
-  "m3_v093_n": 7,
-  "m3_v093_win_rate": 0.714,
-  "m3_v093_pf": 11.67,
-  "m3_v093_net_pnl": 640.89,
-  "m3_v093_gross_profit": 700.94,
-  "m3_v093_gross_loss": 60.05,
-  "m3_v093_expectancy": 91.56,
+  "m3_v093_n": 13,
+  "m3_v093_win_rate": 0.462,
+  "m3_v093_pf": 0.35,
+  "m3_v093_net_pnl": -1507.0,
+  "m3_v093_gross_profit": 893.0,
+  "m3_v093_gross_loss": 2400.0,
+  "m3_v093_expectancy": -115.9,
   "m3_v093_open": 0,
   "m3_v093_open_tickers": [],
+  "m3_v093_max_single_session_loss": -2148.0,
+  "m3_v093_max_single_session_loss_date": "2026-10-16",
   "m3_v093_exit_distribution": {
-   "trailing_stop": 1,
+   "trailing_stop": 2,
    "session_close": 5,
-   "stop_loss": 1,
+   "stop_loss": 6,
    "integrity_broker_reconcile": 0
   },
   "m3_v093_trades": [
@@ -114,7 +116,7 @@
     "note": "v0.9.4 session_close at 15:55 ET confirmed"
    }
   ],
-  "m3_v093_note": "M3 window Oct 8 2026 (v0.9.3/v0.9.4: LGBM 100% ensemble). n=7 closed (Oct 8-15). PF=11.67 (NOISE n<30), WR=71.4% (5W/2L), net +$640.89, gross_profit=$700.94, gross_loss=$60.05, expectancy=$91.56/trade. ZERO integrity_broker_reconcile exits. Oct 8-12: n=3 (PF=0.38, pre-v0.9.4). Oct 15: 4 trades all session_close at 15:55 ET -- v0.9.4 _session_boundary_crossed() confirmed working. Clock start: Oct 8. Gate requires n>=100 at PF>=1.2. Kelly: inactive (f=0.0, n_trades=8, 2 until activation). NOTE: v0.9.4 deployed Oct 14 via direct push (governance breach W43).",
+  "m3_v093_note": "M3 window Oct 8 2026 (v0.9.3/v0.9.4: LGBM 100% ensemble). n=13 closed (Oct 8-16). PF=0.35 (NOISE n<30), WR=46.2% (6W/7L), net -$1,507, gross_profit≈$893, gross_loss≈$2,400, expectancy≈-$115.9/trade. ZERO integrity_broker_reconcile exits. Oct 8-12: n=3 (PF=0.38, pre-v0.9.4). Oct 15: 4 trades all session_close at 15:55 ET -- v0.9.4 _session_boundary_crossed() confirmed working. Oct 16 DISASTER: 6 entries in 2.5 min at open (Kelly inactive n=8, no H24 guard). 5 stop/trail exits, net -$2,148. Kelly now hard-blocked f=-0.6209. Clock start: Oct 8. Gate requires n>=100 at PF>=1.2. NOTE: v0.9.4 deployed Oct 14 via direct push (governance breach W43). H33 (post-stop pause) shipped Oct 17 to prevent recurrence.",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -206,7 +208,9 @@
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy.",
   "m2_trajectory": "IN PROGRESS — v0.6.0 window n=49 (Aug 6–16). PF=2.33 at n=49 still noise (MSTR+CIEN outsized, 28% of gross profit). Bot active. All exits via max_hold — H14 (PR #36) not yet merged. ETA for n=100: late Sep at ~5 trades/day. Do not act on PF signal until n≥100.",
   "jnj_anomaly": "ID 163, BUY, ensemble_signal=-0.0238 (NET NEGATIVE on long entry). Won +$62.86 via max_hold. A negative ensemble on a BUY means the weighted composite of model scores is bearish even though LGBM pred_return+dir_prob passed the entry gate. H12 (min_signal=0.20) would block this. Monitor for recurrence.",
-  "v094_note": "Oct 14 2026. Direct push -- governance breach W43 (5th+ direct push). SESSION_FLAT_ET = 15:55 ET wall-clock. _session_boundary_crossed(): fires if (1) at/past SESSION_FLAT_ET OR (2) entered on earlier ET date (catch-up arm for positions carried past midnight). Root cause of H28: prior code compared bars_held vs FULL_SESSION_BARS=390 but profit-target mode exits at 389 bars max (off-by-one, backstop dead code since v0.8.0). v0.9.4 uses wall-clock, not bar count. 4 session_close exits Oct 15 at 15:55 ET confirm fix. 422 tests pass. PR #86 CLOSED by owner (superseded by this direct push)."
+  "v094_note": "Oct 14 2026. Direct push -- governance breach W43 (5th+ direct push). SESSION_FLAT_ET = 15:55 ET wall-clock. _session_boundary_crossed(): fires if (1) at/past SESSION_FLAT_ET OR (2) entered on earlier ET date (catch-up arm for positions carried past midnight). Root cause of H28: prior code compared bars_held vs FULL_SESSION_BARS=390 but profit-target mode exits at 389 bars max (off-by-one, backstop dead code since v0.8.0). v0.9.4 uses wall-clock, not bar count. 4 session_close exits Oct 15 at 15:55 ET confirm fix. 422 tests pass. PR #86 CLOSED by owner (superseded by this direct push).",
+ "v095_note": "Oct 2026. IC fill job bug fixed. Live IC fill job (fills prediction_outcomes.actual_return from close prices) had no ORDER BY in its select query — was processing the same unfillable oldest rows in a loop forever. Live IC figure of -0.024 was invalid/frozen since v0.9.1. Fix: ORDER BY desc + retire unfillable rows (rows older than fill_window with null actual_return marked unfillable). Real IC measurement will now begin; IC gate can arm within ~30 days of deploy. Added larger batch size for throughput. FREEZE-EXEMPT: does not change strategy logic, fixes measurement infrastructure.",
+ "v096_note": "Oct 15 2026. EMAIL_ALERTS_ENABLED kill switch added (owner request Oct 15). Master kill switch for ALL outbound email without destroying SMTP credentials. email_alerts_enabled defaults True; owner set FALSE via Railway env. Commented in config.py: re-enable with railway variables --set EMAIL_ALERTS_ENABLED=true. Cost documented: circuit-breaker halt now produces no push notification. SMTP credential still broken (expired, not yet recovered). Oct 15 2026."
  },
  "live_data_status": {
   "date": "2026-08-13",
@@ -216,6 +220,22 @@
  },
  "hypothesis_queue": [
   {
+   "id": "H33",
+   "hypothesis": "Gate 2c post-stop-loss session entry pause: after any stop_loss or trailing_stop exits in a session, block new entries for ENTRY_POST_STOP_PAUSE_MINS=30 minutes. A same-session stop is a direct signal that conditions are adverse; more heat into the same wind increases expected drawdown. Pause expires naturally — no manual intervention required. Resets at session open (daily reset). Evidence: Oct 16 disaster — 6 entries in 2.5 min at open, Kelly inactive (n=8, default sizing deployed 75% heat), 5 stop/trail exits, net -$2,148 on one session. Combined with PR #65 (ENTRY_SPREAD_MINS=10): spread spaces first entries, H33 halts remainder once a stop signals bad conditions. Estimated savings Oct 16 scenario: ~$1,088 (3 fewer positions).",
+   "status": "implemented — PR opened Oct 17 (FREEZE-EXEMPT: risk-control tightening)",
+   "added": "2026-10-17",
+   "added_by": "nightly desk — Oct 16 disaster post-mortem: Kelly inactive + no entry spacing = 6 simultaneous losers",
+   "pr_branch": "feat/rnd-H33-post-stop-pause",
+   "priority": "CRITICAL — directly addresses Oct 16 root cause. FREEZE-EXEMPT. Merge immediately.",
+   "pm_priority": -6,
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_h33_post_stop_pause.py"
+   ],
+   "unit_tests": "13/13 pass",
+   "impact_estimate": "Oct 16 scenario: -$2,148 actual vs estimated -$1,060 with H33+PR#65 combined (~$1,088 saved per occurrence)"
+  },
+  {
    "id": "H29",
    "hypothesis": "Kelly activation cliff diagnostic: expose kelly_trades_until_active in /diagnostics so operator can see how many closed trades are needed before Kelly activates from inactive mode (currently 2 trades away at n=8). Risk: at activation the fraction can jump sharply (positive or negative) from n=0 to sizing-mode in one tick. Time-bomb fix: test_record_forced_exit.py had hardcoded exit_time Oct 5 which aged past KELLY_LOOKBACK_DAYS=10 on Oct 16, causing _prune_kelly_window to remove the appended outcome immediately. Fixed with relative timestamp (datetime.now()-2d).",
    "status": "implemented -- PR #89 open (Oct 16, FREEZE-EXEMPT)",
@@ -223,7 +243,7 @@
    "added_by": "nightly desk -- Oct 16: H28 resolved via v0.9.4; Kelly approaching activation cliff at n=8 (2 trades until active); time-bomb found in test suite",
    "pr_branch": "feat/rnd-H29-kelly-cliff-diagnostics",
    "pr_number": 89,
-   "pr_state": "OPEN -- FREEZE-EXEMPT: diagnostics only + test correctness fix. No change to live trade execution or sizing. 5 new unit tests. Suite: 28 failed / 411 passed (1 real failure fixed, 6 new passing).",
+   "pr_state": "OPEN -- MERGE CONFLICT. Owner pushed same time-bomb fix (1e260ad) directly to main Oct 16. PR #89 now has conflict on tests/unit/test_record_forced_exit.py. Resolution: owner should close PR #89 (superseded) or resolve conflict and merge only the kelly_trades_until_active diagnostics addition. FREEZE-EXEMPT: diagnostics only + test correctness fix. No change to live trade execution or sizing. 5 new unit tests.",
    "priority": "HIGH -- merge before Kelly activates (~2 trades). H24/H25 guards (PRs #51-57) more critical.",
    "pm_priority": -5
   },
@@ -649,6 +669,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-17",
+   "hypothesis_id": "H33",
+   "result": "NIGHTLY REVIEW + SHIP — 🚨 OCT 16 DISASTER POST-MORTEM: 6 entries in 2.5 min at market open. Kelly inactive (n=8, threshold=10) — no Kelly sizing guard. Full default sizing: 75% heat deployed. 5 of 6 exits at stop_loss or trailing_stop. Net -$2,148 on one session. Kelly hard-blocked at f=-0.6209 after session. M3 now: n=13, WR=46.2% (6W/7L), PF=0.35 (noise), net -$1,507. Max session DD: -$2,148 (Oct 16). PRs #51 (notional cap when Kelly inactive), #53 (intraday loss halt), #65 (ENTRY_SPREAD_MINS) would have mitigated — all OPEN, unmerged. H33 IMPLEMENTED: Gate 2c post-stop pause (30 min, ENTRY_POST_STOP_PAUSE_MINS). Blocks new entries after first stop_loss or trailing_stop in session. 7 code changes in signal_loop.py: constant, instance var, recording path, daily reset, Gate 2c check, diagnostics export. 13 unit tests, 13/13 pass. Suite: 380 pass / 26 fail (all pre-existing ValidationError on missing env vars, not H33 regressions). PR #89 (H29) has merge conflict (owner pushed same fix 1e260ad to main Oct 16). v0.9.5: IC fill job fixed (ORDER BY bug — IC was frozen/invalid). v0.9.6: EMAIL_ALERTS_ENABLED kill switch added. Branch feat/rnd-H33-post-stop-pause created, PR opened.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_h33_post_stop_pause.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-16",
    "hypothesis_id": "H29",
