@@ -1,6 +1,6 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 18). v0.9.4 DEPLOYED Oct 14 (direct push — governance breach W43). SESSION_FLAT_ET=15:55 ET backstop live; confirmed working Oct 15 (4 session_close exits at 15:55 ET). M3 v0.9.4 n=7 (Oct 8-15): 5W/2L, PF=11.67 (noise), net +$640.89. ✅ ALL exits genuine strategy exits. Kelly: inactive (f=0.0, n_trades=8, 2 trades until activation). Integrity ALL GREEN Oct 15 23:25 UTC. SMTP still dead. Railway worker week 18.",
- "last_iteration_date": "2026-10-16",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
+ "last_iteration_date": "2026-10-19",
  "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -29,11 +29,11 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Oct 15 23:29 UTC (v0.9.4, light_run). 2 checks in snapshot: loop_tick_fresh OK, tick_errors OK (lifetime 0). last_tick ~23:55 UTC Oct 15. last_exit ~21:00 UTC Oct 15 (4 session_close exits at 15:55 ET ✅ v0.9.4 working). 0 open positions. NOTE: watchdog running light_run mode — reduced checks vs full 7-check run.",
+  "watchdog_status": "OK Oct 19 12:22 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 1.0 min ago), tick_errors OK (lifetime 0). last_exit null in snapshot (last known exits Oct 16 session_close batch). 0 open positions. Market closed at snapshot time (8:22 AM ET). NOTE: watchdog running light_run mode — 2 checks vs full 7.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
-  "deployed_version": "0.9.4",
+  "deployed_version": "0.9.6",
   "m3_v080_era_n": 27,
   "m3_v080_era_win_rate": 0.519,
   "m3_v080_era_pf": 4.62,
@@ -51,19 +51,22 @@
    "pf": 1.99
   },
   "m3_v080_era_note": "M3 window Sep 23-Oct 7 RETIRED. n=27 closed (entries Sep 29-Oct 7; zero trades Sep 22-28 due to rs_vwap_dev bug). 22/27 exits (81%) were integrity_broker_reconcile — exit pipeline bug (watchdog zombie check compared bars_held vs SIZING_MAX_HOLD_BARS=30 in profit-target mode; positions force-sold at ~90 bars, not strategy exits). Fixed in v0.9.1 Oct 6. Genuine strategy exits: n=5 (WDC stop_loss −$513, CVX take_profit +$182, LITE take_profit +$968 [overnight carry], PLTR trailing_stop −$11, WFC session_close −$54), net +$572, PF=1.99. Full-window PF=4.62 is contaminated. Not strategy evidence. v0.9.3 (Oct 8) resets clock. Window retired.",
-  "m3_v093_n": 7,
-  "m3_v093_win_rate": 0.714,
-  "m3_v093_pf": 11.67,
-  "m3_v093_net_pnl": 640.89,
-  "m3_v093_gross_profit": 700.94,
-  "m3_v093_gross_loss": 60.05,
-  "m3_v093_expectancy": 91.56,
+  "m3_v093_n": 13,
+  "m3_v093_win_rate": 0.462,
+  "m3_v093_pf": 0.349,
+  "m3_v093_net_pnl": -1506.99,
+  "m3_v093_gross_profit": 807.59,
+  "m3_v093_gross_loss": 2314.58,
+  "m3_v093_expectancy": -115.92,
+  "m3_v093_max_single_loss": -736.97,
+  "m3_v093_max_single_loss_ticker": "MRNA (id 281, stop_loss Oct 16)",
+  "m3_v093_oct16_batch_net": -1411.88,
   "m3_v093_open": 0,
   "m3_v093_open_tickers": [],
   "m3_v093_exit_distribution": {
-   "trailing_stop": 1,
-   "session_close": 5,
-   "stop_loss": 1,
+   "trailing_stop": 2,
+   "session_close": 8,
+   "stop_loss": 3,
    "integrity_broker_reconcile": 0
   },
   "m3_v093_trades": [
@@ -114,7 +117,7 @@
     "note": "v0.9.4 session_close at 15:55 ET confirmed"
    }
   ],
-  "m3_v093_note": "M3 window Oct 8 2026 (v0.9.3/v0.9.4: LGBM 100% ensemble). n=7 closed (Oct 8-15). PF=11.67 (NOISE n<30), WR=71.4% (5W/2L), net +$640.89, gross_profit=$700.94, gross_loss=$60.05, expectancy=$91.56/trade. ZERO integrity_broker_reconcile exits. Oct 8-12: n=3 (PF=0.38, pre-v0.9.4). Oct 15: 4 trades all session_close at 15:55 ET -- v0.9.4 _session_boundary_crossed() confirmed working. Clock start: Oct 8. Gate requires n>=100 at PF>=1.2. Kelly: inactive (f=0.0, n_trades=8, 2 until activation). NOTE: v0.9.4 deployed Oct 14 via direct push (governance breach W43).",
+  "m3_v093_note": "M3 window Oct 8 2026 (v0.9.3–v0.9.6: LGBM 100% ensemble). n=13 closed (Oct 8-16). PF=0.349 (NOISE n<30), WR=46.2% (6W/7L), net -$1506.99, gross_profit=$807.59, gross_loss=$2314.58, expectancy=-$115.92/trade. ZERO integrity_broker_reconcile exits. Oct 16: 6-entry batch at open (MRNA/HPE/STX/AMD/NOW/UNH), 5 losses, net -$1411.88. MRNA worst: -$736.97 stop_loss 17-min hold. IC fill job dead Oct 8-16 (v0.9.5 fixed Oct 16): entries traded without IC gate accumulating. Clock: Oct 8. Gate: n>=100 at PF>=1.2. Kelly: likely active/probation post-Oct 16 (n~14 in window; H24/H25 guards unmerged — CRITICAL).",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -206,7 +209,9 @@
   "principal_skeptic_flag": "CLEARED — fill_price_pnl_consistency OK at 08:25 UTC 2026-07-24. All 5 previously-corrupt rows (V#54, XOM#68, MSFT#82, MU#93, SMCI#83) now reconcile. Scoreboard is trustworthy.",
   "m2_trajectory": "IN PROGRESS — v0.6.0 window n=49 (Aug 6–16). PF=2.33 at n=49 still noise (MSTR+CIEN outsized, 28% of gross profit). Bot active. All exits via max_hold — H14 (PR #36) not yet merged. ETA for n=100: late Sep at ~5 trades/day. Do not act on PF signal until n≥100.",
   "jnj_anomaly": "ID 163, BUY, ensemble_signal=-0.0238 (NET NEGATIVE on long entry). Won +$62.86 via max_hold. A negative ensemble on a BUY means the weighted composite of model scores is bearish even though LGBM pred_return+dir_prob passed the entry gate. H12 (min_signal=0.20) would block this. Monitor for recurrence.",
-  "v094_note": "Oct 14 2026. Direct push -- governance breach W43 (5th+ direct push). SESSION_FLAT_ET = 15:55 ET wall-clock. _session_boundary_crossed(): fires if (1) at/past SESSION_FLAT_ET OR (2) entered on earlier ET date (catch-up arm for positions carried past midnight). Root cause of H28: prior code compared bars_held vs FULL_SESSION_BARS=390 but profit-target mode exits at 389 bars max (off-by-one, backstop dead code since v0.8.0). v0.9.4 uses wall-clock, not bar count. 4 session_close exits Oct 15 at 15:55 ET confirm fix. 422 tests pass. PR #86 CLOSED by owner (superseded by this direct push)."
+  "v094_note": "Oct 14 2026. Direct push -- governance breach W43 (5th+ direct push). SESSION_FLAT_ET = 15:55 ET wall-clock. _session_boundary_crossed(): fires if (1) at/past SESSION_FLAT_ET OR (2) entered on earlier ET date (catch-up arm for positions carried past midnight). Root cause of H28: prior code compared bars_held vs FULL_SESSION_BARS=390 but profit-target mode exits at 389 bars max (off-by-one, backstop dead code since v0.8.0). v0.9.4 uses wall-clock, not bar count. 4 session_close exits Oct 15 at 15:55 ET confirm fix. 422 tests pass. PR #86 CLOSED by owner (superseded by this direct push).",
+  "v095_note": "Oct 16 2026. Direct push -- governance breach W43. IC fill job fix: live_ic_tracker.py was not processing fills (job was dead, not slow). Prediction outcomes not being recorded. IC quality gate (30d window, 271 rows/ticker threshold) was structurally unable to arm. Fix: backlog processing + fill handler wired. IMPACT: all M3 entries Oct 8-16 were made without IC gate accumulating; gate now accumulating from Oct 16. Separate from IC retention fix in v0.9.1 (which widened window 7->120d; the fill job being dead meant no rows were accumulating regardless of window).",
+  "v096_note": "Oct 16 2026. Direct push -- governance breach W43. EMAIL_ALERTS_ENABLED flag: one switch for all outbound email. Owner request Oct 15: stop all StockBot email (volume spiked from 6 deploys in 2 days, each re-sending due to in-memory dedupe wipe on restart). SMTP credential reportedly recovered (535 BadCredentials resolved). Flag implemented on all 5 senders; each logs email_suppressed with sender tag. RISK: circuit-breaker halt now produces NO push notification while flag is false. Must re-enable before live trading."
  },
  "live_data_status": {
   "date": "2026-08-13",
@@ -215,6 +220,19 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H33",
+   "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
+   "status": "implemented — PR #91 open (Oct 17)",
+   "added": "2026-10-17",
+   "added_by": "nightly desk — reactive to Oct 16 6-entry bad batch",
+   "pr_branch": "feat/rnd-H33-post-stop-pause",
+   "pr_number": 91,
+   "pr_state": "OPEN — FREEZE CLASSIFICATION PENDING. Changes which entries are taken (pauses after stop-loss). This is a STRATEGY CHANGE, not a safety fix. Must NOT merge during M3 freeze without owner classification. PM flag: reactive hypothesis from single bad day; backtest required before deploy.",
+   "priority": "MEDIUM — freeze classification required; do not merge until n=100 unless owner classifies freeze-exempt",
+   "pm_priority": -6,
+   "pm_flag": "REACTIVE HYPOTHESIS: motivated by one bad day (Oct 16). Per governance, a losing session is first a measurement question: was Oct 16 a macro down day? Was IC gate dead (confirmed yes, v0.9.5 fixed)? Backtest required before claiming edge. Do not deploy based on Oct 16 observation alone."
+  },
   {
    "id": "H29",
    "hypothesis": "Kelly activation cliff diagnostic: expose kelly_trades_until_active in /diagnostics so operator can see how many closed trades are needed before Kelly activates from inactive mode (currently 2 trades away at n=8). Risk: at activation the fraction can jump sharply (positive or negative) from n=0 to sizing-mode in one tick. Time-bomb fix: test_record_forced_exit.py had hardcoded exit_time Oct 5 which aged past KELLY_LOOKBACK_DAYS=10 on Oct 16, causing _prune_kelly_window to remove the appended outcome immediately. Fixed with relative timestamp (datetime.now()-2d).",
@@ -649,6 +667,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-19",
+   "hypothesis_id": "W43_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW — W43 weekly review complete. M3 n=13 (Oct 8-16): PF=0.349 (noise), WR=46.2% (6W/7L), net -$1506.99. Oct 16: 6-entry batch at open, 5 losses, net -$1412. MRNA -$736.97 worst single loss. Zero integrity_broker_reconcile exits (exit pipeline clean). IC fill job was dead Oct 8-16 (v0.9.5 fixed Oct 16). v0.9.6: EMAIL_ALERTS_ENABLED=false (owner-directed) -- ALL email suppressed incl CB halts. SMTP credential recovered. Kelly activation likely post-Oct 16 (n~14, H24/H25 unmerged). H33 (PR #91) freeze classification needed. >=4 direct pushes W43. Railway worker week 19. 6 owner decisions needed.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W43.md",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-16",
    "hypothesis_id": "H29",
