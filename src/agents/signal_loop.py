@@ -334,6 +334,18 @@ KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal work
 # bounded, not permanent.
 KELLY_HARD_BLOCK_THRESHOLD = -0.25
 
+# H34: Probation-exit ramp — when Kelly transitions from probation or hard-block
+# back to "normal" (fraction turns positive for the first time after a losing
+# stretch), apply a half-size cap for the first ET session. This prevents the
+# cliff jump where the bot was refusing entries → immediately fires full-size
+# on the first bar after the window recovers, especially dangerous when H24/H25
+# structural guards are not yet merged.
+#
+# Concretely: on the day Kelly first turns positive after ≥1 non-normal session,
+# notional = min(notional, normal_notional * KELLY_EXIT_RAMP_FACTOR).
+# The next calendar session has no restriction.
+KELLY_EXIT_RAMP_FACTOR: float = 0.5     # 50% of normal notional on ramp day
+
 # ── Kelly epoch — outcomes before this do not count toward the governor ──────
 #
 # HUMAN DECISION, 2026-09-29, authorised by the owner after being shown the
@@ -906,6 +918,11 @@ class SignalLoop:
         self._kelly_min_trades: int = KELLY_MIN_TRADES
         self._probation_entries_today: int = 0
         self._pending_exit_reasons: dict[str, str] = {}  # ticker → exit reason
+        # H34: track previous mode to detect probation→normal transitions.
+        self._kelly_prev_mode: str = "inactive"
+        # ET date when Kelly first returned to "normal" after a non-normal period.
+        # None means no ramp is active. Set on mode transition; cleared next session.
+        self._kelly_first_normal_date: date | None = None
 
         # Per-ticker live IC cache: ticker → (ic, n_predictions)
         # _ticker_ic: 7d window + since=loop_start, feeds the IC-BLOCK gate.
@@ -1389,6 +1406,10 @@ class SignalLoop:
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
+            # H34: probation-exit ramp state. True means entries today are
+            # capped at KELLY_EXIT_RAMP_FACTOR × normal notional.
+            "kelly_exit_ramp_active": self._kelly_exit_ramp_active(),
+            "kelly_exit_ramp_session": str(self._kelly_first_normal_date) if self._kelly_first_normal_date else None,
             # Report what the exit ladder is ACTUALLY doing, not the constants
             # it used to use. This block previously hardcoded
             # SIZING_MAX_HOLD_BARS, so after v0.8.0 it kept publishing the
@@ -2136,6 +2157,24 @@ class SignalLoop:
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
 
+    def _kelly_exit_ramp_active(self) -> bool:
+        """True for the first ET session after Kelly exits probation/hard-block.
+
+        H34: prevents a cliff-sized entry batch immediately after a bad stretch
+        by halving notional for the one session when the governor first goes normal.
+        The ramp is CONSERVATIVE — it only fires when the transition happened TODAY
+        (current ET date == _kelly_first_normal_date).  The following session has no
+        restriction.  Exits are never affected.
+        """
+        if self._kelly_first_normal_date is None:
+            return False
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+        return today_et == self._kelly_first_normal_date
+
     def _prune_kelly_window(self) -> None:
         """Drop outcomes older than the lookback window, or before the epoch."""
         from datetime import timedelta
@@ -2405,10 +2444,30 @@ class SignalLoop:
         q = 1 - p
 
         self._kelly_fraction = (p * b - q) / max(b, 1e-9)
+        new_mode = self._kelly_mode()
+        # H34: detect the first session Kelly returns to "normal" AFTER a stretch
+        # of PROBATION (measured negative edge). Only probation→normal triggers
+        # the ramp; inactive→normal (fresh start or post-rolloff empty window)
+        # is a different case covered by H24/H25 structural guards.
+        if new_mode == "normal" and self._kelly_prev_mode == "probation":
+            try:
+                from zoneinfo import ZoneInfo
+            except ImportError:
+                from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+            today_et = datetime.now(ZoneInfo("America/New_York")).date()
+            if self._kelly_first_normal_date != today_et:
+                self._kelly_first_normal_date = today_et
+                logger.info(
+                    "kelly_exit_ramp_armed",
+                    session=str(today_et),
+                    ramp_factor=KELLY_EXIT_RAMP_FACTOR,
+                    prev_mode=self._kelly_prev_mode,
+                )
+        self._kelly_prev_mode = new_mode
         logger.info(
             "kelly_updated",
             kelly=round(self._kelly_fraction, 4),
-            mode=self._kelly_mode(),
+            mode=new_mode,
             win_rate=round(p, 3),
             win_loss_ratio=round(b, 3),
             n_trades=len(outcomes),
@@ -3028,6 +3087,19 @@ class SignalLoop:
                         ticker=ticker,
                         notional=round(notional, 2),
                         kelly=round(self._kelly_fraction, 4),
+                    )
+
+                # H34: probation-exit ramp — first session after Kelly returns
+                # to "normal" trades at half size to prevent a cliff-sized batch
+                # immediately after a bad stretch recovers.
+                elif self._kelly_exit_ramp_active():
+                    notional *= KELLY_EXIT_RAMP_FACTOR
+                    logger.info(
+                        "kelly_exit_ramp_applied",
+                        ticker=ticker,
+                        notional_after_ramp=round(notional, 2),
+                        ramp_factor=KELLY_EXIT_RAMP_FACTOR,
+                        ramp_session=str(self._kelly_first_normal_date),
                     )
 
                 qty = round(notional / max(price, 0.01), 2)
