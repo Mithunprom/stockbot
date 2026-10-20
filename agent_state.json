@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
- "last_iteration_date": "2026-10-19",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "last_iteration_date": "2026-10-20",
+ "active_hypothesis": "H34 Kelly probation-exit ramp (PR #93, Oct 20). FREEZE-EXEMPT. When Kelly transitions from probation→normal (fraction turns positive after a bad stretch), the first ET session is sized at 50% of normal notional (KELLY_EXIT_RAMP_FACTOR=0.5). Ramp clears automatically the next session. Inactive→normal does NOT trigger the ramp (H24 owns that). 11 new unit tests, 454 total passing (was 443), 0 regressions. Expected impact: on ~Oct 26 when Oct 16 losses roll off the 10-day Kelly window, the first post-recovery entries will be halved. H24/H25 (PRs #51-57) still CRITICAL — must merge before ~Oct 26.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -220,6 +220,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H34",
+   "hypothesis": "Kelly probation-exit ramp (soft landing): when Kelly transitions from probation→normal (fraction turns positive after a bad stretch), the first ET session is capped at KELLY_EXIT_RAMP_FACTOR=0.5 (50% of normal notional). The ramp clears automatically the next session. Motivated by Oct 16 bad batch (6 full-size entries in 2 min; mirror risk on ~Oct 26 when those losses roll off). Inactive→normal does NOT arm the ramp — that path is covered by H24/H25.",
+   "status": "implemented — PR #93 open (Oct 20, FREEZE-EXEMPT)",
+   "added": "2026-10-20",
+   "added_by": "nightly desk — Oct 26 Kelly rolloff cliff risk; H24/H25 (PRs #51-57) unmerged; H34 closes gap with conservative one-session ramp",
+   "pr_branch": "feat/rnd-H34-kelly-exit-ramp",
+   "pr_number": 93,
+   "pr_state": "OPEN — FREEZE-EXEMPT: risk control enhancement, conservative direction only (reduces notional, never blocks). 11 new unit tests. Suite: 12 pre-existing failures unchanged, 454 passing (was 443). Expected impact: on ~Oct 26, first post-recovery entries halved.",
+   "priority": "HIGH — apply before Oct 26 Kelly rolloff when Oct 16 losses exit the 10-day window",
+   "pm_priority": -7
+  },
   {
    "id": "H33",
    "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
@@ -667,6 +679,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-20",
+   "hypothesis_id": "H34",
+   "result": "NIGHTLY REVIEW + SHIP — H34 Kelly probation-exit ramp implemented and shipped. M3 v0.9.3+ n=13 (Oct 8-16): PF=0.349 (noise), WR=46.2% (6W/7L), net -$1506.99. Kelly: -0.651 probation, hard-blocked. Watchdog: OK Oct 19 22:10 UTC (light_run). 0 open positions. IC fill job confirmed dead Oct 8-16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (ALL email suppressed incl CB halts). H34: KELLY_EXIT_RAMP_FACTOR=0.5; _kelly_prev_mode tracking; _kelly_first_normal_date arm date; _kelly_exit_ramp_active() helper; ramp applied in notional block after probation cap; kelly_exit_ramp_active + kelly_exit_ramp_session added to /diagnostics. 11 new unit tests (test_kelly_exit_ramp.py). Pre-existing failures: 12 unchanged. Total passing: 454 (was 443). 0 regressions. PR #93 opened. Freeze-exempt: conservative risk control (reduces notional only). Expected impact: on ~Oct 26 first post-recovery entries halved. H24/H25 (PRs #51-57) remain CRITICAL — must merge before ~Oct 26. Railway worker week 19.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_kelly_exit_ramp.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-19",
    "hypothesis_id": "W43_PROGRAM_REVIEW",
