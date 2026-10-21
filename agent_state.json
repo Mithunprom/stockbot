@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
- "last_iteration_date": "2026-10-19",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "last_iteration_date": "2026-10-21",
+ "active_hypothesis": "H35 IC fill job health monitor in WatchdogAgent (PR #94, Oct 21). FREEZE-EXEMPT (monitoring only — no change to trade execution). Root event: Oct 8-16 silent dead fill job (fill_actual_returns() attempted 500 rows/run, filled 0, retired 0, errors 0 — IC gate structurally unable to arm for 9 trading days). Three new stall signatures detected: (1) job never started (last_fill_at=None at market open), (2) scheduler stopped (last_fill_at older than 30min during market hours), (3) budget exhaustion (>=4 consecutive runs with attempted>0 but 0 rows resolved). LiveICTracker gains 3 health-state attributes: last_fill_at, last_fill_result, _consecutive_zero_fill_runs. WatchdogAgent._check_ic_fill_fresh() added to non-light (full) run cycle. 10 new tests. Suite: 463 passing (5 pre-existing sandbox failures).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,7 +29,7 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Oct 19 12:22 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 1.0 min ago), tick_errors OK (lifetime 0). last_exit null in snapshot (last known exits Oct 16 session_close batch). 0 open positions. Market closed at snapshot time (8:22 AM ET). NOTE: watchdog running light_run mode — 2 checks vs full 7.",
+  "watchdog_status": "OK Oct 19 12:22 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 1.0 min ago), tick_errors OK (lifetime 0). last_exit null in snapshot (last known exits Oct 16 session_close batch). 0 open positions. Market closed at snapshot time (8:22 AM ET). NOTE: watchdog running light_run mode — 2 checks vs full 7. H35 adds 8th check (ic_fill_fresh) to non-light path starting from next deploy.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
@@ -220,6 +220,30 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H35",
+   "hypothesis": "IC fill job health monitor: WatchdogAgent._check_ic_fill_fresh() detects three stall signatures for the silent dead-queue failure that disabled the IC gate Oct 8-16: (1) job never started, (2) scheduler stopped (last_fill_at stale > 30 min during market hours), (3) budget exhaustion (>=4 consecutive zero-resolve runs). LiveICTracker gains last_fill_at, last_fill_result, _consecutive_zero_fill_runs state. Check added to full (non-light) watchdog run cycle.",
+   "status": "implemented — PR #94 open (Oct 21, FREEZE-EXEMPT)",
+   "added": "2026-10-21",
+   "added_by": "nightly desk — root event: IC fill job dead Oct 8-16 with zero detection; IC gate could not arm for 9 trading days; 13 entries traded without quality filtering",
+   "pr_branch": "feat/rnd-H35-ic-fill-watchdog",
+   "pr_number": 94,
+   "pr_state": "OPEN — FREEZE-EXEMPT: monitoring only. No change to entry logic, sizing, or exit path. 10 new unit tests. Suite: 463 pass (5 pre-existing sandbox failures, not H35 regressions).",
+   "priority": "HIGH — closes detection gap for Oct 8-16 root event. Merge before IC window accumulates to n=100 target.",
+   "pm_priority": -8
+  },
+  {
+   "id": "H34",
+   "hypothesis": "Kelly probation→normal exit ramp: when Kelly transitions from probation to normal, cap first session at 50% notional (KELLY_EXIT_RAMP_FACTOR=0.5 env var) to dampen over-sizing risk at the cliff. Ramp is freeze-exempt: tightens the existing transition, no change to probation entry blocking or Kelly fraction computation. Ramp is exempt from freeze (reduces risk at boundary).",
+   "status": "implemented — PR #93 open (Oct 20, FREEZE-EXEMPT)",
+   "added": "2026-10-20",
+   "added_by": "nightly desk — Kelly Oct 16 bad batch context: transition from inactive to active can fire full-size entries; ramp reduces first-session exposure",
+   "pr_branch": "feat/rnd-H34-kelly-exit-ramp",
+   "pr_number": 93,
+   "pr_state": "OPEN — FREEZE-EXEMPT: risk control tightening. 11 new unit tests. Suite: 454 pass (5 pre-existing sandbox failures).",
+   "priority": "HIGH — merge before Kelly window clears (~Oct 25-26 when Oct 16 losses roll off).",
+   "pm_priority": -7
+  },
   {
    "id": "H33",
    "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
@@ -667,6 +691,28 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-21",
+   "hypothesis_id": "H35",
+   "result": "NIGHTLY SHIP — H35 IC fill job health monitor. Added _check_ic_fill_fresh() to WatchdogAgent (full run cycle only). Three stall signatures: (1) last_fill_at=None at market open → warn, (2) last_fill_at stale >30 min during market hours → critical, (3) >=2 consecutive zero-resolve runs → warn; >=4 → critical (Oct 8-16 signature). LiveICTracker gains 3 health-state attrs: last_fill_at, last_fill_result, _consecutive_zero_fill_runs. Existing test_watchdog_agent.py helper updated to set loop._ic_tracker=None (required to prevent MagicMock from spoofing ic_tracker presence). 10 new tests in test_ic_fill_watchdog.py. Suite: 463 passing / 5 pre-existing sandbox failures (missing env vars for pydantic-settings: ALPACA_API_KEY, DATABASE_URL, etc. — not H35 regressions). PR #94 opened (FREEZE-EXEMPT: monitoring only).",
+   "files_changed": [
+    "src/agents/live_ic_tracker.py",
+    "src/agents/watchdog_agent.py",
+    "tests/unit/test_ic_fill_watchdog.py",
+    "tests/unit/test_watchdog_agent.py",
+    "agent_state.json"
+   ]
+  },
+  {
+   "date": "2026-10-20",
+   "hypothesis_id": "H34",
+   "result": "NIGHTLY SHIP — H34 Kelly probation exit ramp (PR #93). When Kelly transitions probation→normal, KELLY_EXIT_RAMP_FACTOR (default 0.5) caps first-session notional at 50% until a clean session completes. Freeze-exempt: tightens risk at the Kelly boundary, no change to fraction math or probation logic. 11 new unit tests. Suite: 454 passing. NOTE: H34 was shipped Oct 20 by previous nightly run; agent_state.json was not updated (context exceeded). Recorded here retroactively with correct date.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_kelly_exit_ramp.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-19",
    "hypothesis_id": "W43_PROGRAM_REVIEW",

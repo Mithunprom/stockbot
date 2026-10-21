@@ -25,6 +25,7 @@ def _make_agent(market_open: bool = True) -> WatchdogAgent:
     loop._bars_held = {}
     loop._last_reset_date = None
     loop._universe = ["T%d" % i for i in range(75)]   # healthy screened universe
+    loop._ic_tracker = None  # H35: not attached in unit tests
     pm = MagicMock()
     pm._positions = {}
     cb = MagicMock()

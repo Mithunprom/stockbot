@@ -80,6 +80,11 @@ class LiveICTracker:
         self._sf = session_factory or get_session_factory()
         self._consecutive_low_ic_days: int = 0
         self._last_report_date: str | None = None
+        # Fill-job health state — read by WatchdogAgent._check_ic_fill_fresh().
+        # Updated on every run_fill() invocation (whether or not rows were found).
+        self.last_fill_at: datetime | None = None
+        self.last_fill_result: dict | None = None
+        self._consecutive_zero_fill_runs: int = 0  # incremented when attempted>0 but nothing resolved
 
     # ── Record predictions ────────────────────────────────────────────────────
 
@@ -282,6 +287,16 @@ class LiveICTracker:
             )
         elif filled_15m > 0 or filled_30m > 0 or retired_15m > 0:
             logger.info("ic_actual_returns_filled", **summary)
+
+        # Update fill-job health state for WatchdogAgent.
+        resolved = filled_15m + filled_30m + retired_15m
+        if attempted_15m > 0 and resolved == 0:
+            self._consecutive_zero_fill_runs += 1
+        else:
+            self._consecutive_zero_fill_runs = 0
+        self.last_fill_at = now
+        self.last_fill_result = dict(summary, consecutive_zero_fill_runs=self._consecutive_zero_fill_runs)
+
         return summary
 
     async def _lookup_forward_return(
