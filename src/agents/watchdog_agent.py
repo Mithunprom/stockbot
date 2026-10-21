@@ -41,6 +41,15 @@ ZOMBIE_GRACE_BARS = 60          # bars past max_hold before a position is a zomb
 EMAIL_DEDUPE_HOURS = 4          # don't re-email an identical issue set within this
 ET = ZoneInfo("America/New_York")
 
+# IC fill-job health — H35 (2026-10-21)
+# The fill job runs every 15 min via APScheduler. Two stale thresholds:
+#   STALE_MINUTES: job simply hasn't run at all in > 30 min = scheduler dead.
+#   ZERO_RUNS_WARN/CRITICAL: job runs but resolves 0 rows repeatedly = dead queue
+#     (the Oct 8-16 signature: attempted=500, filled=0, retired=0, errors=0).
+IC_FILL_STALE_MINUTES = 30      # last run older than this (market hours) → critical
+IC_FILL_ZERO_RUNS_WARN = 2      # ≥2 consecutive zero-resolve runs → warn
+IC_FILL_ZERO_RUNS_CRITICAL = 4  # ≥4 consecutive zero-resolve runs → critical (~1h)
+
 
 class WatchdogAgent:
     """Detect + self-heal + alert. Reads SignalLoop state in-process."""
@@ -253,6 +262,68 @@ class WatchdogAgent:
                 "detail": "features fresh" if fresh else
                           "features stale — entries gated, check data pipeline"}
 
+    def _check_ic_fill_fresh(self) -> dict[str, Any]:
+        """Detect a silently dead IC fill job.
+
+        Root event: 2026-10-08 – 2026-10-16 (v0.9.5). fill_actual_returns()
+        ran every 15 minutes, attempted 500 rows, filled 0, retired 0, errors 0.
+        The IC gate was structurally unable to arm for 9 trading days; 13 entries
+        traded without quality filtering.
+
+        Three stall signatures:
+          1. Job never started  — last_fill_at is None at market open.
+          2. Job stopped        — last_fill_at older than IC_FILL_STALE_HOURS.
+          3. Budget exhaustion  — consecutive runs with attempted>0 but no rows
+             resolved (classic dead-queue symptom). Three runs ≈ 45 minutes.
+        """
+        # Off-hours: check is informational only.  If the job is stale at next
+        # open that becomes the real alert.  Skip here to avoid false positives
+        # on scheduled off-hours watchdog runs.
+        if not self._market_open():
+            return {"name": "ic_fill_fresh", "status": "ok", "healed": False,
+                    "detail": "not applicable (market closed)"}
+
+        ic_tracker = getattr(self._loop, "_ic_tracker", None)
+        if ic_tracker is None:
+            return {"name": "ic_fill_fresh", "status": "ok", "healed": False,
+                    "detail": "ic_tracker not attached to loop — check skipped"}
+
+        last_fill_at: datetime | None = getattr(ic_tracker, "last_fill_at", None)
+        last_result: dict | None = getattr(ic_tracker, "last_fill_result", None)
+        consec: int = getattr(ic_tracker, "_consecutive_zero_fill_runs", 0)
+
+        if last_fill_at is None:
+            return {"name": "ic_fill_fresh", "status": "warn", "healed": False,
+                    "detail": "ic fill job has not run yet this session — "
+                              "expect first run within 15 min of startup"}
+
+        age_min = (datetime.now(timezone.utc) - last_fill_at).total_seconds() / 60
+
+        if age_min > IC_FILL_STALE_MINUTES:
+            return {"name": "ic_fill_fresh", "status": "critical", "healed": False,
+                    "detail": f"ic fill job last ran {age_min:.0f} min ago "
+                              f"(threshold {IC_FILL_STALE_MINUTES} min) — "
+                              "APScheduler may have crashed or job is blocked"}
+
+        if consec >= IC_FILL_ZERO_RUNS_CRITICAL:
+            attempted = (last_result or {}).get("attempted_15m", "?")
+            return {"name": "ic_fill_fresh", "status": "critical", "healed": False,
+                    "detail": f"ic fill job stalled: {consec} consecutive runs "
+                              f"with attempted={attempted} but 0 rows resolved — "
+                              "ohlcv_1m bars likely missing; IC gate cannot arm"}
+
+        if consec >= IC_FILL_ZERO_RUNS_WARN:
+            attempted = (last_result or {}).get("attempted_15m", "?")
+            return {"name": "ic_fill_fresh", "status": "warn", "healed": False,
+                    "detail": f"ic fill job yielded nothing for {consec} consecutive "
+                              f"run(s) (attempted={attempted}) — monitor ohlcv_1m"}
+
+        detail = f"last ran {age_min:.0f} min ago"
+        if last_result:
+            detail += (f", filled={last_result.get('filled_15m', 0)}/"
+                       f"retired={last_result.get('retired_15m', 0)}")
+        return {"name": "ic_fill_fresh", "status": "ok", "healed": False, "detail": detail}
+
     # ── Run cycle ───────────────────────────────────────────────────────────
 
     async def run(self, light: bool = False) -> dict[str, Any]:
@@ -270,6 +341,7 @@ class WatchdogAgent:
             checks.append(self._check_circuit_breaker())
             checks.append(self._check_data_fresh())
             checks.append(self._check_universe_fresh())
+            checks.append(self._check_ic_fill_fresh())
 
         worst = "ok"
         for c in checks:
