@@ -88,6 +88,24 @@ SIZING_MAX_TRADES_PER_DAY = 6       # swing cadence: supports 6 position slots
 SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
 
+# H34 — session entry burst pacing (2026-10-22).
+# Root event: 2026-10-16 — 6 positions opened in a 2-minute window at session
+# open (9:40-9:42 ET). The IC gate was dead (v0.9.5 fixed it), so all 6 passed
+# on the same bar scan. Net: -$1,506. Five of the six losers entered before any
+# information (stop-loss fires, intraday loss) was available to gate them.
+# H24 PR#53 (intraday $400 loss halt) helps AFTER losses materialise; this gate
+# prevents the burst from forming at all. Complement, not substitute.
+#
+# Cap: at most SESSION_ENTRY_BURST_MAX entries in any rolling
+# SESSION_ENTRY_BURST_WINDOW_MINUTES-minute window. The remaining slots are
+# available once the earliest entry in the window is > WINDOW minutes old.
+# Default 3 entries / 30 min: on a normal 6-trade day the first 3 can open at
+# any time; the next 3 can only follow once the first is ≥30 min old. This
+# imposes at most a 30-minute delay on the second batch — a minor execution cost
+# versus the burst-opening risk it prevents.
+SESSION_ENTRY_BURST_MAX = 3
+SESSION_ENTRY_BURST_WINDOW_MINUTES = 30
+
 # Health bar for where a filled entry sits in the model's own cross-sectional
 # ranking. The v0.6.x window averaged ~46 (indistinguishable from random) because
 # the live feature path had drifted from the training path; that percentile has a
@@ -885,6 +903,8 @@ class SignalLoop:
         self._sizing_n_trades_today: int = 0
         self._ticker_cooldown: dict[str, int] = {}  # ticker → bars remaining
         self._exit_fail_cooldown: dict[str, int] = {}  # ticker → bars before exit retry
+        # H34: rolling burst-pacing window — UTC timestamps of recent entries.
+        self._session_entry_timestamps: list[datetime] = []
 
         # Per-ticker ATR cache (refreshed each tick from feature_matrix)
         self._ticker_atr: dict[str, float] = {}
@@ -1386,6 +1406,12 @@ class SignalLoop:
                 if n >= KELLY_PROBE_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
+            # H34: burst-pacing window state. entries_in_burst_window is the number
+            # of confirmed fills in the last SESSION_ENTRY_BURST_WINDOW_MINUTES
+            # minutes; entries are blocked when this reaches SESSION_ENTRY_BURST_MAX.
+            "entries_in_burst_window": self._entries_in_burst_window(),
+            "burst_window_cap": SESSION_ENTRY_BURST_MAX,
+            "burst_window_minutes": SESSION_ENTRY_BURST_WINDOW_MINUTES,
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
             "managed_heat": round(pm.managed_heat, 4),
@@ -2136,6 +2162,14 @@ class SignalLoop:
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
 
+    def _entries_in_burst_window(self) -> int:
+        """Return count of entry fills within the current burst pacing window."""
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=SESSION_ENTRY_BURST_WINDOW_MINUTES
+        )
+        return len([t for t in self._session_entry_timestamps if t > cutoff])
+
     def _prune_kelly_window(self) -> None:
         """Drop outcomes older than the lookback window, or before the epoch."""
         from datetime import timedelta
@@ -2289,6 +2323,25 @@ class SignalLoop:
         # Gate 1: Daily trade cap
         if self._sizing_n_trades_today >= SIZING_MAX_TRADES_PER_DAY:
             logger.debug("sizing_daily_cap_hit", n=self._sizing_n_trades_today)
+            return False
+
+        # Gate 1b: H34 session entry burst pacing.
+        # Prune entries older than the burst window before counting.
+        from datetime import timedelta
+        _burst_cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=SESSION_ENTRY_BURST_WINDOW_MINUTES
+        )
+        self._session_entry_timestamps = [
+            t for t in self._session_entry_timestamps if t > _burst_cutoff
+        ]
+        if len(self._session_entry_timestamps) >= SESSION_ENTRY_BURST_MAX:
+            logger.info(
+                "entry_burst_pacing_blocked",
+                ticker=ticker,
+                entries_in_window=len(self._session_entry_timestamps),
+                window_minutes=SESSION_ENTRY_BURST_WINDOW_MINUTES,
+                burst_max=SESSION_ENTRY_BURST_MAX,
+            )
             return False
 
         # Gate 2: Per-ticker cooldown
@@ -3169,6 +3222,7 @@ class SignalLoop:
                     self._bars_held[ticker] = 0
                     self._reversal_counts[ticker] = 0
                     self._sizing_n_trades_today += 1
+                    self._session_entry_timestamps.append(datetime.now(timezone.utc))
                     if self._kelly_mode() == "probation":
                         self._probation_entries_today += 1
                 await self._write_trade_entry(
@@ -3558,6 +3612,7 @@ class SignalLoop:
             self._probation_entries_today = 0
             self._ticker_cooldown.clear()
             self._pdt_deferred_logged.clear()
+            self._session_entry_timestamps.clear()
             self._prune_kelly_window()
             self._update_kelly()
             # Auto-clear daily_loss halts (structural halts like max_drawdown stay)
