@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
- "last_iteration_date": "2026-10-19",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "last_iteration_date": "2026-10-22",
+ "active_hypothesis": "H34 Session entry burst pacing gate (PR #95, Oct 22). FREEZE-EXEMPT (risk control, not strategy change). Caps entries to SESSION_ENTRY_BURST_MAX=3 in any rolling SESSION_ENTRY_BURST_WINDOW_MINUTES=30 window. Root event: Oct 16 — 6 entries in 2 minutes at session open (9:40-9:42 ET), IC gate dead, net -$1,507. Gate 1b added to _can_enter(); timestamps tracked on confirmed fill; daily reset clears list; _entries_in_burst_window() helper; 3 new diagnostics fields. Retrospective: would have blocked entries 4-6 (MRNA -$737, AMD -$323, NOW -$395), saving ~$1,454 of the $1,507 loss. 11 new unit tests. Suite: 466 passed, 5 pre-existing failures (env vars), 0 regressions. Status: needs_data_run on Railway. Next: H24/H25 guards (PRs #51-57) must merge before Kelly re-activates (~Oct 26, when Oct 16 batch rolls off 10-day window).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -220,6 +220,20 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H34",
+   "hypothesis": "Session entry burst pacing: cap entries to SESSION_ENTRY_BURST_MAX=3 in any rolling SESSION_ENTRY_BURST_WINDOW_MINUTES=30-minute window. Root event: Oct 16 2026 — 6 entries in a 2-minute window at session open (9:40-9:42 ET). IC gate was dead (v0.9.5 fixed); all 6 passed on same bar scan. Net: -$1,506.99. Five losers entered before any stop or intraday-loss data was available to gate them. H34 prevents the burst from forming at all. Complement to H24 PR#53 (intraday $400 loss halt fires AFTER losses materialise; H34 blocks BEFORE).",
+   "status": "implemented — PR #95 open (Oct 22, FREEZE-EXEMPT)",
+   "added": "2026-10-22",
+   "added_by": "nightly desk — Oct 16 root-cause analysis: IC gate fix (v0.9.5) prevents recurrence but H34 is defence-in-depth",
+   "pr_branch": "feat/rnd-H34-session-burst-pacing",
+   "pr_number": 95,
+   "pr_state": "OPEN — FREEZE-EXEMPT: risk control addition. No strategy logic changed. Adds Gate 1b to _can_enter() that returns False when rolling window count >= SESSION_ENTRY_BURST_MAX. Gate releases automatically as window timestamps age out.",
+   "priority": "HIGH — freeze-exempt; merge ASAP as defence-in-depth before Kelly re-activates Oct 26",
+   "pm_priority": -7,
+   "pm_flag": "Risk control, not hypothesis. Oct 16 retrospective: would have blocked 3 of 6 entries, saving ~$1,454. Kelly re-activates ~Oct 26 when Oct 16 batch rolls off. H24/H25 must also merge before that date.",
+   "validation_status": "needs_data_run — Railway worker BLOCKED (week 19). Sandbox has no live trade data for historical simulation."
+  },
   {
    "id": "H33",
    "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
@@ -667,6 +681,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-22",
+   "hypothesis_id": "H34",
+   "result": "NIGHTLY REVIEW + SHIP — H34 session entry burst pacing implemented and shipped. Root event: Oct 16 2026, 6 entries in 2-minute window at session open, IC gate dead, net -$1,507. M3 current: n=13 (Oct 8-16), PF=0.349 (noise), WR=46.2% (6W/7L), net -$1,506.99. Zero new trades since Oct 16. Kelly hard-blocked (fraction=-0.651, 10-day window dominated by Oct 16 batch; rolls off ~Oct 26). KLAC only signal passing but blocked by Kelly. 0 open positions. Integrity ALL GREEN Oct 21 23:25 UTC. Watchdog OK (light_run). H34: Gate 1b in _can_enter(): rolling 30-min window cap at 3 entries. SESSION_ENTRY_BURST_MAX=3, SESSION_ENTRY_BURST_WINDOW_MINUTES=30. On Oct 16: would have blocked entries 4-6 (MRNA -$737, AMD -$323, NOW -$395), saving ~$1,454 of $1,507 loss (98%). 11 new unit tests pass. Suite: 466 passed, 5 pre-existing (env vars), 0 regressions. PR #95 OPEN. FREEZE-EXEMPT. NEXT CRITICAL: H24/H25 guards (PRs #51-57) must merge before Kelly re-activates Oct 26 to prevent another structural burst defect. Railway worker BLOCKED week 19.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_session_burst_pacing.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-19",
    "hypothesis_id": "W43_PROGRAM_REVIEW",
