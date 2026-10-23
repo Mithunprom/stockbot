@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
- "last_iteration_date": "2026-10-19",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 20). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). IC gate now ARMED: 16 tickers blocked (ACN/ARM/FICO/GD/HII/MA/MPWR/NOW/PANW/SKYD/SNPS/TMUS/V/VST/WFC/XOM) confirming v0.9.5 working. EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly probation (fraction=-0.651, n=10 in window). CRITICAL: Oct 15-16 trades roll off Kelly window ~Oct 25-27 → window empties → H24/H25 guards (PRs #51-57) MUST merge before Oct 27 open or Aug 31 cluster defect recurs. 0 trades since Oct 16. Integrity ALL GREEN Oct 22. Railway worker week 20.",
+ "last_iteration_date": "2026-10-23",
+ "active_hypothesis": "H34 IC gate health diagnostic (PR opened Oct 23, FREEZE-EXEMPT). Added ticker_ic_blocked_details + ticker_ic_gate to /diagnostics. ticker_ic_blocked_details: per-blocked-ticker IC score + n so operator can verify WHY each ticker is blocked and that n is growing (fill-job health probe). ticker_ic_gate: summary with n_tracked, n_armed (n >= 300), n_blocked, max_n, thresholds. max_n is the IC fill-job health proxy after v0.9.5 fix. 8 unit tests. CONTEXT: Oct 15-16 bad-batch trades roll off Kelly window ~Oct 25-27; without H24/H25 guards this triggers the empty-window entry defect (same root as Aug 31: 12-trade cluster). H24/H25 (PRs #51-57) remain the top owner action before Oct 27 open.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -220,6 +220,16 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H34",
+   "hypothesis": "IC gate health diagnostic: add ticker_ic_blocked_details and ticker_ic_gate to /diagnostics. ticker_ic_blocked_details exposes per-blocked-ticker IC score and sample count (n), enabling operators to verify WHY a ticker is blocked (low IC score vs. insufficient data). ticker_ic_gate summary provides n_tracked, n_armed, n_blocked, max_n. max_n is the fill-job health proxy — should be >= 300 after ~30d of healthy operation post v0.9.5 IC fill-job fix. Freeze-exempt: diagnostics only.",
+   "status": "implemented — PR opened Oct 23 (FREEZE-EXEMPT)",
+   "added": "2026-10-23",
+   "added_by": "nightly desk — 16 tickers IC-blocked after v0.9.5 fix; need per-ticker IC details to verify gate is computing correctly and fill job accumulating",
+   "pr_branch": "feat/rnd-H34-ic-gate-health-diagnostic",
+   "priority": "LOW — diagnostics only; confirms v0.9.5 IC fill-job fix is working",
+   "pm_priority": -7
+  },
   {
    "id": "H33",
    "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
@@ -667,6 +677,18 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-23",
+   "hypothesis_id": "W44_PROGRAM_REVIEW_AND_H34",
+   "result": "W44 PROGRAM REVIEW + H34 SHIP — 0 new trades since Oct 16 (Kelly probation fraction=-0.651, n=10 in window). CRITICAL: Oct 15-16 trades roll off Kelly window ~Oct 25-27 → window empties → H24/H25 guards (PRs #51-57) must merge before Oct 27 open or Aug 31/Sep 21 cluster defect recurs (12 full-size entries from empty window). Integrity ALL GREEN Oct 22 23:25 UTC (5/5 checks). Watchdog OK Oct 23 00:03 UTC. IC gate ARMED: 16 tickers blocked — confirms v0.9.5 IC fill-job fix working. H34 SHIPPED: added ticker_ic_blocked_details + ticker_ic_gate to /diagnostics (freeze-exempt, 8 unit tests). PR opened. Railway worker week 20. pytest not available in cloud sandbox — tests written but not run locally.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_ic_gate_health_diagnostic.py",
+    "docs/ROADMAP.md",
+    "reports/program/2026-W44.md",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-19",
    "hypothesis_id": "W43_PROGRAM_REVIEW",
