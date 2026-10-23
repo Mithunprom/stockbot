@@ -1379,6 +1379,36 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
             ],
+            # IC score + sample count for each blocked ticker. Lets operators
+            # verify (a) how negative the IC is and (b) that the fill job is
+            # accumulating rows (n should be growing each session after the
+            # v0.9.5 fix). Blocked = n >= MIN_N AND ic < threshold.
+            "ticker_ic_blocked_details": {
+                t: {"ic": round(ic, 4), "n": n}
+                for t, (ic, n) in self._ticker_ic.items()
+                if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+            },
+            # Summary counts and fill-job health probe. `max_n` is the highest
+            # sample count across all tracked tickers; it should be ≥ 271 after
+            # the gate arms (TICKER_IC_MIN_N = 300 is the block threshold;
+            # KELLY_PROBE_MIN_N = 30 is the probe threshold). If max_n < 30
+            # after the first week of trading, the IC fill job is likely stalled.
+            "ticker_ic_gate": {
+                "min_n_threshold": TICKER_IC_MIN_N,
+                "block_threshold": TICKER_IC_BLOCK_THRESHOLD,
+                "n_tracked": len(self._ticker_ic),
+                "n_armed": sum(
+                    1 for _, (_, n) in self._ticker_ic.items()
+                    if n >= TICKER_IC_MIN_N
+                ),
+                "n_blocked": sum(
+                    1 for _, (ic, n) in self._ticker_ic.items()
+                    if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+                ),
+                "max_n": max(
+                    (n for _, (_, n) in self._ticker_ic.items()), default=0
+                ),
+            },
             # Names the Kelly-probation probe may fire on (30d IC window). When
             # Kelly is in probation and this is empty, ALL entries are blocked.
             "tickers_probe_eligible": [

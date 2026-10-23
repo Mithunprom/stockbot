@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-10-19 W43 program review (v0.9.6 deployed; M3 n=13 Oct 8–16, PF=0.349 (noise), net −$1,507; Oct 16 bad batch −$1,412 (6 entries at open, 5 losses); IC fill job was dead Oct 8–16 (fixed v0.9.5); EMAIL_ALERTS_ENABLED=false disables ALL email incl CB halts; Kelly activation imminent without H24/H25 guards; ≥4 direct pushes W43; Railway worker week 19; H33 freeze classification pending).
+Last updated: 2026-10-23 W44 program review (0 new trades since Oct 16; Kelly probation fraction=−0.651; CRITICAL: Oct 15-16 trades roll off window ~Oct 25-27 → H24/H25 PRs #51-57 MUST merge before Oct 27 open; IC gate ARMED — 16 tickers blocked (v0.9.5 confirmed working); H34 IC gate health diagnostic shipped (freeze-exempt); Integrity ALL GREEN; Railway worker week 20).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
