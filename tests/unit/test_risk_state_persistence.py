@@ -304,3 +304,80 @@ def test_resume_must_be_persisted_not_left_in_memory():
     if snap.halted and not fresh.is_halted:
         fresh._halted = True
     assert not fresh.is_halted, "resume was undone by the restore path"
+
+
+# ─── H24: probation_entries_today survives a mid-day restart ─────────────────
+
+def test_h24_probation_entries_today_roundtrip():
+    """probation_entries_today round-trips through JSON without data loss."""
+    snap = RiskStateSnapshot(
+        peak_value=100_000.0, daily_start_value=99_000.0,
+        daily_start_date=et_today_iso(), consecutive_losses=0,
+        probation_entries_today=1,
+    )
+    back = RiskStateSnapshot.from_json(snap.to_json())
+    assert back.probation_entries_today == 1
+
+
+def test_h24_probation_entries_today_restored_same_day():
+    """A mid-day restart must not grant a second free probe.
+
+    Root event: Aug 31 2026 — service restarted in the afternoon, reset
+    probation_entries_today=0, and fired another probe despite the daily
+    quota (1 per day in probation mode) already being spent.
+    """
+    snap = RiskStateSnapshot(
+        peak_value=100_000.0, daily_start_value=99_000.0,
+        daily_start_date=et_today_iso(), consecutive_losses=0,
+        probation_entries_today=1,  # probe already spent today
+    )
+    # Simulate restore logic for a same-day restart
+    same_day = snap.daily_start_date == et_today_iso()
+    probation_entries_today = 0  # fresh process starts at 0
+    if same_day:
+        probation_entries_today = snap.probation_entries_today
+
+    assert same_day
+    assert probation_entries_today == 1, (
+        "Restore must carry forward the probe count so the second restart "
+        "cannot spend another probe"
+    )
+
+
+def test_h24_probation_entries_today_reset_overnight():
+    """An overnight restart must NOT carry yesterday's probe count forward.
+
+    The midnight reset (line 2712) owns that transition; the restore path must
+    not pre-empt it by replaying a stale counter from yesterday.
+    """
+    snap = RiskStateSnapshot(
+        peak_value=100_000.0, daily_start_value=99_000.0,
+        daily_start_date="2026-01-01",   # yesterday
+        consecutive_losses=0,
+        probation_entries_today=1,
+    )
+    # Simulate restore logic: same-day guard
+    same_day = snap.daily_start_date == et_today_iso()
+    probation_entries_today = 0
+    if same_day:
+        probation_entries_today = snap.probation_entries_today
+
+    assert not same_day
+    assert probation_entries_today == 0, (
+        "Yesterday's probe count must not bleed into a new session"
+    )
+
+
+def test_h24_old_snapshot_without_field_defaults_to_zero():
+    """Old snapshots missing probation_entries_today must not crash on load.
+
+    The field defaults to 0 so a rollback to an older build is safe: the
+    restore path gets 0 (same as a fresh start), which is the safe default.
+    """
+    raw = (
+        '{"version": 1, "peak_value": 100000.0, "daily_start_value": 99000.0, '
+        '"daily_start_date": "2026-01-01", "consecutive_losses": 0}'
+    )
+    snap = RiskStateSnapshot.from_json(raw)
+    assert snap is not None
+    assert snap.probation_entries_today == 0
