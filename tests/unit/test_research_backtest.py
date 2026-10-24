@@ -13,6 +13,8 @@ import pytest
 
 from scripts.research_backtest import (
     Params,
+    PROD_CAPITAL,
+    PROD_PARAMS,
     _is_confirmed_reversal_long,
     simulate,
 )
@@ -87,6 +89,97 @@ def test_params_dead_lo_matches_production():
     assert Params().dead_lo == lo, (
         f"Params.dead_lo={Params().dead_lo} diverges from "
         f"production dead_zone_lo={lo}"
+    )
+
+
+# ─── PROD_PARAMS sync tests ───────────────────────────────────────────────────
+# PROD_PARAMS is the production-aligned baseline: these tests enforce that every
+# field mirrors the live signal_loop constant.  A constant rename in signal_loop
+# without updating PROD_PARAMS will be caught here before Railway runs a biased
+# backtest.
+
+def test_prod_params_max_hold_bars():
+    from src.agents.signal_loop import SIZING_MAX_HOLD_BARS
+    assert PROD_PARAMS.max_hold_bars == SIZING_MAX_HOLD_BARS, (
+        f"PROD_PARAMS.max_hold_bars={PROD_PARAMS.max_hold_bars} "
+        f"!= SIZING_MAX_HOLD_BARS={SIZING_MAX_HOLD_BARS} — "
+        "this is the largest driver of the H10 return discrepancy (3-day vs 1-day hold)"
+    )
+
+
+def test_prod_params_stag_bars():
+    from src.agents.signal_loop import SIZING_STAGNATION_BARS
+    assert PROD_PARAMS.stag_bars == SIZING_STAGNATION_BARS, (
+        f"PROD_PARAMS.stag_bars={PROD_PARAMS.stag_bars} "
+        f"!= SIZING_STAGNATION_BARS={SIZING_STAGNATION_BARS}"
+    )
+
+
+def test_prod_params_tp_mult():
+    from src.agents.signal_loop import SIZING_TAKE_PROFIT_DVOL_MULT
+    assert PROD_PARAMS.tp_mult == SIZING_TAKE_PROFIT_DVOL_MULT, (
+        f"PROD_PARAMS.tp_mult={PROD_PARAMS.tp_mult} "
+        f"!= SIZING_TAKE_PROFIT_DVOL_MULT={SIZING_TAKE_PROFIT_DVOL_MULT} — "
+        "v0.5.3 rescaled TP from 3.0σ to 1.5σ"
+    )
+
+
+def test_prod_params_tp_floor_and_cap():
+    from src.agents.signal_loop import SIZING_TAKE_PROFIT_FLOOR, SIZING_TAKE_PROFIT_CAP
+    assert PROD_PARAMS.tp_floor == SIZING_TAKE_PROFIT_FLOOR, (
+        f"PROD_PARAMS.tp_floor={PROD_PARAMS.tp_floor} "
+        f"!= SIZING_TAKE_PROFIT_FLOOR={SIZING_TAKE_PROFIT_FLOOR}"
+    )
+    assert PROD_PARAMS.tp_cap == SIZING_TAKE_PROFIT_CAP, (
+        f"PROD_PARAMS.tp_cap={PROD_PARAMS.tp_cap} "
+        f"!= SIZING_TAKE_PROFIT_CAP={SIZING_TAKE_PROFIT_CAP}"
+    )
+
+
+def test_prod_params_capacity():
+    from src.agents.signal_loop import (
+        MAX_OPEN_POSITIONS, PORTFOLIO_HEAT_CEILING, SIZING_MAX_TRADES_PER_DAY,
+    )
+    assert PROD_PARAMS.max_pos == MAX_OPEN_POSITIONS, (
+        f"PROD_PARAMS.max_pos={PROD_PARAMS.max_pos} != MAX_OPEN_POSITIONS={MAX_OPEN_POSITIONS}"
+    )
+    assert PROD_PARAMS.heat_ceiling == PORTFOLIO_HEAT_CEILING, (
+        f"PROD_PARAMS.heat_ceiling={PROD_PARAMS.heat_ceiling} "
+        f"!= PORTFOLIO_HEAT_CEILING={PORTFOLIO_HEAT_CEILING}"
+    )
+    assert PROD_PARAMS.trades_per_day == SIZING_MAX_TRADES_PER_DAY, (
+        f"PROD_PARAMS.trades_per_day={PROD_PARAMS.trades_per_day} "
+        f"!= SIZING_MAX_TRADES_PER_DAY={SIZING_MAX_TRADES_PER_DAY}"
+    )
+
+
+def test_prod_params_dead_hi():
+    from src.agents.signal_loop import SIZING_DIR_PROB_DEAD_ZONE
+    _, hi = SIZING_DIR_PROB_DEAD_ZONE
+    assert PROD_PARAMS.dead_hi == hi, (
+        f"PROD_PARAMS.dead_hi={PROD_PARAMS.dead_hi} "
+        f"!= SIZING_DIR_PROB_DEAD_ZONE upper={hi}"
+    )
+
+
+def test_prod_params_pdt_disabled():
+    """Production account is above PDT_EQUITY_THRESHOLD — PDT must be off."""
+    assert PROD_PARAMS.pdt_enabled is False, (
+        "PROD_PARAMS.pdt_enabled=True but production equity > $25k (no PDT restriction)"
+    )
+
+
+def test_prod_capital_exceeds_max_notional_threshold():
+    """PROD_CAPITAL must be large enough that the $2500 hard cap doesn't bind.
+
+    At $20k: max(2500, 12.5%×20k) = max(2500, 2500) — the hard cap kicks in
+    and positions are sized at 25% of portfolio (2× intended).  PROD_CAPITAL
+    must exceed this crossover so notional is governed by the percentage cap.
+    """
+    CROSSOVER = 2500.0 / 0.125  # $20k
+    assert PROD_CAPITAL > CROSSOVER, (
+        f"PROD_CAPITAL={PROD_CAPITAL} <= crossover={CROSSOVER}: "
+        "the $2500 hard cap would bind, inflating per-trade % allocation vs production"
     )
 
 
