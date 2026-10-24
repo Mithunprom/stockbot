@@ -69,6 +69,7 @@ SECTOR_MAP: dict[str, str] = {
     "SNOW": "tech",
     "DDOG": "tech",
     "WDAY": "tech",
+    "CRM": "tech",      # Salesforce — Sep-14 diagnostics would_trade (H27)
     "TTD": "tech",
     "ANET": "tech",
     "DELL": "tech",
@@ -80,7 +81,7 @@ SECTOR_MAP: dict[str, str] = {
     "AVGO": "semis",
     "AMD": "semis",
     "ARM": "semis",
-    "SNDK": "semis",
+    "SNDK": "semis",    # SanDisk / Western Digital spin-off
     "MU": "semis",
     "SMCI": "semis",
     "WDC": "semis",
@@ -102,6 +103,7 @@ SECTOR_MAP: dict[str, str] = {
     "MA": "financials",
     "GS": "financials",
     "WFC": "financials",
+    "COIN": "financials",  # Coinbase — crypto exchange (H27)
     "MSCI": "financials",
     "HOOD": "financials",
     # Consumer
@@ -109,6 +111,7 @@ SECTOR_MAP: dict[str, str] = {
     "TSLA": "consumer",
     "COST": "consumer",
     "NFLX": "consumer",
+    "MNST": "consumer",   # Monster Beverage (H22/H27)
     "APTV": "consumer",
     "GRMN": "consumer",
     # Energy
@@ -122,11 +125,14 @@ SECTOR_MAP: dict[str, str] = {
     "PFE": "healthcare",
     "ABBV": "healthcare",
     "MRNA": "healthcare",
+    # Utilities
+    "PCG": "utilities",   # Pacific Gas & Electric — qualifying Sep 17 (H27)
     # Industrials / defense
     "LMT": "industrials",
     "LDOS": "industrials",
     "LII": "industrials",
     "ZBRA": "industrials",
+    "RTX": "industrials", # Raytheon Technologies (H27)
 }
 
 # Bucket for any ticker absent from SECTOR_MAP. It is a real bucket name so it
