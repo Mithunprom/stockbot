@@ -1286,6 +1286,7 @@ class SignalLoop:
                 portfolio_heat=self._pm.managed_heat,
                 sector_notionals=sector_notionals,
                 kelly_fraction=self._kelly_fraction,
+                kelly_n_trades=len(self._sizing_recent_outcomes),
             )
             if sizing is None:
                 continue
@@ -2978,6 +2979,7 @@ class SignalLoop:
                     portfolio_heat=self._pm.managed_heat,
                     sector_notionals=sector_notionals,
                     kelly_fraction=self._kelly_fraction,
+                    kelly_n_trades=len(self._sizing_recent_outcomes),
                 )
                 if sizing is None:
                     return False

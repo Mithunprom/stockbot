@@ -214,6 +214,14 @@ _KELLY_BUCKETS: list[tuple[float, float, float]] = [
 ]
 _KELLY_POSITIVE_FLOOR = 0.15  # small positive Kelly shouldn't zero out sizing
 
+# Stage 3b: Kelly window inactive guard
+# When the rolling Kelly window has fewer than this many outcomes there is no
+# reliable edge estimate.  Full-sized entries during this period have caused two
+# runaway batches (Aug 31 −$938; Oct 16 −$1 412).  Cap conservatively until the
+# sample matures.  Must mirror KELLY_MIN_TRADES in signal_loop.py.
+_KELLY_WINDOW_MIN_TRADES: int = 10
+_KELLY_INACTIVE_MAX_PCT: float = 0.05   # 5% per position while window is building
+
 # Stage 4: Portfolio constraints
 _HEAT_TIERS: list[tuple[float, float]] = [
     # (heat_threshold, size_multiplier) — aligned with the signal loop's
@@ -280,6 +288,7 @@ class SizingResult:
     pred_return: float
     atr_pct: float
     kelly_fraction: float
+    kelly_n_trades: int
     portfolio_heat: float
     sector_heat: float
 
@@ -294,6 +303,7 @@ class SizingResult:
                 "1_base": round(self.stage1_base_pct, 4),
                 "2_atr": round(self.stage2_atr_pct, 4),
                 "3_kelly": round(self.stage3_kelly_pct, 4),
+                "3b_inactive_guard": self.kelly_n_trades < 10,
                 "4_constraint": round(self.stage4_constraint_pct, 4),
                 "5_viable": self.stage5_viable,
                 "6_mode": self.stage6_mode,
@@ -303,6 +313,7 @@ class SizingResult:
                 "pred_return": round(self.pred_return, 6),
                 "atr_pct": round(self.atr_pct, 4),
                 "kelly": round(self.kelly_fraction, 4),
+                "kelly_n_trades": self.kelly_n_trades,
                 "heat": round(self.portfolio_heat, 4),
                 "sector_heat": round(self.sector_heat, 4),
             },
@@ -341,6 +352,7 @@ class SmartPositionSizer:
         portfolio_heat: float,
         sector_notionals: dict[str, float],
         kelly_fraction: float,
+        kelly_n_trades: int = 0,
     ) -> SizingResult | None:
         """Run the full 6-stage sizing pipeline.
 
@@ -354,6 +366,9 @@ class SmartPositionSizer:
             portfolio_heat: Current fraction of portfolio deployed.
             sector_notionals: Sector -> total $ currently deployed in that sector.
             kelly_fraction: Current rolling Kelly fraction from trade history.
+            kelly_n_trades: Number of outcomes currently in the Kelly window.
+                When < _KELLY_WINDOW_MIN_TRADES the edge estimate is unreliable
+                and Stage 3b applies a conservative size cap.
 
         Returns:
             SizingResult with final shares/notional, or None if trade is rejected.
@@ -395,6 +410,16 @@ class SmartPositionSizer:
             stage3 = min(stage2, bucket_cap, max(kelly_fraction, _KELLY_POSITIVE_FLOOR))
         else:
             stage3 = min(stage2, bucket_cap)
+
+        # ── Stage 3b: Kelly Window Inactive Guard ────────────────────────────
+        # With fewer than _KELLY_WINDOW_MIN_TRADES outcomes in the window there
+        # is no reliable edge estimate: the fraction is 0 (inactive) or freshly
+        # seeded.  Uncapped entries during this period drove two runaway batches
+        # (Aug 31 −$938, n=12; Oct 16 −$1 412, n=6).  Cap conservatively until
+        # the sample matures.  Applies to every entry regardless of kelly_mode.
+        inactive_guard_applied = kelly_n_trades < _KELLY_WINDOW_MIN_TRADES
+        if inactive_guard_applied:
+            stage3 = min(stage3, _KELLY_INACTIVE_MAX_PCT)
 
         # ── Stage 4: Portfolio Constraints ───────────────────────────────────
         # 4a: Graduated heat limit
@@ -488,6 +513,7 @@ class SmartPositionSizer:
             pred_return=pred_return,
             atr_pct=atr_pct,
             kelly_fraction=kelly_fraction,
+            kelly_n_trades=kelly_n_trades,
             portfolio_heat=portfolio_heat,
             sector_heat=sector_heat,
         )

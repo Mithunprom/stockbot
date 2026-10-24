@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
- "last_iteration_date": "2026-10-19",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 20). v0.9.6 DEPLOYED Oct 16. M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Kelly probation: fraction −0.4918 (Oct 24 diagnostics), 10 trades in window, all M3 Oct 8–16. Oct 16 losses roll off ~Oct 26 → Kelly goes INACTIVE (n drops to 7 < 10 threshold). H36 SHIPPED (Oct 24, PR #97): Stage 3b inactive guard caps per-entry size at 5% when kelly_n_trades < 10. Addresses root cause of Aug-31 and Oct-16 runaway batches. 4 new unit tests pass. PRs #51–54 (H24) confirmed NOT merged (not in open PR list; not in git log). Integrity ALL GREEN Oct 23 23:25 UTC. Watchdog OK Oct 23 23:42 UTC. 0 open positions. 19 IC-blocked tickers (IC gate accumulating since Oct 16). SMTP email alerts STILL disabled (EMAIL_ALERTS_ENABLED=false). Railway worker week 20.",
+ "last_iteration_date": "2026-10-24",
+ "active_hypothesis": "H36 Kelly window inactive size guard (PR #97, Oct 24). FREEZE-EXEMPT: risk-control fix, no change to entry signals or trade selection. Added Stage 3b to SmartPositionSizer.compute(): when kelly_n_trades < _KELLY_WINDOW_MIN_TRADES (10), cap position size at _KELLY_INACTIVE_MAX_PCT (5%). Extended compute() signature with kelly_n_trades=0 default. Both signal_loop.py call sites updated to pass len(self._sizing_recent_outcomes). SizingResult.kelly_n_trades field added + surfaced in to_dict() inputs and stages. 4 new unit tests (test_h36_*): guard applies at n<10, releases at n=10, applies across all conviction buckets, audit trail in stages dict. Context: H24 cluster PRs #51–54 were NEVER merged (confirmed Oct 24 — absent from open PR list and git log). Kelly activating ~Oct 26 (Oct 16 losses roll off 10-day window). H36 is the first line of defence before Kelly window builds past activation threshold.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -220,6 +220,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H36",
+   "hypothesis": "Kelly window inactive size guard: when the rolling Kelly window has fewer than KELLY_WINDOW_MIN_TRADES (10) outcomes, there is no reliable edge estimate. Cap per-entry size at _KELLY_INACTIVE_MAX_PCT (5%) regardless of conviction bucket or Kelly fraction. Addresses root cause of Aug-31 runaway batch (n=12 entries, −$938) and Oct-16 runaway batch (n=6, −$1,412): in both cases Kelly was inactive or freshly seeded and entries were full-sized. H24 cluster (PRs #51–54) attempted the same fix but were never merged; H36 is a clean, minimal re-implementation as Stage 3b in position_sizer.py.",
+   "status": "implemented — PR #97 open (Oct 24, FREEZE-EXEMPT)",
+   "added": "2026-10-24",
+   "added_by": "nightly desk — Oct 24: confirmed H24 guards absent from codebase; Kelly activating ~Oct 26 as Oct 16 losses roll off 10-day window; H36 is critical guard",
+   "pr_branch": "feat/rnd-H36-kelly-inactive-size-guard",
+   "pr_number": 97,
+   "pr_state": "OPEN — FREEZE-EXEMPT: risk-control enforcement fix. Stage 3b in SmartPositionSizer: caps size at 5% when kelly_n_trades < 10. No change to entry signals, trade selection, or Kelly fraction computation. 4 unit tests pass. Backward-compatible (default kelly_n_trades=0 applies guard; callers must pass len(_sizing_recent_outcomes) to opt into full size).",
+   "priority": "CRITICAL — Kelly activates ~Oct 26 (Mon). H24 guards were never merged. H36 is the only guard in place. Merge before Mon open.",
+   "pm_priority": -7
+  },
   {
    "id": "H33",
    "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
@@ -667,6 +679,17 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-24",
+   "hypothesis_id": "H36",
+   "result": "NIGHTLY REVIEW + SHIP — Kelly probation: fraction −0.4918 (Oct 24 diagnostics), 10 trades in 10-day window. Oct 16 losses (5L: MRNA −$737, STX −$520, HPE −$279, AMD −$323, NOW −$395) roll off ~Oct 26 → window drops to n=7 (INACTIVE, below 10-trade threshold) → entries unblocked. CONFIRMED: H24 cluster (PRs #51–54) NEVER merged — absent from open PR list and git log. No inactive-mode size guard in codebase. H36 IMPLEMENTED: Stage 3b in SmartPositionSizer.compute() caps per-entry size at 5% when kelly_n_trades < 10. compute() signature extended with kelly_n_trades=0 default. Both signal_loop.py call sites pass len(self._sizing_recent_outcomes). SizingResult.kelly_n_trades field + stages[3b_inactive_guard]. 4 new tests pass. Integrity ALL GREEN Oct 23 23:25 UTC. Watchdog OK Oct 23 23:42 UTC. 0 open positions. 2 signals qualify (MSFT, STX) but blocked by Kelly probation. 19 IC-blocked tickers. PR #97 opened: FREEZE-EXEMPT, merge before Mon Oct 26 open. Railway worker week 20.",
+   "files_changed": [
+    "src/execution/position_sizer.py",
+    "src/agents/signal_loop.py",
+    "tests/unit/test_position_sizer.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-19",
    "hypothesis_id": "W43_PROGRAM_REVIEW",
