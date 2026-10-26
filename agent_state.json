@@ -1,6 +1,6 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 19). v0.9.6 DEPLOYED Oct 16 (direct push — governance breach W43). M3 v0.9.3+ n=13 (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. Oct 16 bad batch: 6 entries at open, 5 losses, net −$1,412. IC fill job was dead Oct 8–16 (v0.9.5 fixed). EMAIL_ALERTS_ENABLED=false (v0.9.6, owner-directed) — ALL email suppressed incl CB halts. Kelly activation likely post-Oct 16 (H24/H25 guards unmerged). Integrity ALL GREEN Oct 15. SMTP credential RESOLVED (v0.9.6). Railway worker week 19.",
- "last_iteration_date": "2026-10-19",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 20). v0.9.6 deployed (last commit W43 Oct 19 — zero commits W44, first clean governance week in 9). M3 v0.9.3+ n=13 STALLED (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. ZERO new trades Oct 19–26 (6 trading days) — Kelly probation suspected from Oct 16 losses hitting unguarded Kelly window at activation (H24/H25 PRs #51–57 unmerged). EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl CB halts. Watchdog OK light_run (2/7 checks). Integrity last seen clean Oct 15. Railway worker week 20.",
+ "last_iteration_date": "2026-10-26",
  "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -29,7 +29,7 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Oct 19 12:22 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 1.0 min ago), tick_errors OK (lifetime 0). last_exit null in snapshot (last known exits Oct 16 session_close batch). 0 open positions. Market closed at snapshot time (8:22 AM ET). NOTE: watchdog running light_run mode — 2 checks vs full 7.",
+  "watchdog_status": "OK Oct 26 12:23 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 0.0 min ago), tick_errors OK (lifetime 0). last_exit_at null (last known exits Oct 16 session_close batch — 0 new trades Oct 19–26, 6 trading days). 0 open positions. Pre-market at snapshot time. NOTE: watchdog running light_run mode — 2 checks vs full 7. Kelly fraction, probation state, and n_trades_in_window NOT surfaced in snapshot.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
@@ -667,6 +667,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-26",
+   "hypothesis_id": "W44_PROGRAM_REVIEW",
+   "result": "PROGRAM_REVIEW — W44 weekly review complete. M3 n=13 UNCHANGED (zero new trades Oct 19–26, 6 trading days silent). Bot ticking but not entering — Kelly probation suspected (Oct 16 losses at Kelly activation moment, H24/H25 PRs #51–57 unmerged = Aug 31 replay). Zero commits W44 — first clean governance week since W36. Watchdog OK light_run (2/7 checks). Health: v0.9.6, paper, signal_loop active, 0 open positions. EMAIL_ALERTS_ENABLED=false unchanged. Railway worker week 20. 6 owner decisions needed. Report: reports/program/2026-W44.md.",
+   "files_changed": [
+    "docs/ROADMAP.md",
+    "reports/program/2026-W44.md",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-19",
    "hypothesis_id": "W43_PROGRAM_REVIEW",
