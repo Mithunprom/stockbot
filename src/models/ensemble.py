@@ -403,9 +403,30 @@ class EnsembleEngine:
                 lgbm_dir = 0.0
                 lgbm_conf = 0.0
 
+        # ZERO WEIGHT MEANS ZERO WORK — for every component below.
+        #
+        # Each term enters the sum as `weight * conf * dir`, so at weight 0 the
+        # inference result is multiplied away. Running it anyway buys nothing
+        # and costs something, which is why all three are guarded on their own
+        # weight. This can never change a number: a skipped model contributes
+        # exactly 0.0 either way (pinned in tests/unit/test_zero_weight_skip.py).
+        #
+        # Transformer/TCN were added to this guard on 2026-10-22. v0.9.3 set
+        # their weights to 0.0 (measured live IC ~0.001 — noise), and the
+        # latency agent then escalated `transformer_inference p95=347ms` against
+        # its 200ms threshold. We were paying a breached latency SLA for two
+        # models contributing nothing. The earlier note here reasoned that only
+        # the metered FinBERT call was worth guarding because Transformer/TCN
+        # are local CPU — "the saving there is latency rather than spend". That
+        # held right up until latency became the thing in breach.
+        #
+        # The guard is on the WEIGHT, never a hard disable, so restoring a
+        # weight restores inference in the same action.
+        w = self.weights
+
         # Transformer inference (may fail if checkpoint n_features != current)
         t_dir, t_conf = 0.0, 0.0
-        if self._transformer is not None:
+        if self._transformer is not None and w.transformer > 0:
             try:
                 t_dir, t_conf = await loop.run_in_executor(
                     None, self._transformer.predict, features_1m, options_flow
@@ -415,7 +436,7 @@ class EnsembleEngine:
 
         # TCN inference (may fail if checkpoint n_features != current)
         tcn_dir, tcn_conf = 0.0, 0.0
-        if self._tcn is not None:
+        if self._tcn is not None and w.tcn > 0:
             try:
                 tcn_dir, tcn_conf = await loop.run_in_executor(
                     None, self._tcn.predict,
@@ -425,20 +446,15 @@ class EnsembleEngine:
             except Exception as exc:
                 logger.warning("tcn_inference_failed", ticker=ticker, error=str(exc))
 
-        # Sentiment rolling index — skipped entirely at zero weight.
-        #
-        # This used to run unconditionally, so a zeroed weight still paid for
-        # every hosted FinBERT call and multiplied the result by 0.0. Guarding
-        # on the weight is what turns the weight decision into an actual cost
-        # saving. Same reasoning would apply to the Transformer/TCN inference
-        # above, but those are local CPU work rather than a metered API, so the
-        # saving there is latency rather than spend.
+        # Sentiment rolling index — a metered hosted FinBERT call, so skipping
+        # it at zero weight is a direct spend saving rather than a latency one.
         si = 0.0
-        if self._sentiment is not None and self.weights.sentiment > 0:
+        if self._sentiment is not None and w.sentiment > 0:
             si = await self._sentiment.rolling_sentiment_index(ticker, lookback_hours=24)
 
-        # Weighted ensemble
-        w = self.weights
+        # Weighted ensemble — `w` is bound above, where the skip guards read it.
+        # Re-reading self.weights here would risk the sum using a different
+        # snapshot than the guards did if update_weights() landed mid-await.
         ensemble = (
             w.lgbm * lgbm_conf * lgbm_dir
             + w.transformer * t_conf * t_dir
