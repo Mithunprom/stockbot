@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 20). v0.9.6 deployed (last commit W43 Oct 19 — zero commits W44, first clean governance week in 9). M3 v0.9.3+ n=13 STALLED (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. ZERO new trades Oct 19–26 (6 trading days) — Kelly probation suspected from Oct 16 losses hitting unguarded Kelly window at activation (H24/H25 PRs #51–57 unmerged). EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl CB halts. Watchdog OK light_run (2/7 checks). Integrity last seen clean Oct 15. Railway worker week 20.",
- "last_iteration_date": "2026-10-26",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 21). v0.9.6 deployed. M3 v0.9.3+ n=19 active (Oct 8–26): 9W/10L, PF=0.480 (noise), net −$1,470.21. TRADING RESUMED Oct 26: 6 new trades (IDs 287–292), net +$36.78. ZERO trades Oct 19–25 (5 trading days) — Kelly had been in inactive state post-Oct 16 batch. Kelly now inactive with n=6 in 10-day window; needs 4 more trades to activate. H24/H25 guards CRITICAL (PRs #51–57 unmerged). Entry rank mean 51.0 (unhealthy <85) for Oct 26 batch. EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl CB halts. Watchdog OK light_run. Integrity ALL GREEN Oct 26. Railway worker week 21.",
+ "last_iteration_date": "2026-10-27",
+ "active_hypothesis": "H34 Diagnostic direction+IC gate fix (main.py, PR TBD, Oct 27). FREEZE-EXEMPT. /diagnostics signal_gate_analysis was reporting would_trade=True for bearish (negative lgbm_pred_return) signals because _sizing_entry_gate_open uses abs() for Phase 5 symmetry but _act_on_signal blocks direction<0 for long-only Phase 4. Live example Oct 26: GLW (pred=-0.004248) and CIEN (pred=-0.002982) both showed would_trade=True — false positives (they would never enter). Fix: add passes_direction=(pred_ret>0) and ic_block checks to would_trade and blocked_by in _pipeline_diagnostics. Also: signals_passing now counts would_trade rows (was counting passes_both_gates — inflated). 12 new unit tests. Context: bot resumed Oct 26 (6 trades, n=6 in Kelly window), entry rank 51.0 unhealthy, H24/H25 critical before Kelly activation (~2 trading days away).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -15,7 +15,7 @@
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
   "integrity_sentinel_last_run": "2026-08-31T12:25:00Z",
-  "integrity_sentinel_status": "ALL GREEN Oct 15 23:25 UTC — 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (0 open positions). Integrity criterion MET and holding.",
+  "integrity_sentinel_status": "ALL GREEN Oct 26 22:25 UTC — 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker (0 open positions). Integrity criterion MET and holding.",
   "integrity_sentinel_critical_since": null,
   "integrity_sentinel_critical_check": null,
   "integrity_sentinel_stale_rows": [],
@@ -29,8 +29,8 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Oct 26 12:23 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 0.0 min ago), tick_errors OK (lifetime 0). last_exit_at null (last known exits Oct 16 session_close batch — 0 new trades Oct 19–26, 6 trading days). 0 open positions. Pre-market at snapshot time. NOTE: watchdog running light_run mode — 2 checks vs full 7. Kelly fraction, probation state, and n_trades_in_window NOT surfaced in snapshot.",
-  "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
+  "watchdog_status": "OK Oct 26 22:10 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 23:03 UTC), tick_errors OK (lifetime 0). last_exit_at 19:55 UTC (Oct 26 session_close batch — 6 new trades Oct 26, first since Oct 16). 0 open positions. Post-market at snapshot time. NOTE: watchdog running light_run mode — 2 checks vs full 7. Kelly fraction, probation state, and n_trades_in_window NOT surfaced in snapshot.",
+  "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists. Oct 26 post-market: kelly_n_trades=6 in 10-day window, ~4 more closed trades until Kelly activation at n=10 (~1-2 trading days). H24/H25 guards (PRs #51-57) CRITICAL to merge before activation.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
   "deployed_version": "0.9.6",
@@ -51,22 +51,25 @@
    "pf": 1.99
   },
   "m3_v080_era_note": "M3 window Sep 23-Oct 7 RETIRED. n=27 closed (entries Sep 29-Oct 7; zero trades Sep 22-28 due to rs_vwap_dev bug). 22/27 exits (81%) were integrity_broker_reconcile — exit pipeline bug (watchdog zombie check compared bars_held vs SIZING_MAX_HOLD_BARS=30 in profit-target mode; positions force-sold at ~90 bars, not strategy exits). Fixed in v0.9.1 Oct 6. Genuine strategy exits: n=5 (WDC stop_loss −$513, CVX take_profit +$182, LITE take_profit +$968 [overnight carry], PLTR trailing_stop −$11, WFC session_close −$54), net +$572, PF=1.99. Full-window PF=4.62 is contaminated. Not strategy evidence. v0.9.3 (Oct 8) resets clock. Window retired.",
-  "m3_v093_n": 13,
-  "m3_v093_win_rate": 0.462,
-  "m3_v093_pf": 0.349,
-  "m3_v093_net_pnl": -1506.99,
-  "m3_v093_gross_profit": 807.59,
-  "m3_v093_gross_loss": 2314.58,
-  "m3_v093_expectancy": -115.92,
+  "m3_v093_n": 19,
+  "m3_v093_win_rate": 0.474,
+  "m3_v093_pf": 0.480,
+  "m3_v093_net_pnl": -1470.21,
+  "m3_v093_gross_profit": 1356.28,
+  "m3_v093_gross_loss": 2826.49,
+  "m3_v093_expectancy": -77.38,
   "m3_v093_max_single_loss": -736.97,
   "m3_v093_max_single_loss_ticker": "MRNA (id 281, stop_loss Oct 16)",
   "m3_v093_oct16_batch_net": -1411.88,
+  "m3_v093_oct26_batch_net": 36.78,
+  "m3_v093_oct26_entry_rank_mean": 51.0,
+  "m3_v093_oct26_entry_rank_note": "51.0 unhealthy (target >= 85). Model entering near-median predictions not top-decile. Consistent with n=6 small sample, but watch if persists.",
   "m3_v093_open": 0,
   "m3_v093_open_tickers": [],
   "m3_v093_exit_distribution": {
-   "trailing_stop": 2,
-   "session_close": 8,
-   "stop_loss": 3,
+   "trailing_stop": 3,
+   "session_close": 12,
+   "stop_loss": 4,
    "integrity_broker_reconcile": 0
   },
   "m3_v093_trades": [
@@ -220,6 +223,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H34",
+   "hypothesis": "Diagnostic direction+IC gate fix: /diagnostics signal_gate_analysis.would_trade was returning True for bearish signals (negative lgbm_pred_return) because _sizing_entry_gate_open uses abs(pred_return) for Phase 5 symmetry. _act_on_signal correctly blocks direction<0 in execution, but the diagnostic was misleading the operator into thinking bearish signals were actionable. Example false positives 2026-10-26: GLW pred=-0.004248 and CIEN pred=-0.002982 both showed would_trade=True. Also: IC-blocked tickers were not per-row labelled in blocked_by. Fix: add passes_direction=pred_ret>0 and ic_block checks to gate_analysis loop; update signals_passing count to use would_trade not passes_both_gates.",
+   "status": "implemented — PR #TBD open (Oct 27, FREEZE-EXEMPT)",
+   "added": "2026-10-27",
+   "added_by": "nightly desk — Oct 26 diagnostics showed 2/3 would_trade signals were bearish false positives",
+   "pr_branch": "feat/rnd-H34-diagnostic-direction-gate",
+   "freeze_exempt": true,
+   "freeze_exempt_reason": "diagnostics only — zero change to execution path, sizing, or risk controls",
+   "priority": "HIGH — diagnostic accuracy; operator blindspot on bearish signals",
+   "pm_priority": -8
+  },
   {
    "id": "H33",
    "hypothesis": "Post-stop-loss session entry pause: after a stop_loss exit, pause new entries for the remainder of that session. Premise: a stop-loss in the morning signals adverse conditions for the full day. Motivated by Oct 16 bad batch (MRNA -$736.97 stop_loss at 13:57; other positions already open). NOTE: H33 would NOT have helped Oct 16 (all 6 entries fired at 13:40-13:42 before any stop triggered).",
@@ -667,6 +682,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-27",
+   "hypothesis_id": "H34",
+   "result": "NIGHTLY REVIEW + SHIP — H34 IMPLEMENTED (FREEZE-EXEMPT). Bot resumed Oct 26 after 6 silent days: 6 new trades (IDs 287-292), net +$36.78. M3 updated: n=19 (Oct 8-26), WR=47.4% (9W/10L), PF=0.480, net -$1470.21, expectancy -$77.38/trade (noise, need n=100). Oct 26 entry_rank_mean=51.0 UNHEALTHY (target>=85) — model entering near-median predictions. Kelly window: n=6/10 in window, ~4 trades until activation; H24/H25 guards (PRs #51-57) still unmerged = structural risk. H34 fix: /diagnostics would_trade was True for bearish GLW (pred=-0.004248) and CIEN (pred=-0.002982) — diagnostic false positives. Added direction gate (pred_ret>0) + IC-blocked label to gate_analysis loop; signals_passing now counts would_trade not passes_both_gates. 12 unit tests pass. PR opened. Integrity ALL GREEN Oct 26 22:25 UTC. Watchdog OK. Railway worker week 21 still blocked.",
+   "files_changed": [
+    "main.py",
+    "tests/unit/test_h34_diagnostic_direction_gate.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-26",
    "hypothesis_id": "W44_PROGRAM_REVIEW",

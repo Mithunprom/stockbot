@@ -1175,6 +1175,8 @@ async def diagnostics() -> JSONResponse:
         probation_active = summary.get("kelly_mode") == "probation"
         probe_eligible = set(summary.get("tickers_probe_eligible", []))
         probe_budget_left = summary.get("probation_entries_today", 0) < 1
+        # H34: pre-build IC block set for O(1) lookup inside the loop.
+        ic_blocked_set = set(summary.get("tickers_ic_blocked", []))
 
         gate_analysis: list[dict[str, Any]] = []
         for sig in raw_signals[:10]:
@@ -1188,6 +1190,15 @@ async def diagnostics() -> JSONResponse:
             probation_block = probation_active and not (
                 probe_budget_left and sig.ticker in probe_eligible
             )
+            # H34: direction gate — Phase 4/5 is long-only; negative pred_return
+            # is a bearish signal that _act_on_signal blocks at direction < 0.
+            # _sizing_entry_gate_open intentionally uses abs() for Phase 5
+            # symmetry, which causes false would_trade=true on bearish signals.
+            # The diagnostic must mirror the actual execution path.
+            passes_direction = pred_ret > 0
+            # H34: IC block — tickers with chronically negative IC are blocked
+            # by _is_ic_blocked() inside _act_on_signal. Surface it here.
+            ic_block = sig.ticker in ic_blocked_set
 
             gate_analysis.append({
                 "ticker": sig.ticker,
@@ -1197,7 +1208,13 @@ async def diagnostics() -> JSONResponse:
                 "passes_pred_return_gate": passes_pred,
                 "passes_dir_prob_gate": passes_dir,
                 "passes_both_gates": passes_both,
-                "would_trade": passes_both and not cooldown_active and not probation_block,
+                "would_trade": (
+                    passes_both
+                    and not cooldown_active
+                    and not probation_block
+                    and passes_direction
+                    and not ic_block
+                ),
                 "blocked_by": (
                     []
                     + (["pred_return_too_small"] if not passes_pred else [])
@@ -1205,11 +1222,13 @@ async def diagnostics() -> JSONResponse:
                     + (["ticker_cooldown"] if cooldown_active else [])
                     + (["kelly_probation"] if probation_block else [])
                     + (["managed_heat_too_high"] if summary.get("managed_heat", 0) >= 0.80 else [])
+                    + (["bearish_direction"] if not passes_direction else [])
+                    + (["ic_blocked"] if ic_block else [])
                 ),
             })
 
-        # Count how many signals pass vs fail
-        n_pass = sum(1 for g in gate_analysis if g["passes_both_gates"])
+        # Count how many signals would actually trade (all gates including direction + IC)
+        n_pass = sum(1 for g in gate_analysis if g["would_trade"])
         n_fail = len(gate_analysis) - n_pass
 
         return {
