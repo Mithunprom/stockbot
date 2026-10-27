@@ -301,6 +301,45 @@ KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before actin
 KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
 
+# ── Kelly resume ramp (2026-10-22) ───────────────────────────────────────────
+#
+# `inactive` used to apply NO throttle at all, which made it the most
+# permissive mode in the governor despite having the LEAST information. That
+# inversion cost $2,147.89 in one session.
+#
+# Sequence: the hard block stopped entries, the 10-day window drained, the
+# sample fell under KELLY_MIN_TRADES, `_kelly_mode()` returned "inactive" — and
+# on 2026-10-16 the loop opened all 6 slots at ~$12.7k each (≈75% heat) on the
+# day it knew least about its own edge. Five of six lost: MRNA −$737,
+# STX −$520, NOW −$395, AMD −$323, HPE −$279, UNH +$107. Kelly then measured
+# −0.651 and re-blocked. The cycle is block → drain → inactive → full risk →
+# large loss → block, and it will repeat every time the block self-drains.
+#
+# CLAUDE.md states the rule this violates: "The bot should earn the right to
+# larger positions over time through demonstrated performance, not assume
+# them." `inactive` assumed them.
+#
+# So while the sample rebuilds, entries are probe-sized (KELLY_PROBATION_NOTIONAL)
+# and the daily count ramps with the evidence: one extra entry per
+# KELLY_RAMP_OUTCOMES_PER_SLOT closed outcomes, floor 1, ceiling
+# SIZING_MAX_TRADES_PER_DAY. Strictly tighter than today at every n, and it can
+# never be looser — see `_kelly_ramp_entry_cap`.
+#
+# WHY A FLOOR OF 1, AND WHY 2 OUTCOMES PER SLOT — DEADLOCK SAFETY. This
+# subsystem has frozen the bot twice (2026-05-27, 2026-06-26) and must never do
+# so again. The ramp has to let the sample GROW to KELLY_MIN_TRADES on its own,
+# against a window that simultaneously ages outcomes out after
+# KELLY_LOOKBACK_DAYS. A flat 1/day would add ~1 outcome/session against a
+# 10-day window that is also draining ~1/session once steady — it could plateau
+# just under the bar and never measure. At n//2 the allowance accelerates:
+# caps 1,1,1,1,2,3,4 give a cumulative sample of 1,2,3,4,6,9,13, so the
+# governor becomes measurable on the SEVENTH session — inside the 10-day
+# window, meaning the earliest outcomes have not yet aged out. The floor of 1
+# guarantees forward progress even at n=0, so the sample can always reach a
+# measurable state with no human action and no change to the hard block.
+# Pinned by test_the_sample_can_reach_a_measurable_state_against_the_draining_window.
+KELLY_RAMP_OUTCOMES_PER_SLOT = 2   # closed outcomes needed per extra daily entry
+
 # Hard entry block on a MEASURED negative edge (2026-09-15).
 #
 # The gap this closes: on 2026-09-15 production reported kelly_fraction
@@ -1353,6 +1392,13 @@ class SignalLoop:
             "kelly_entries_hard_blocked": self._kelly_entries_blocked(),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
+            # Resume ramp: entries permitted today while the sample rebuilds,
+            # null when the ramp does not apply. `inactive` used to mean no
+            # throttle at all, which is how 2026-10-16 opened 6 full-size slots
+            # on an unmeasured edge. Watch this against entries_today after any
+            # hard block drains.
+            "kelly_ramp_entry_cap": self._kelly_ramp_entry_cap(),
+            "entries_today": self._sizing_n_trades_today,
             # Train/serve skew watch. entry_rank_mean is the average percentile
             # of filled entries within the model's own cross-section. Healthy is
             # >= 85; the v0.6.x window sat near 46 while every other check
@@ -2136,6 +2182,33 @@ class SignalLoop:
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
 
+    def _kelly_ramp_entry_cap(self) -> int | None:
+        """Daily entry cap while the Kelly sample is rebuilding, else None.
+
+        Returns None whenever the governor is NOT in `inactive` — in `normal`
+        and `probation` the existing gates already apply, and this must not
+        touch them.
+
+        The cap is `max(1, n // KELLY_RAMP_OUTCOMES_PER_SLOT)` bounded by
+        SIZING_MAX_TRADES_PER_DAY. See KELLY_RAMP_OUTCOMES_PER_SLOT for the
+        incident and the deadlock reasoning.
+
+        MONOTONE AND NEVER LOOSER THAN TODAY: the result is bounded above by
+        SIZING_MAX_TRADES_PER_DAY, which is the cap Gate 1 already enforces, so
+        this can only ever subtract entries. At n >= 2 * SIZING_MAX_TRADES_PER_DAY
+        it would equal the existing cap, but `inactive` ends at
+        KELLY_MIN_TRADES (10) long before that, so in practice it is always
+        strictly tighter.
+
+        Returns:
+            Max entries permitted today, or None if the ramp does not apply.
+        """
+        if self._kelly_mode() != "inactive":
+            return None
+        n = len(self._sizing_recent_outcomes)
+        cap = max(1, n // KELLY_RAMP_OUTCOMES_PER_SLOT)
+        return min(cap, SIZING_MAX_TRADES_PER_DAY)
+
     def _prune_kelly_window(self) -> None:
         """Drop outcomes older than the lookback window, or before the epoch."""
         from datetime import timedelta
@@ -2308,6 +2381,27 @@ class SignalLoop:
                 threshold=KELLY_HARD_BLOCK_THRESHOLD,
                 n_trades=len(self._sizing_recent_outcomes),
                 lookback_days=KELLY_LOOKBACK_DAYS,
+            )
+            return False
+
+        # Gate 2c: Kelly resume ramp — the sample is rebuilding, so entries are
+        # rationed by how much evidence exists rather than being unrestricted.
+        # Deliberately AFTER the hard block (2b) so the block keeps precedence,
+        # and before probation (3) which handles the n >= KELLY_MIN_TRADES case.
+        #
+        # Counts `_sizing_n_trades_today`, the same counter Gate 1 uses, rather
+        # than adding a parallel tally: the ramp is just a tighter daily cap, and
+        # reusing the existing counter means no new state and no new daily-reset
+        # path to forget. (`_probation_entries_today` stays specific to probes.)
+        ramp_cap = self._kelly_ramp_entry_cap()
+        if ramp_cap is not None and self._sizing_n_trades_today >= ramp_cap:
+            logger.info(
+                "entry_blocked_kelly_ramp",
+                ticker=ticker,
+                entries_today=self._sizing_n_trades_today,
+                ramp_cap=ramp_cap,
+                n_outcomes=len(self._sizing_recent_outcomes),
+                needed_for_normal=KELLY_MIN_TRADES,
             )
             return False
 
@@ -3020,14 +3114,26 @@ class SignalLoop:
                         scalar=_macro.market_regime_scalar,
                     )
 
-                # Kelly probation: probe-sized entry to refresh the window
-                if self._kelly_mode() == "probation":
+                # Kelly probation OR resume ramp: probe-sized entry to refresh
+                # the window.
+                #
+                # `inactive` is included as of 2026-10-22. Rationing the COUNT
+                # alone was not enough: on 2026-10-16 each of the six entries
+                # was ~$12.7k, so even a 4-entry cap would have risked ~$50k on
+                # an unmeasured edge. Capping notional too makes the resume
+                # genuinely probe-like — ~$4.8k deployed at n=8 instead of
+                # ~$76k, a ~94% reduction — which is what "earn the right to
+                # larger positions" has to mean in code.
+                _kmode = self._kelly_mode()
+                if _kmode in ("probation", "inactive"):
                     notional = min(notional, KELLY_PROBATION_NOTIONAL)
                     logger.info(
-                        "kelly_probation_probe",
+                        "kelly_probe_sized_entry",
                         ticker=ticker,
+                        mode=_kmode,
                         notional=round(notional, 2),
                         kelly=round(self._kelly_fraction, 4),
+                        n_outcomes=len(self._sizing_recent_outcomes),
                     )
 
                 qty = round(notional / max(price, 0.01), 2)

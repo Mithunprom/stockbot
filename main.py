@@ -842,7 +842,23 @@ def _load_ffsa_features() -> list[str]:
 # resume — only the notification is suppressed. Also records WHY the volume
 # spiked: the watchdog's 4h dedupe is in-memory, so six deploys in two days kept
 # re-sending identical alerts.
-APP_VERSION = "0.9.6"
+# v0.9.7 — two fixes for the resume-at-full-size failure, which has now
+# happened twice. Kelly's window drains, `_kelly_mode()` returns "inactive",
+# and `inactive` applied NO throttle: the bot opened all 6 slots at full size on
+# the day it had the least information about its own edge. 2026-10-16 that cost
+# $2,147.89; 2026-10-26 the same pattern (6 entries, ~$76k notional) returned
+# +$36.78 — same unmanaged risk, different coin flip.
+#   * Resume ramp: while `inactive`, daily entries cap at max(1, n//2) bounded
+#     by SIZING_MAX_TRADES_PER_DAY, AND notional caps to KELLY_PROBATION_NOTIONAL.
+#     At n=8 that is ~$4.8k deployed instead of ~$76k. Reaches a measurable
+#     sample in 7 sessions, inside the 10-day window, so it cannot deadlock.
+#   * Zero-weight inference skip: Transformer and TCN no longer run at weight 0,
+#     clearing the transformer_inference p95=347ms latency escalation against a
+#     200ms threshold. ensemble_signal is bit-identical.
+# The hard block is UNCHANGED and still takes precedence. CLAUDE.md: "the bot
+# should earn the right to larger positions through demonstrated performance,
+# not assume them" — `inactive` was assuming them.
+APP_VERSION = "0.9.7"
 
 app = FastAPI(
     title="StockBot API",
@@ -1228,6 +1244,10 @@ async def diagnostics() -> JSONResponse:
             "kelly_entries_hard_blocked": summary.get("kelly_entries_hard_blocked"),
             "kelly_lookback_days": summary.get("kelly_lookback_days"),
             "probation_entries_today": summary.get("probation_entries_today", 0),
+            # Resume ramp (v0.9.7). null = ramp not applying. Compare against
+            # entries_today to see the throttle working after a block drains.
+            "kelly_ramp_entry_cap": summary.get("kelly_ramp_entry_cap"),
+            "entries_today": summary.get("entries_today", 0),
             # Train/serve skew watch — the percentile each filled entry occupied
             # in the model's own cross-section. Healthy >= 85; the v0.6.x window
             # averaged ~46 while every other check here stayed green, and that
