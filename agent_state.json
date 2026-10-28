@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 20). v0.9.6 deployed (last commit W43 Oct 19 — zero commits W44, first clean governance week in 9). M3 v0.9.3+ n=13 STALLED (Oct 8–16): 6W/7L, PF=0.349 (noise), net −$1,506.99. ZERO new trades Oct 19–26 (6 trading days) — Kelly probation suspected from Oct 16 losses hitting unguarded Kelly window at activation (H24/H25 PRs #51–57 unmerged). EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl CB halts. Watchdog OK light_run (2/7 checks). Integrity last seen clean Oct 15. Railway worker week 20.",
- "last_iteration_date": "2026-10-26",
- "active_hypothesis": "H29 Kelly activation cliff diagnostic + time-bomb test repair (PR #89, Oct 16). FREEZE-EXEMPT. (1) Added kelly_trades_until_active to /diagnostics — exposes how many trades until Kelly activates from inactive (currently 2). (2) Fixed time-bomb in test_record_forced_exit.py: hardcoded exit_time Oct 5 became 11 days old Oct 16, triggering _prune_kelly_window to remove the just-appended outcome. Used relative timestamp datetime.now()-2d. 5 new unit tests. Suite: 28 failed / 411 passed (fixed 1 real failure, added 6 passing). Context: v0.9.4 (Oct 14, direct push) deployed comprehensive H28 fix (_session_boundary_crossed: 15:55 ET flat + catch-up arm for next-tick carried positions). PR #86 closed by owner (superseded by v0.9.4 direct push). M3 Oct 15: 4 new trades (SNOW +$290, MU +$156, STX +$156, SKYD +$75) all session_close at 15:55 ET — v0.9.4 confirmed working. Kelly 2 trades from activation (n=8 → need 10). H24/H25 guards (PRs #51-57) critical before Kelly activates.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 21). v0.9.7 deployed Oct 26 (owner direct push — inactive Kelly ramp fix). 9 new trades Oct 26–27 (drought ended). M3 v0.9.3+ n=22 (Oct 8–27): 12W/10L, PF=0.486 (noise), net −$1,453.12. Kelly INACTIVE n=9 — 1 TRADE FROM ACTIVATION. H24/H25 guards (PRs #51–57) STILL unmerged — activation without guards is the Aug 31/Oct 16 structural replay risk. v0.9.7 Oct 26 ramp: inactive no longer means full size (probe-sized ramp, max(1, n//2)/day). H30 (tonight, PR pending): property test closing v0.9.7 stated notional-cap gap. EMAIL_ALERTS_ENABLED=false. Watchdog OK light_run (2/7). entry_rank_mean=59.6 (n=3, too few for health flag). Railway worker week 21.",
+ "last_iteration_date": "2026-10-27",
+ "active_hypothesis": "H30 Kelly inactive notional cap property test (Oct 27, PR pending). FREEZE-EXEMPT — tests only. Closes the gap stated explicitly in the v0.9.7 commit: test_entries_are_probe_sized_while_inactive only checks that KELLY_PROBATION_NOTIONAL appears in source text. An assignment (notional = KELLY_PROBATION_NOTIONAL) also passes that check but inflates any sub-probe notional by up to 50% (e.g. $800 → $1200). New test test_inactive_notional_cap_is_a_ceiling_not_a_floor: (1) asserts the cap expression structurally uses min(), not bare assignment; (2) verifies the directional property that min() is a ceiling (sub-probe inputs are preserved, above-probe inputs are reduced). 1 new test. Suite: 5 failed / 500 passed (same pre-existing failures, +1 new passing). Context: v0.9.7 deployed Oct 26 — Kelly inactive ramp fix. Kelly n=9, 1 trade from activation. H24/H25 (PRs #51–57) still unmerged — merge before Kelly activates.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,11 +29,11 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Oct 26 12:23 UTC (v0.9.6, light_run). 2 checks: loop_tick_fresh OK (last tick 0.0 min ago), tick_errors OK (lifetime 0). last_exit_at null (last known exits Oct 16 session_close batch — 0 new trades Oct 19–26, 6 trading days). 0 open positions. Pre-market at snapshot time. NOTE: watchdog running light_run mode — 2 checks vs full 7. Kelly fraction, probation state, and n_trades_in_window NOT surfaced in snapshot.",
+  "watchdog_status": "OK Oct 27 22:10 UTC (v0.9.7, light_run). 2 checks: loop_tick_fresh OK (last tick 0.0 min ago), tick_errors OK (lifetime 0). last_exit_at 2026-10-27T19:55:28 UTC (session_close exits Oct 27 confirmed). 0 open positions. 9 new trades Oct 26–27 (drought ended). NOTE: watchdog running light_run mode — 2 checks vs full 7.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
-  "deployed_version": "0.9.6",
+  "deployed_version": "0.9.7",
   "m3_v080_era_n": 27,
   "m3_v080_era_win_rate": 0.519,
   "m3_v080_era_pf": 4.62,
@@ -51,22 +51,24 @@
    "pf": 1.99
   },
   "m3_v080_era_note": "M3 window Sep 23-Oct 7 RETIRED. n=27 closed (entries Sep 29-Oct 7; zero trades Sep 22-28 due to rs_vwap_dev bug). 22/27 exits (81%) were integrity_broker_reconcile — exit pipeline bug (watchdog zombie check compared bars_held vs SIZING_MAX_HOLD_BARS=30 in profit-target mode; positions force-sold at ~90 bars, not strategy exits). Fixed in v0.9.1 Oct 6. Genuine strategy exits: n=5 (WDC stop_loss −$513, CVX take_profit +$182, LITE take_profit +$968 [overnight carry], PLTR trailing_stop −$11, WFC session_close −$54), net +$572, PF=1.99. Full-window PF=4.62 is contaminated. Not strategy evidence. v0.9.3 (Oct 8) resets clock. Window retired.",
-  "m3_v093_n": 13,
-  "m3_v093_win_rate": 0.462,
-  "m3_v093_pf": 0.349,
-  "m3_v093_net_pnl": -1506.99,
-  "m3_v093_gross_profit": 807.59,
-  "m3_v093_gross_loss": 2314.58,
-  "m3_v093_expectancy": -115.92,
+  "m3_v093_n": 22,
+  "m3_v093_win_rate": 0.545,
+  "m3_v093_pf": 0.486,
+  "m3_v093_net_pnl": -1453.12,
+  "m3_v093_gross_profit": 1373.37,
+  "m3_v093_gross_loss": 2826.49,
+  "m3_v093_expectancy": -66.05,
   "m3_v093_max_single_loss": -736.97,
   "m3_v093_max_single_loss_ticker": "MRNA (id 281, stop_loss Oct 16)",
   "m3_v093_oct16_batch_net": -1411.88,
+  "m3_v093_oct26_batch_net": 36.78,
+  "m3_v093_oct27_batch_net": 17.09,
   "m3_v093_open": 0,
   "m3_v093_open_tickers": [],
   "m3_v093_exit_distribution": {
-   "trailing_stop": 2,
-   "session_close": 8,
-   "stop_loss": 3,
+   "trailing_stop": 3,
+   "session_close": 15,
+   "stop_loss": 4,
    "integrity_broker_reconcile": 0
   },
   "m3_v093_trades": [
@@ -115,9 +117,72 @@
     "exit_reason": "session_close",
     "pnl_usd": 75.19,
     "note": "v0.9.4 session_close at 15:55 ET confirmed"
+   },
+   {
+    "id": 287,
+    "ticker": "SNOW",
+    "exit_reason": "session_close",
+    "pnl_usd": 301.98,
+    "note": "v0.9.6 Oct 26 — Kelly inactive, unguarded full size"
+   },
+   {
+    "id": 288,
+    "ticker": "UNH",
+    "exit_reason": "trailing_stop",
+    "pnl_usd": -180.32,
+    "note": "v0.9.6 Oct 26 — Kelly inactive, unguarded full size"
+   },
+   {
+    "id": 289,
+    "ticker": "SMCI",
+    "exit_reason": "session_close",
+    "pnl_usd": -54.73,
+    "note": "v0.9.6 Oct 26 — Kelly inactive, unguarded full size"
+   },
+   {
+    "id": 290,
+    "ticker": "MRK",
+    "exit_reason": "stop_loss",
+    "pnl_usd": -276.86,
+    "note": "v0.9.6 Oct 26 — Kelly inactive, unguarded full size"
+   },
+   {
+    "id": 291,
+    "ticker": "MSTR",
+    "exit_reason": "session_close",
+    "pnl_usd": 135.95,
+    "note": "v0.9.6 Oct 26 — Kelly inactive, unguarded full size"
+   },
+   {
+    "id": 292,
+    "ticker": "AMD",
+    "exit_reason": "session_close",
+    "pnl_usd": 110.76,
+    "note": "v0.9.6 Oct 26 — Kelly inactive, unguarded full size"
+   },
+   {
+    "id": 293,
+    "ticker": "LRCX",
+    "exit_reason": "session_close",
+    "pnl_usd": 8.11,
+    "note": "v0.9.7 Oct 27 — Kelly ramp active (n=6→9, probe-sized ~$1200)"
+   },
+   {
+    "id": 294,
+    "ticker": "PLTR",
+    "exit_reason": "session_close",
+    "pnl_usd": 8.48,
+    "note": "v0.9.7 Oct 27 — Kelly ramp active (n=6→9, probe-sized ~$1200)"
+   },
+   {
+    "id": 295,
+    "ticker": "MS",
+    "exit_reason": "session_close",
+    "pnl_usd": 0.50,
+    "note": "v0.9.7 Oct 27 — Kelly ramp active (n=6→9, probe-sized ~$1200)"
    }
   ],
-  "m3_v093_note": "M3 window Oct 8 2026 (v0.9.3–v0.9.6: LGBM 100% ensemble). n=13 closed (Oct 8-16). PF=0.349 (NOISE n<30), WR=46.2% (6W/7L), net -$1506.99, gross_profit=$807.59, gross_loss=$2314.58, expectancy=-$115.92/trade. ZERO integrity_broker_reconcile exits. Oct 16: 6-entry batch at open (MRNA/HPE/STX/AMD/NOW/UNH), 5 losses, net -$1411.88. MRNA worst: -$736.97 stop_loss 17-min hold. IC fill job dead Oct 8-16 (v0.9.5 fixed Oct 16): entries traded without IC gate accumulating. Clock: Oct 8. Gate: n>=100 at PF>=1.2. Kelly: likely active/probation post-Oct 16 (n~14 in window; H24/H25 guards unmerged — CRITICAL).",
+  "m3_v093_note": "M3 window Oct 8 2026 (v0.9.3–v0.9.7: LGBM 100% ensemble). n=22 closed (Oct 8–27). PF=0.486 (NOISE n<30), WR=54.5% (12W/10L), net -$1453.12, gross_profit=$1373.37, gross_loss=$2826.49, expectancy=-$66.05/trade. ZERO integrity_broker_reconcile exits. Oct 16: 6-entry batch (MRNA/HPE/STX/AMD/NOW/UNH), 5 losses, net -$1411.88. MRNA worst: -$736.97 stop_loss 17-min hold. Oct 26: 6-entry batch (v0.9.6, Kelly inactive unguarded), net +$36.78 — lucky coin flip on same structural risk. Oct 27: 3 ramp-sized entries (v0.9.7, ~$1200 probe), net +$17.09. Clock: Oct 8. Gate: n>=100 at PF>=1.2. Kelly: n=9 inactive (1 trade from activation; H24/H25 guards unmerged — CRITICAL). entry_rank_mean=59.6 (n=3, too few for health flag).",
   "v060_note": "max_hold 390→30 (matches LightGBM FORWARD_N=15 training horizon). Research (horizon_sweep_2026-07-29.md): IC@15=0.169, IC@30=0.124, IC@390=0.004 (edge gone). Backtest OOS Jul 13-27: PF@30=4.55/win=77.3% vs PF@390=0.54/win=40.4%. Replicated on Jul 1-10 holdout. MAX_HOLD_EXTENSIONS 2→0 (30×3=90 bars hits IC=0.06 region, never validated). SIZING_STAGNATION_BARS 390→30. SIZING_REVERSAL_BARS(45) now exceeds max_hold — signal_reversal exits disabled. 224 tests. STRATEGY CHANGE — M2 clock resets.",
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
@@ -232,6 +297,17 @@
    "priority": "MEDIUM — freeze classification required; do not merge until n=100 unless owner classifies freeze-exempt",
    "pm_priority": -6,
    "pm_flag": "REACTIVE HYPOTHESIS: motivated by one bad day (Oct 16). Per governance, a losing session is first a measurement question: was Oct 16 a macro down day? Was IC gate dead (confirmed yes, v0.9.5 fixed)? Backtest required before claiming edge. Do not deploy based on Oct 16 observation alone."
+  },
+  {
+   "id": "H30",
+   "hypothesis": "Property test: Kelly inactive notional cap is a ceiling not a floor. Closes the gap stated in the v0.9.7 commit: test_entries_are_probe_sized_while_inactive only checks source text (that KELLY_PROBATION_NOTIONAL appears in _act_on_signal). An assignment `notional = KELLY_PROBATION_NOTIONAL` also passes that check but inflates a sub-probe notional (e.g. $800 → $1200, a 50% increase) on exactly the day the bot has least information about its edge. New test asserts: (1) the cap expression is structurally `min(...)`, not bare assignment; (2) sub-probe inputs are preserved by min(); (3) above-probe inputs are reduced to the cap. Test: test_inactive_notional_cap_is_a_ceiling_not_a_floor in test_kelly_resume_ramp.py.",
+   "status": "implemented — PR pending (Oct 27)",
+   "added": "2026-10-27",
+   "added_by": "nightly desk — v0.9.7 commit review, stated gap",
+   "pr_branch": "feat/rnd-H30-inactive-notional-cap-property-test",
+   "pr_state": "OPEN — FREEZE-EXEMPT: tests only, no change to live trade execution.",
+   "priority": "MEDIUM — closes stated v0.9.7 gap; freeze-exempt",
+   "pm_priority": -7
   },
   {
    "id": "H29",
@@ -667,6 +743,15 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-27",
+   "hypothesis_id": "H30",
+   "result": "NIGHTLY REVIEW + SHIP — v0.9.7 deployed Oct 26 (owner direct push — inactive Kelly ramp fix). 9 new trades Oct 26–27 after 6-day drought. Oct 26 (v0.9.6, unguarded): 6 entries net +$36.78 (same structural risk as Oct 16 — different coin flip). Oct 27 (v0.9.7, ramped): 3 probe-sized entries (~$1200 each) net +$17.09. M3 cumulative n=22: PF=0.486 (noise), WR=54.5% (12W/10L), net -$1453.12. Kelly: n=9 inactive, 1 trade from activation — H24/H25 guards (PRs #51–57) STILL unmerged. entry_rank_mean=59.6 (n=3 insufficient for health flag). H30 IMPLEMENTED: property test closing stated v0.9.7 notional-cap gap (test_inactive_notional_cap_is_a_ceiling_not_a_floor). 1 new test. Suite: 5 pre-existing failures / 500 passed (+1). PR pending. Railway snapshot read via GitHub live-snapshot branch (Railway direct blocked in cloud session). Watchdog OK Oct 27 22:10 UTC.",
+   "files_changed": [
+    "tests/unit/test_kelly_resume_ramp.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-26",
    "hypothesis_id": "W44_PROGRAM_REVIEW",
