@@ -183,6 +183,65 @@ def test_the_ramp_is_exposed_at_diagnostics():
     assert '"kelly_ramp_entry_cap": self._kelly_ramp_entry_cap()' in loop_src
 
 
+# ── Invariant: the notional cap is a ceiling, not a floor ────────────────────
+
+def test_inactive_notional_cap_is_a_ceiling_not_a_floor():
+    """Closes the gap stated in the v0.9.7 commit.
+
+    `test_entries_are_probe_sized_while_inactive` checks that the constant
+    KELLY_PROBATION_NOTIONAL appears inside _act_on_signal — but so does
+    `notional = KELLY_PROBATION_NOTIONAL`, an assignment that would inflate
+    any sub-probe notional (e.g. $800 → $1200, a 50% increase) on exactly
+    the day the bot has the least information about its own edge.
+
+    This test adds the missing property: the cap expression must be
+    structurally `min(...)` — a ceiling — not a bare assignment — a floor.
+
+    Failure signature: "Expected min(...), got 'KELLY_PROBATION_NOTIONAL'"
+    """
+    import re
+    import inspect
+
+    src = inspect.getsource(sl.SignalLoop._act_on_signal)
+
+    # Find every assignment that mentions KELLY_PROBATION_NOTIONAL and `notional`.
+    cap_lines = [
+        line.strip() for line in src.splitlines()
+        if "KELLY_PROBATION_NOTIONAL" in line
+        and re.search(r"\bnotional\s*=", line)
+        and not line.strip().startswith("#")
+    ]
+    assert cap_lines, (
+        "No notional cap assignment found in _act_on_signal — "
+        "the inactive notional guard may have been removed entirely."
+    )
+
+    for line in cap_lines:
+        # Split on the first `=` to get the RHS of the assignment.
+        rhs = line.split("=", 1)[1].strip()
+        assert rhs.startswith("min("), (
+            f"Notional cap is NOT min(): {line!r}\n"
+            "An assignment would inflate any sub-probe position "
+            "(e.g. $800 → $1200) — 50%+ more notional on an unmeasured edge."
+        )
+
+    # Directional sanity on the math itself: min() is a ceiling, not a floor.
+    # A sub-probe notional must be preserved, not rounded up.
+    for sub_probe in [100.0, 500.0, 800.0, 1199.99]:
+        result = min(sub_probe, sl.KELLY_PROBATION_NOTIONAL)
+        assert result == sub_probe, (
+            f"min() inflated sub-probe {sub_probe} → {result}; "
+            f"KELLY_PROBATION_NOTIONAL = {sl.KELLY_PROBATION_NOTIONAL}"
+        )
+
+    # An above-probe notional must be reduced to the cap.
+    for above_probe in [1200.01, 5_000.0, 12_700.0, 76_000.0]:
+        result = min(above_probe, sl.KELLY_PROBATION_NOTIONAL)
+        assert result == sl.KELLY_PROBATION_NOTIONAL, (
+            f"min() failed to cap {above_probe} → {result}"
+        )
+
+
 # ── H13: exits must be untouched ─────────────────────────────────────────────
 
 def test_the_ramp_is_an_entry_gate_only():
