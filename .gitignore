@@ -75,3 +75,4 @@ data/feature_archive/
 # Integrity-agent repair backups — runtime artifacts, one per repair run.
 # The durable audit trail is the agent's report + the ledger itself.
 /reports/integrity/repair_backup_*.json
+data/research_cache/
