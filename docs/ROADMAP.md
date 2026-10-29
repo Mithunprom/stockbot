@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-10-26 W44 program review (M3 n=13 UNCHANGED — 0 new trades Oct 19–26, 6 trading days silent; bot ticking (v0.9.6) but not entering — likely Kelly probation from Oct 16 losses without H24/H25 guards; zero commits W44 (first clean governance week in 9); EMAIL_ALERTS_ENABLED=false still active; Railway worker week 20).
+Last updated: 2026-10-29 nightly (TRADING RESUMED — v0.9.7 deployed Oct 26, Kelly active 0.5001, M3 n=28, PDT exhausted, entry rank 79.2 unhealthy; EMAIL_ALERTS_ENABLED=false still active; Railway worker week 21).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -18,7 +18,7 @@ second, new alpha queued.
 |-----------|--------|
 | Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 24 13:25 UTC. |
 | Kelly window verified sane | ✅ OK — kelly_seed_sanity confirmed; mode: normal, fraction=0.2349 |
-| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (19 consecutive weeks since Jul 15) |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (21 consecutive weeks since Jul 15) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
 Fill-corrected T30 PF = 0.864 (was 0.60 stored). Integrity criterion **MET** as of Jul 28.
@@ -41,7 +41,7 @@ failure case study, NOT strategy evidence.
 
 **M3 Sep 23–Oct 7 (v0.8.0 era) RETIRED:** n=27 closed; 22/27 exits (81%) were `integrity_broker_reconcile` — the watchdog zombie check compared bars_held against SIZING_MAX_HOLD_BARS=30 but profit-target mode holds full session; every position was force-sold at ~90 bars. Root cause diagnosed and fixed in v0.9.1 (Oct 6). Genuine strategy exits in window: n=5 (WDC stop_loss, CVX take_profit, LITE take_profit, PLTR trailing_stop, WFC session_close), net +$572, PF=1.99 — n too small to measure edge. Do not read full-window PF=4.62 as strategy performance.
 
-**M3 RESET Oct 8** (v0.9.3 strategy change: ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0). Owner-directed. M3 window: n=13 closed (Oct 8–16). PF=0.349, WR=46.2%, net −$1,506.99. n=0 open. NOTE: IC fill job was dead Oct 8–16 (fixed v0.9.5 Oct 16); entries during that period accumulated without IC quality gate. Zero integrity_broker_reconcile exits — exit pipeline clean. Oct 16: 6-entry batch at open, net −$1,411.88 (worst single session in M3).
+**M3 RESET Oct 8** (v0.9.3 strategy change: ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0). Owner-directed. M3 window: **n=28** closed (Oct 8–Oct 28). PF=0.553 (noise), WR=60.7% (17W/11L), net −$1,268.14. n=0 open. Oct 16 batch (IC gate dead + Kelly cliff, 6 entries, net −$2,148) contaminates; Oct 26-28 sub-window n=15 PF=1.46 WR=73.3% (post-fix). Zero integrity_broker_reconcile exits — exit pipeline clean. **TRADING RESUMED Oct 26** (v0.9.7 Kelly ramp fix). Kelly active at 0.5001. Entry rank 79.2 UNHEALTHY.
 
 ## Milestones
 
@@ -49,8 +49,8 @@ failure case study, NOT strategy evidence.
 |----|-----------|------|--------|
 | M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~73 days (Jul 10–Sep 21); watchdog OK; no outages or halts |
 | M2 | Measured edge (v0.6.0) | PF ≥ 1.2 at n ≥ 100 on v0.6.0 | 🏁 **RETIRED** — n=110, PF=0.857; was measuring broken feature serving pipeline. v0.7.0 deployed Sep 21. |
-| M3 | Measured edge (v0.9.3+) | PF ≥ 1.2 at n ≥ 100 | 🔴 n=13/100 — clock Oct 8. PF=0.349 (noise), net −$1,507, 0 integrity_broker_reconcile exits ✅. **STALLED: 0 new trades Oct 19–26 (Kelly probation suspected, H24/H25 unmerged).** |
-| M4 | H1/H5/H3/H2/H4 validation (data runs) | Walk-forward backtest standard | 🔴 BLOCKED — Railway worker not enabled. 15+ hypotheses total blocked. Week **20**. |
+| M3 | Measured edge (v0.9.3+) | PF ≥ 1.2 at n ≥ 100 | 🔴 n=28/100 — clock Oct 8. PF=0.553 (noise), net −$1,268, 0 integrity_broker_reconcile exits ✅. **RESUMED Oct 26 (Kelly active 0.5001). PDT exhausted. Entry rank 79.2 unhealthy.** |
+| M4 | H1/H5/H3/H2/H4 validation (data runs) | Walk-forward backtest standard | 🔴 BLOCKED — Railway worker not enabled. 15+ hypotheses total blocked. Week **21**. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M3 |
 | M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
