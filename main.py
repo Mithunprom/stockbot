@@ -858,7 +858,19 @@ def _load_ffsa_features() -> list[str]:
 # The hard block is UNCHANGED and still takes precedence. CLAUDE.md: "the bot
 # should earn the right to larger positions through demonstrated performance,
 # not assume them" — `inactive` was assuming them.
-APP_VERSION = "0.9.7"
+# v0.9.8 — probe size becomes a portfolio FRACTION and the size ramp becomes
+# continuous. Owner question on 2026-10-28: why was a $99k account buying $1,200
+# of AMD? Two real defects behind it. (1) KELLY_PROBATION_NOTIONAL was a
+# hardcoded $1,200 — 1.2% at $99k but 0.6% at $200k and 6% at $20k, a budget
+# whose meaning drifted with account size. Now 1.25% of portfolio with a $600
+# floor, which reproduces ~$1,238 at the current size. (2) Leaving `inactive`
+# was a 10x cliff: the 2026-10-28 session took four entries at ~$1,200 then
+# $3,949 and $6,045 once the sample crossed KELLY_MIN_TRADES mid-session. Size
+# now scales 1.25% -> 11.4% as n goes 0 -> 10, matching the entry-COUNT ramp
+# that already existed. `probation` stays flat (it HAS a sample and that sample
+# says non-positive). Bounded above by the per-slot notional, so it can only
+# ever subtract.
+APP_VERSION = "0.9.8"
 
 app = FastAPI(
     title="StockBot API",

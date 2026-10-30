@@ -298,7 +298,21 @@ DEFAULT_ATR_PCT = 0.001            # fallback when ATR unavailable (typical 1-mi
 # so the window keeps refreshing and size must be re-earned, never bricked.
 KELLY_LOOKBACK_DAYS = 10           # only trades closed in the last N days count
 KELLY_MIN_TRADES = 10              # need ≥N recent closed trades before acting
-KELLY_PROBATION_NOTIONAL = 1200.0  # probe size while Kelly ≤ 0
+# Probe size as a FRACTION OF PORTFOLIO, not a dollar amount.
+#
+# Was a hardcoded `KELLY_PROBATION_NOTIONAL = 1200.0`. At the 2026-10-28
+# portfolio of $99,074 that is 1.21%, which is roughly right — but the constant
+# does not scale: it would be 0.6% at $200k and 6% at $20k. A risk budget that
+# silently changes meaning with account size is a magic number, not a policy.
+# 1.25% reproduces the old behaviour at the current portfolio (~$1,238 vs
+# $1,200), so this is a refactor at today's size and a correction at any other.
+KELLY_PROBATION_NOTIONAL_FRAC = 0.0125   # 1.25% of portfolio per probe
+
+# Floor so a small account can still place a probe at all; `_act_on_signal`
+# already refuses anything under $500, and a probe below that would silently
+# stop the window refreshing and re-create the deadlock this governor exists to
+# avoid.
+KELLY_PROBATION_NOTIONAL_FLOOR = 600.0
 KELLY_PROBATION_MIN_TICKER_IC = 0.05  # probes only on tickers where signal works
 
 # ── Kelly resume ramp (2026-10-22) ───────────────────────────────────────────
@@ -2182,6 +2196,62 @@ class SignalLoop:
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
 
+    def _kelly_probe_notional(self) -> float:
+        """Probe notional in dollars, scaled to the current portfolio."""
+        pv = max(self._pm.portfolio_value, 0.0)
+        return max(pv * KELLY_PROBATION_NOTIONAL_FRAC,
+                   KELLY_PROBATION_NOTIONAL_FLOOR)
+
+    def _kelly_size_cap(self) -> float | None:
+        """Notional ceiling while the governor is not yet trusting itself.
+
+        Returns None in `normal` — the sizer's own output stands.
+
+        `probation` is FLAT at the probe size. The governor has a sample there
+        (n >= KELLY_MIN_TRADES) and that sample says the edge is non-positive,
+        so there is nothing to ramp toward; staying small is the whole point.
+
+        `inactive` RAMPS, which is the change made 2026-10-28. It previously
+        shared probation's flat probe cap, which produced a 10x cliff: the
+        2026-10-28 session opened four entries at ~$1,200 (1.2% of portfolio)
+        and then, the moment the sample crossed KELLY_MIN_TRADES mid-session,
+        jumped to $3,949 and $6,045 on the next two. The entry COUNT already
+        ramps smoothly (`_kelly_ramp_entry_cap`); size jumping in one step
+        contradicted that, and "earn the right to larger positions over time
+        through demonstrated performance" (CLAUDE.md) describes a gradient, not
+        a switch.
+
+        So notional scales linearly with the sample from the probe fraction to
+        the normal per-slot fraction as n goes 0 -> KELLY_MIN_TRADES. At the
+        2026-10-28 portfolio that is roughly $1,238 at n=0, $5,800 at n=5,
+        $11,300 at n=9, reaching full size exactly as the governor leaves
+        `inactive` — so there is no longer a discontinuity at the boundary.
+
+        CAN ONLY REDUCE RISK: the result is bounded above by the normal
+        per-slot notional (heat ceiling / slots), which is the ceiling already
+        in force, so this can only ever subtract. Verified across the whole
+        n range by test.
+
+        Returns:
+            Dollar ceiling for this entry, or None if no ceiling applies.
+        """
+        mode = self._kelly_mode()
+        if mode == "normal":
+            return None
+
+        probe = self._kelly_probe_notional()
+        if mode == "probation":
+            return probe
+
+        # inactive — ramp probe -> normal across the rebuilding sample.
+        pv = max(self._pm.portfolio_value, 0.0)
+        full = pv * PORTFOLIO_HEAT_CEILING / max(MAX_OPEN_POSITIONS, 1)
+        if full <= probe:
+            return probe
+        n = len(self._sizing_recent_outcomes)
+        frac = min(max(n / max(KELLY_MIN_TRADES, 1), 0.0), 1.0)
+        return min(probe + (full - probe) * frac, full)
+
     def _kelly_ramp_entry_cap(self) -> int | None:
         """Daily entry cap while the Kelly sample is rebuilding, else None.
 
@@ -3125,13 +3195,17 @@ class SignalLoop:
                 # ~$76k, a ~94% reduction — which is what "earn the right to
                 # larger positions" has to mean in code.
                 _kmode = self._kelly_mode()
-                if _kmode in ("probation", "inactive"):
-                    notional = min(notional, KELLY_PROBATION_NOTIONAL)
+                _cap = self._kelly_size_cap()
+                if _cap is not None:
+                    _before = notional
+                    notional = min(notional, _cap)
                     logger.info(
                         "kelly_probe_sized_entry",
                         ticker=ticker,
                         mode=_kmode,
                         notional=round(notional, 2),
+                        cap=round(_cap, 2),
+                        uncapped=round(_before, 2),
                         kelly=round(self._kelly_fraction, 4),
                         n_outcomes=len(self._sizing_recent_outcomes),
                     )

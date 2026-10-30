@@ -39,8 +39,13 @@ def _loop(n_outcomes: int, pnl_pct: float = 0.004, entries_today: int = 0):
     loop._sizing_n_trades_today = entries_today
     loop._kelly_fraction = 0.0
     loop._kelly_min_trades = sl.KELLY_MIN_TRADES
+    # `_kelly_size_cap` scales off the portfolio, so the stub needs a manager.
+    class _PM:
+        portfolio_value = 100_000.0
+    loop._pm = _PM()
     for name in ("_prune_kelly_window", "_kelly_mode", "_kelly_entries_blocked",
-                 "_kelly_ramp_entry_cap"):
+                 "_kelly_ramp_entry_cap", "_kelly_size_cap",
+                 "_kelly_probe_notional"):
         setattr(loop, name, getattr(sl.SignalLoop, name).__get__(loop))
     return loop
 
@@ -90,13 +95,21 @@ def test_entries_are_probe_sized_while_inactive():
 
     Each Oct-16 entry was ~$12.7k, so even a 4-entry cap would have risked
     ~$50k on an unmeasured edge. The notional cap is what makes the resume
-    probe-like: ~$4.8k deployed at n=8 instead of ~$76k.
-    """
-    import inspect
+    probe-like.
 
-    src = inspect.getsource(sl.SignalLoop._act_on_signal)
-    assert '_kmode in ("probation", "inactive")' in src
-    assert "KELLY_PROBATION_NOTIONAL" in src
+    Asserts BEHAVIOUR, not source text. The previous version matched the
+    strings `_kmode in ("probation", "inactive")` and
+    `KELLY_PROBATION_NOTIONAL`; both became misleading on 2026-10-28 when the
+    cap moved into `_kelly_size_cap()` and the constant became a fraction — and
+    the substring check would still have passed off a COMMENT mentioning the old
+    name. A source-text assertion that passes for the wrong reason is worse than
+    no assertion.
+    """
+    loop = _loop(n_outcomes=0)
+    cap = loop._kelly_size_cap()
+    assert cap is not None
+    # A probe is ~1.25% of portfolio, nowhere near the ~$12.5k per-slot size.
+    assert 500.0 < cap < 2_000.0
 
 
 # ── Invariant: never looser than before ──────────────────────────────────────
@@ -195,3 +208,127 @@ def test_the_ramp_is_an_entry_gate_only():
 
     gate_src = inspect.getsource(sl.SignalLoop._sizing_entry_gate_open)
     assert "_kelly_ramp_entry_cap" in gate_src
+
+
+# ── Size ramp: notional scales with evidence, no 10x cliff ───────────────────
+#
+# Added 2026-10-28 after the owner asked why a $99k account was buying $1,200 of
+# AMD. Two real defects behind that: the probe was a hardcoded $1,200 rather
+# than a share of the portfolio, and the step out of `inactive` was a 10x cliff
+# (four entries at ~$1,200, then $3,949 and $6,045 once the sample crossed
+# KELLY_MIN_TRADES mid-session).
+
+def _full_slot(pv: float = 100_000.0) -> float:
+    """The per-slot notional the normal path would allow."""
+    return pv * sl.PORTFOLIO_HEAT_CEILING / sl.MAX_OPEN_POSITIONS
+
+
+def test_probe_size_scales_with_the_portfolio():
+    """The old $1,200 constant meant 1.2% at $99k but 6% at $20k.
+
+    A risk budget whose meaning changes with account size is a magic number,
+    not a policy.
+    """
+    # Proportionality holds ABOVE the floor. The floor binds below
+    # KELLY_PROBATION_NOTIONAL_FLOOR / FRAC (~$48k), deliberately — that is the
+    # small-account guard, not a scaling bug, and asserting strict
+    # proportionality through it is what my first version of this test got
+    # wrong.
+    floor_pv = sl.KELLY_PROBATION_NOTIONAL_FLOOR / sl.KELLY_PROBATION_NOTIONAL_FRAC
+    small, large = _loop(n_outcomes=0), _loop(n_outcomes=0)
+    small._pm.portfolio_value = 100_000.0
+    large._pm.portfolio_value = 400_000.0
+    assert small._pm.portfolio_value > floor_pv
+    assert large._kelly_probe_notional() == pytest.approx(
+        4 * small._kelly_probe_notional())
+    for pv in (100_000.0, 250_000.0, 400_000.0):
+        loop = _loop(n_outcomes=0)
+        loop._pm.portfolio_value = pv
+        assert loop._kelly_probe_notional() / pv == pytest.approx(
+            sl.KELLY_PROBATION_NOTIONAL_FRAC)
+
+
+def test_probe_size_reproduces_the_old_behaviour_at_the_current_portfolio():
+    """At the 2026-10-28 portfolio this is a refactor, not a size change."""
+    loop = _loop(n_outcomes=0)
+    loop._pm.portfolio_value = 99_074.43
+    assert loop._kelly_probe_notional() == pytest.approx(1238.43, abs=1.0)
+
+
+def test_a_tiny_account_can_still_place_a_probe():
+    """Below the floor the probe would fall under the $500 entry minimum and
+    silently stop the window refreshing — re-creating the deadlock."""
+    loop = _loop(n_outcomes=0)
+    loop._pm.portfolio_value = 5_000.0
+    assert loop._kelly_probe_notional() >= 500.0
+
+
+def test_the_size_ramp_is_monotone_and_continuous():
+    """No cliff: each step up is a fraction of the span, not the whole of it."""
+    caps = []
+    for n in range(0, sl.KELLY_MIN_TRADES):
+        loop = _loop(n_outcomes=n)
+        caps.append(loop._kelly_size_cap())
+    assert caps == sorted(caps), "more evidence bought less size"
+    span = _full_slot() - caps[0]
+    biggest_step = max(b - a for a, b in zip(caps, caps[1:]))
+    assert biggest_step < 0.5 * span, (
+        f"largest single step {biggest_step:.0f} is a cliff, not a ramp")
+
+
+def test_the_ramp_reaches_full_size_exactly_as_inactive_ends():
+    """The discontinuity at the mode boundary is what this removes."""
+    loop = _loop(n_outcomes=sl.KELLY_MIN_TRADES - 1)
+    assert loop._kelly_mode() == "inactive"
+    near_full = loop._kelly_size_cap()
+    assert near_full == pytest.approx(_full_slot(), rel=0.12)
+
+
+@pytest.mark.parametrize("n", list(range(0, 14)))
+def test_the_size_cap_can_only_reduce_risk(n):
+    """The load-bearing invariant, asserted directly rather than implied.
+
+    Previously this property lived in the count bound plus a `min()` and was
+    never stated, so an edit replacing the `min()` with an assignment would have
+    passed the suite.
+    """
+    loop = _loop(n_outcomes=n)
+    cap = loop._kelly_size_cap()
+    if cap is not None:
+        assert cap <= _full_slot() + 1e-6, f"n={n} cap {cap} exceeds a full slot"
+
+
+def test_probation_stays_flat_and_does_not_ramp():
+    """probation has a sample and it says the edge is non-positive.
+
+    There is nothing to ramp toward, so size must stay at the probe — only
+    `inactive` (rebuilding, no verdict yet) earns size back.
+    """
+    loop = _loop(n_outcomes=sl.KELLY_MIN_TRADES)
+    loop._kelly_fraction = -0.05
+    assert loop._kelly_mode() == "probation"
+    assert loop._kelly_size_cap() == pytest.approx(loop._kelly_probe_notional())
+
+
+def test_normal_mode_has_no_size_cap():
+    """The sizer's own output stands once the edge is measured positive."""
+    loop = _loop(n_outcomes=sl.KELLY_MIN_TRADES)
+    loop._kelly_fraction = 0.25
+    assert loop._kelly_mode() == "normal"
+    assert loop._kelly_size_cap() is None
+
+
+def test_the_oct28_session_would_have_ramped_not_jumped():
+    """The session that prompted this: $1,200 x4 then $3,949, $6,045.
+
+    Under the ramp the first four entries already scale with the sample
+    instead of sitting flat at the probe floor.
+    """
+    pv = 99_074.43
+    caps = []
+    for n in (0, 1, 2, 3):
+        loop = _loop(n_outcomes=n)
+        loop._pm.portfolio_value = pv
+        caps.append(loop._kelly_size_cap())
+    assert caps[0] < caps[-1], "first four entries still flat — no ramp applied"
+    assert all(c <= pv * sl.PORTFOLIO_HEAT_CEILING / sl.MAX_OPEN_POSITIONS for c in caps)
