@@ -86,6 +86,7 @@ SIZING_REVERSAL_BARS = 45
 # book can actually deploy ~75% at full conviction instead of stalling at ~20%.
 SIZING_MAX_TRADES_PER_DAY = 6       # swing cadence: supports 6 position slots
 SIZING_TICKER_COOLDOWN_BARS = 60    # 1-hour cooldown after any exit
+SIZING_STOP_LOSS_COOLDOWN_BARS = 390  # 1 full trading day after a stop-out
 MAX_ENTRIES_PER_TICK = 2            # prevents same-tick multi-entry blowups (2026-05-22)
 
 # Health bar for where a filled entry sits in the model's own cross-sectional
@@ -3013,8 +3014,14 @@ class SignalLoop:
                     qty = pos.qty
                     notional = qty * price
                     self._pending_exit_reasons[ticker] = exit_reason
-                    # Start cooldown to prevent immediate re-entry churn
-                    self._ticker_cooldown[ticker] = SIZING_TICKER_COOLDOWN_BARS
+                    # Stop-outs get a full-day cooldown (H34); other exits get
+                    # the standard 1-hour cooldown to suppress re-entry churn.
+                    cooldown_bars = (
+                        SIZING_STOP_LOSS_COOLDOWN_BARS
+                        if exit_reason == "stop_loss"
+                        else SIZING_TICKER_COOLDOWN_BARS
+                    )
+                    self._ticker_cooldown[ticker] = cooldown_bars
                     daily_vol = self._daily_vol_for(ticker)
                     _sl, _ts, _tp = _atr_exits(daily_vol)
                     logger.info(
@@ -3022,7 +3029,7 @@ class SignalLoop:
                         ticker=ticker,
                         reason=exit_reason,
                         bars_held=self._bars_held.get(ticker, 0),
-                        cooldown_bars=SIZING_TICKER_COOLDOWN_BARS,
+                        cooldown_bars=cooldown_bars,
                         daily_vol=round(daily_vol, 4),
                         stop=round(_sl, 4),
                         trail=round(_ts, 4),
