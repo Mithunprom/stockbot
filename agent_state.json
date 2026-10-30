@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 21). v0.9.7 deployed Oct 26 (direct push — governance breach). TRADING RESUMED Oct 26–28 (15 new trades, n=28 total M3). Kelly now ACTIVE at 0.5001 (normal mode, Oct 27–28 after n crossed 10). Oct 26 v0.9.6 again fired 6 full-size entries at Kelly inactive — same structural defect as Oct 16 (different coin flip, net +$36.78 vs -$2,147). v0.9.7 fixes inactive=full-size: resume ramp (max(1,n//2) entries cap + notional cap KELLY_PROBATION_NOTIONAL). PDT budget exhausted (5/5 day trades). Entry rank mean 79.2 UNHEALTHY (threshold 85). EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl CB halts. H24/H25 guards (PRs #51–57) still unmerged. Railway worker week 21.",
- "last_iteration_date": "2026-10-29",
- "active_hypothesis": "NIGHTLY_LOG_OCT29. v0.9.7 deployed Oct 26 (direct push, governance breach). Kelly ACTIVE 0.5001 (normal mode). M3 n=28 (IDs 274-301): PF=0.553, WR=60.7% (17W/11L), net -$1,268.14. Sub-window Oct 26-28 n=15: PF=1.46, WR=73.3% (11W/4L), net +$238.85. PDT exhausted (5/5). Entry rank 79.2 unhealthy. H30 proposed: entry rank floor gate. H24/H25 (PRs #51-57) still unmerged.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 22). v0.9.7 live. M3 n=34 (IDs 274-307): PF=0.42 (noise), WR=58.8% (20W/14L), net -$2,272. Oct 29 bad day: 6 trades, 3W/3L, net -$1,004 (NOW stop_loss -$576 = 2nd NOW stop_loss in M3, total -$971). Kelly 0.1211 normal mode (down from 0.5001 — trades dragging). Entry rank 76.5 UNHEALTHY (was 79.2, declining). PDT 3/5 remaining (rolling week reset). 16 tickers IC-blocked. H34 (PR #102) shipped: 1-day stop-out cooldown. EMAIL_ALERTS_ENABLED=false — CB halts silenced. H24/H25 (PRs #51–57) still unmerged. Railway worker week 22.",
+ "last_iteration_date": "2026-10-30",
+ "active_hypothesis": "NIGHTLY_LOG_OCT30. Oct 29: 6 trades (IDs 302-307), 3W/3L, net -$1,004.24 (NOW stop_loss -$576.32 worst). M3 n=34: PF=0.42, WR=58.8% (20W/14L), net -$2,272.38, exp -$66.84/trade. Kelly 0.1211 normal mode. Entry rank 76.5 UNHEALTHY (threshold 85, n=15). PDT 3/5 remaining. H34 IMPLEMENTED (PR #102): SIZING_STOP_LOSS_COOLDOWN_BARS=390 (1 trading day) after stop-loss exits — plugs gap before IC gate arms. 14 new unit tests pass. H24/H25 (PRs #51-57) still unmerged.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -51,22 +51,25 @@
    "pf": 1.99
   },
   "m3_v080_era_note": "M3 window Sep 23-Oct 7 RETIRED. n=27 closed (entries Sep 29-Oct 7; zero trades Sep 22-28 due to rs_vwap_dev bug). 22/27 exits (81%) were integrity_broker_reconcile — exit pipeline bug (watchdog zombie check compared bars_held vs SIZING_MAX_HOLD_BARS=30 in profit-target mode; positions force-sold at ~90 bars, not strategy exits). Fixed in v0.9.1 Oct 6. Genuine strategy exits: n=5 (WDC stop_loss −$513, CVX take_profit +$182, LITE take_profit +$968 [overnight carry], PLTR trailing_stop −$11, WFC session_close −$54), net +$572, PF=1.99. Full-window PF=4.62 is contaminated. Not strategy evidence. v0.9.3 (Oct 8) resets clock. Window retired.",
-  "m3_v093_n": 28,
-  "m3_v093_win_rate": 0.607,
-  "m3_v093_pf": 0.553,
-  "m3_v093_net_pnl": -1268.14,
-  "m3_v093_gross_profit": 1566.2,
-  "m3_v093_gross_loss": 2834.34,
-  "m3_v093_expectancy": -45.29,
+  "m3_v093_n": 34,
+  "m3_v093_win_rate": 0.588,
+  "m3_v093_pf": 0.424,
+  "m3_v093_net_pnl": -2272.38,
+  "m3_v093_gross_profit": 1670.37,
+  "m3_v093_gross_loss": 3942.75,
+  "m3_v093_expectancy": -66.84,
   "m3_v093_max_single_loss": -736.97,
   "m3_v093_max_single_loss_ticker": "MRNA (id 281, stop_loss Oct 16)",
   "m3_v093_oct16_batch_net": -2147.88,
+  "m3_v093_oct29_batch_net": -1004.24,
+  "m3_v093_now_total_loss": -971.5,
+  "m3_v093_now_note": "NOW stop_loss twice: id 285 Oct 16 -$395.18 + id 306 Oct 29 -$576.32. H34 (PR #102) blocks 1-day re-entry after any stop-out.",
   "m3_v093_open": 0,
   "m3_v093_open_tickers": [],
   "m3_v093_exit_distribution": {
    "trailing_stop": 3,
-   "session_close": 20,
-   "stop_loss": 4,
+   "session_close": 25,
+   "stop_loss": 5,
    "take_profit": 1,
    "integrity_broker_reconcile": 0
   },
@@ -236,6 +239,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H34",
+   "hypothesis": "Extended post-stop-loss ticker cooldown: after a stop_loss exit, apply SIZING_STOP_LOSS_COOLDOWN_BARS=390 (1 full trading day) instead of the standard 60-bar (1-hour) churn guard. Motivation: NOW triggered stop_loss twice in M3 (Oct 16 -$395, Oct 29 -$576, total -$971). The IC block gate requires ~271 rows/ticker over 30 days to arm — this plugs the gap between the stop event and IC gate activation, preventing same-next-session re-entry on demonstrated failures.",
+   "status": "implemented — PR #102 open (Oct 30, FREEZE-EXEMPT)",
+   "added": "2026-10-30",
+   "added_by": "nightly desk — NOW 2x stop_loss pattern in M3; Oct 29 NOW -$576.32 second occurrence",
+   "pr_branch": "feat/rnd-H34-stop-loss-cooldown-extension",
+   "pr_number": 102,
+   "pr_state": "OPEN — freeze-exempt: tightens risk control (extends blackout after stop-outs). No change to entry direction, sizing, or model. 14 unit tests pass.",
+   "priority": "HIGH — merge immediately. Freeze-exempt. Directly addresses repeat stop-loss pattern (NOW -$971 in M3).",
+   "pm_flag": "Low risk. Strictly reduces entries on tickers that already failed. No backtest required — negative expected value from repeat stop-outs is not a sample-size question."
+  },
   {
    "id": "H30",
    "hypothesis": "Entry rank floor gate: require entry_rank_pctile >= 85 (cross-sectional model rank) as an additional entry condition. Motivation: entry_rank_mean=79.2 as of Oct 28 (unhealthy; threshold 85). v0.7.0 confirmed top-decile entry is necessary — M2 averaged 46th pctile while every other metric was green. Current 79.2 may reflect IC block list removing highest-quality candidates (AMD/ANET/SMCI/SNOW all on cooldown/IC block), leaving suboptimal alternatives. RISK: further reduces entry frequency, potentially re-starving Kelly window. Must weigh against quality improvement. Likely freeze-exempt if implemented as a quality gate (tightens entry conditions). Backtest required to confirm n and PF impact.",
@@ -692,6 +707,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-30",
+   "hypothesis_id": "H34",
+   "result": "NIGHTLY REVIEW + SHIP — Oct 29: 6 trades (IDs 302-307), 3W/3L, net -$1,004.24. NOW stop_loss (id 306) -$576.32 = 2nd NOW stop_loss in M3 (Oct 16: -$395.18, total -$971.50). M3 updated: n=34, PF=0.424 (noise), WR=58.8% (20W/14L), net -$2,272.38, exp -$66.84/trade. Exit mix: 25 session_close, 5 stop_loss, 3 trailing_stop, 1 take_profit. Kelly 0.1211 normal mode (down from 0.5001). Entry rank 76.5 UNHEALTHY (declining from 79.2). PDT 3/5 remaining. Integrity ALL GREEN. Watchdog OK. H34 SHIPPED (PR #102): SIZING_STOP_LOSS_COOLDOWN_BARS=390 (1 trading day after stop-outs). 14 new unit tests pass. 490/518 pass in sandbox (28 pre-existing dep failures, 3 skipped). EMAIL_ALERTS_ENABLED=false unchanged. H24/H25 (PRs #51-57) still unmerged. Railway worker week 22.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_stop_loss_cooldown.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-29",
    "hypothesis_id": "NIGHTLY_LOG_OCT29",
