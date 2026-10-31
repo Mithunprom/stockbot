@@ -57,6 +57,7 @@ config/staging/
 
 # Test artifacts
 .pytest_cache/
+.pytest_packages/
 .coverage
 htmlcov/
 .mypy_cache/
