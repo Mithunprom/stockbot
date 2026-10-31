@@ -444,7 +444,16 @@ async def init_db() -> None:
 # Aggressive retention to keep disk under control (was at 96% capacity).
 _RETENTION_POLICIES: list[tuple[str, str, int]] = [
     ("feature_matrix", "time", 3),          # biggest consumer, 3 days enough
-    ("ohlcv_1m", "time", 7),                # 7 days (was 14)
+    # 14 days restored (was cut to 7 to control disk, but feature_matrix was the
+    # real consumer and is now archived at 3 days). ohlcv_1m feeds WARMUP_BARS in
+    # src/features/live.py. At 7 days (~1950 bars) WARMUP_BARS sat at the exact
+    # retention ceiling with zero margin — mtf_* EWM features couldn't converge,
+    # measured as IC = −0.010 (near-random) vs +0.181 on full history.
+    # 14 days (~3900 bars) gives the same margin that was there before the cut.
+    # Size impact: 75 tickers × 390 bars/session × 5 sessions/wk × 2 wks ≈ 290k
+    # rows; feature_matrix at 3 days is ~87k. Disk footprint grows by ~200k rows
+    # (~40 MB), well within headroom now that feature_matrix is archived.
+    ("ohlcv_1m", "time", 14),               # 14 days restored (was 7 — see note)
     ("ohlcv_5m", "time", 7),                # 7 days (was 14)
     ("ohlcv_1h", "time", 30),               # NEW: was missing, grew forever
     ("signals", "time", 7),

@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 21). v0.9.7 deployed Oct 26 (direct push — governance breach). TRADING RESUMED Oct 26–28 (15 new trades, n=28 total M3). Kelly now ACTIVE at 0.5001 (normal mode, Oct 27–28 after n crossed 10). Oct 26 v0.9.6 again fired 6 full-size entries at Kelly inactive — same structural defect as Oct 16 (different coin flip, net +$36.78 vs -$2,147). v0.9.7 fixes inactive=full-size: resume ramp (max(1,n//2) entries cap + notional cap KELLY_PROBATION_NOTIONAL). PDT budget exhausted (5/5 day trades). Entry rank mean 79.2 UNHEALTHY (threshold 85). EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl CB halts. H24/H25 guards (PRs #51–57) still unmerged. Railway worker week 21.",
- "last_iteration_date": "2026-10-29",
- "active_hypothesis": "NIGHTLY_LOG_OCT29. v0.9.7 deployed Oct 26 (direct push, governance breach). Kelly ACTIVE 0.5001 (normal mode). M3 n=28 (IDs 274-301): PF=0.553, WR=60.7% (17W/11L), net -$1,268.14. Sub-window Oct 26-28 n=15: PF=1.46, WR=73.3% (11W/4L), net +$238.85. PDT exhausted (5/5). Entry rank 79.2 unhealthy. H30 proposed: entry rank floor gate. H24/H25 (PRs #51-57) still unmerged.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 22). v0.9.8 deployed Oct 29 (direct push — governance breach): probe size fractional + linear inactive ramp. Kelly HARD BLOCKED Oct 30 (-0.2622, below -0.25 threshold) after bad batches Oct 29-30. M3 n=40 (IDs 274-313): PF=0.310, WR=52.5% (21W/19L), net ~-$3,711. Oct 30 WORST DAY: all 6 trades negative, net -$1,439 (SNOW trailing_stop -$391, PLTR stop_loss -$358, QCOM stop_loss -$276, INTC trailing_stop -$237, GS trailing_stop -$133, CCI session_close -$44). T30 PF≈0.257 (CRITICAL — CODE RED criterion: <0.8). Entry rank 86.3 HEALTHY (improved from 79.2). PDT budget 3/5 (new week). H36 proposed: restore ohlcv_1m retention 7→14 days + WARMUP_BARS 1950→3500 to fix train/serve skew (IC in serving = -0.010 vs +0.181 full-history, root cause confirmed Oct 27 research). H24/H25 guards (PRs #51-57) still unmerged week 22. EMAIL_ALERTS_ENABLED=false unchanged.",
+ "last_iteration_date": "2026-10-31",
+ "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -236,6 +236,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H36",
+   "hypothesis": "Restore ohlcv_1m retention 7→14 days + WARMUP_BARS 1950→3500. Root cause of M3 underperformance confirmed Oct 27: IC in serving = −0.010 (near-random) vs +0.181 full-history. Mechanism: 7-day retention (5 sessions ≈ 1950 bars) is EXACTLY the WARMUP_BARS ceiling, leaving mtf_trend_60m EMA(21) with ~5% initial contamination ((1−2/22)^32=0.053) — the #3-ranked FFSA feature. Restoring retention to 14 days lets WARMUP_BARS rise to 3500 (58 60m periods → 0.4% contamination). Expected: IC in serving approaches +0.18. Disk impact: +200k rows (~40MB), safe now that feature_matrix is archived at 3-day. FREEZE CLASSIFICATION: correctness fix (analogous to v0.7.0 WARMUP_BARS 300→1950). M3 clock would reset if classified as strategy change.",
+   "status": "implemented — PR opened Oct 31 (feat/rnd-H36-warmup-retention-restore)",
+   "added": "2026-10-31",
+   "added_by": "nightly desk — sim_live_ic_gap.py Oct 27 confirmed train/serve skew is entire IC gap; Oct 30 all-6-negative day makes urgency critical",
+   "pr_branch": "feat/rnd-H36-warmup-retention-restore",
+   "priority": "CRITICAL — the model is trading near-random IC=-0.010 in production; this is the root cause of M3 PF=0.310",
+   "pm_flag": "Principal Skeptic sign-off required: measured IC=-0.010 in serving is worse than coin flip. This is not a losing strategy — it is a broken signal. H36 is the highest-expected-value fix available. Needs Railway worker to confirm IC post-deploy (mark needs_data_run after PR merge).",
+   "needs_data_run": true,
+   "freeze_classification_pending": true
+  },
   {
    "id": "H30",
    "hypothesis": "Entry rank floor gate: require entry_rank_pctile >= 85 (cross-sectional model rank) as an additional entry condition. Motivation: entry_rank_mean=79.2 as of Oct 28 (unhealthy; threshold 85). v0.7.0 confirmed top-decile entry is necessary — M2 averaged 46th pctile while every other metric was green. Current 79.2 may reflect IC block list removing highest-quality candidates (AMD/ANET/SMCI/SNOW all on cooldown/IC block), leaving suboptimal alternatives. RISK: further reduces entry frequency, potentially re-starving Kelly window. Must weigh against quality improvement. Likely freeze-exempt if implemented as a quality gate (tightens entry conditions). Backtest required to confirm n and PF impact.",
@@ -692,6 +704,17 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-10-31",
+   "hypothesis_id": "H36",
+   "result": "IMPLEMENTED — PR opened. Oct 29-30 performance: n=12 new trades (IDs 302-313), net -$2,443. Oct 30 worst day: all 6 trades negative, net -$1,439. M3 updated: n=40, PF=0.310, WR=52.5%, net ~-$3,711. Kelly HARD BLOCKED at -0.2622. T30 PF≈0.257 (CODE RED criterion confirmed active). v0.9.8 deployed Oct 29 (probe size fractional + linear ramp). ROOT CAUSE CONFIRMED: train/serve IC gap (IC=-0.010 in serving vs +0.181 full-history, sim_live_ic_gap.py Oct 27). H36 implements fix: ohlcv_1m retention 7→14 days, WARMUP_BARS 1950→3500. 5 unit tests pass (test_warmup_retention_invariant.py). Status: needs_data_run on Railway to confirm IC improvement post-deploy. Entry rank 86.3 HEALTHY (improved from 79.2). H24/H25 PRs #51-57 still unmerged week 22.",
+   "files_changed": [
+    "src/data/db.py",
+    "src/features/live.py",
+    "tests/unit/test_warmup_retention_invariant.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-29",
    "hypothesis_id": "NIGHTLY_LOG_OCT29",

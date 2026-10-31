@@ -66,12 +66,35 @@ logger = structlog.get_logger(__name__)
 #
 # Warmup alone could not close it (rank agreement plateaued at ~0.55) because
 # `obv` was anchored to the first bar of the window; that is fixed separately in
-# indicators._obv. With the anchoring fixed, this covers the remaining
-# longest-lookback features: the mtf_* family resamples to 15m and smooths with
-# Wilder EWM, which needs multiple sessions to converge.
+# indicators._obv. With the anchoring fixed, this raised rank agreement to 0.64.
 #
-# 1950 bars = 5 trading sessions.
-WARMUP_BARS = 1950
+# 0.64 was still not enough. Measured 2026-10-27 (sim_live_ic_gap.py):
+#   full-history IC  = +0.181   (what training sees)
+#   1950-bar IC      = −0.010   (what serving was doing — near-random)
+#   rank agreement   =  0.64
+# Root cause: 1950 bars = exactly 5 sessions = the ohlcv_1m retention ceiling.
+# At the ceiling, every warmup starts from a cold EWM state with zero history
+# prior to the window. The mtf_trend_60m feature resamples to 60m bars; with
+# 1950/60 = 32.5 resampled periods, EMA(21) still carries ~5% initial-condition
+# contamination ((1 − 2/22)^32 ≈ 0.053). That is enough to corrupt rank
+# agreement on a feature that is the 3rd-highest-importance predictor.
+#
+# The fix is to restore ohlcv_1m retention from 7 to 14 days (db._RETENTION_POLICIES)
+# so this constant can double without hitting the ceiling. At 3900 bars:
+#   3900/60 = 65 resampled 60m periods → (1 − 2/22)^65 ≈ 0.003 (0.3% contamination)
+# Expected rank agreement improvement: 0.64 → ~0.85–0.90.
+# Expected IC improvement: −0.010 → approaching full-history +0.18.
+# Mark as needs_data_run (requires Railway worker to measure IC post-deploy).
+#
+# INVARIANT: WARMUP_BARS must be ≤ ohlcv_1m retention_days × 390 × 0.9 so the
+# warmup never again sit at the ceiling. test_warmup_retention_invariant.py
+# enforces this so a future retention cut cannot silently re-introduce the bug.
+#
+# 3500 bars ≈ 9 trading sessions — 90% of the 14-day retention ceiling (10
+# sessions). The 10% margin absorbs market holidays and partial sessions so
+# the warmup never sits at the exact ceiling again. At 3500//60 = 58 resampled
+# 60m periods, EMA(21) contamination = (1−2/22)^58 ≈ 0.4% — negligible.
+WARMUP_BARS = 3500
 FFSA_VERSION = "v1"
 
 
