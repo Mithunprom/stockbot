@@ -1,7 +1,7 @@
 # StockBot Program Roadmap
 
 Maintained by the TPM persona (Program Office weekly review + nightly desk).
-Last updated: 2026-10-29 nightly (TRADING RESUMED — v0.9.7 deployed Oct 26, Kelly active 0.5001, M3 n=28, PDT exhausted, entry rank 79.2 unhealthy; EMAIL_ALERTS_ENABLED=false still active; Railway worker week 21).
+Last updated: 2026-11-02 W45 program review (ROOT CAUSE CONFIRMED — serving IC=−0.010 vs model IC=+0.181; H36 PR #104 opened Oct 31 [retention 7→14d + WARMUP_BARS 1950→3500]; Kelly HARD BLOCKED −0.2622 Oct 30; M3 n=40 PF=0.310 net −$3,711; T30 PF=0.257 CODE RED criterion active; 3 direct pushes W45 governance breach; Railway worker week 22).
 
 ## 🔴 CODE RED — declared 2026-07-20 by owner (CFO)
 
@@ -18,7 +18,7 @@ second, new alpha queued.
 |-----------|--------|
 | Integrity Sentinel clean 5 consecutive trading days | ✅ **MET** — ALL GREEN at 08:25 UTC Jul 28. Continuing clean: ALL GREEN Aug 24 13:25 UTC. |
 | Kelly window verified sane | ✅ OK — kelly_seed_sanity confirmed; mode: normal, fraction=0.2349 |
-| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (21 consecutive weeks since Jul 15) |
+| ≥1 hypothesis reaches data_run | ❌ BLOCKED — Railway worker not yet enabled (22 consecutive weeks since Jul 15) |
 
 **Repair summary (complete):** PRs #14, #15, #17, #20 healed all 5 corrupt rows.
 Fill-corrected T30 PF = 0.864 (was 0.60 stored). Integrity criterion **MET** as of Jul 28.
@@ -49,8 +49,8 @@ failure case study, NOT strategy evidence.
 |----|-----------|------|--------|
 | M1 | Outage-free operations | 2 weeks w/o critical watchdog event | 🟡 IN PROGRESS — ~73 days (Jul 10–Sep 21); watchdog OK; no outages or halts |
 | M2 | Measured edge (v0.6.0) | PF ≥ 1.2 at n ≥ 100 on v0.6.0 | 🏁 **RETIRED** — n=110, PF=0.857; was measuring broken feature serving pipeline. v0.7.0 deployed Sep 21. |
-| M3 | Measured edge (v0.9.3+) | PF ≥ 1.2 at n ≥ 100 | 🔴 n=28/100 — clock Oct 8. PF=0.553 (noise), net −$1,268, 0 integrity_broker_reconcile exits ✅. **RESUMED Oct 26 (Kelly active 0.5001). PDT exhausted. Entry rank 79.2 unhealthy.** |
-| M4 | H1/H5/H3/H2/H4 validation (data runs) | Walk-forward backtest standard | 🔴 BLOCKED — Railway worker not enabled. 15+ hypotheses total blocked. Week **21**. |
+| M3 | Measured edge (v0.9.3+) | PF ≥ 1.2 at n ≥ 100 | 🔴 n=40/100 — clock Oct 8. PF=0.310 (noise), WR=52.5%, net −$3,711. **⚠️ WINDOW INVALID: serving IC=−0.010 confirmed (sim_live_ic_gap.py Oct 27). Model trading near-random. H36 PR #104 fix pending.** Kelly HARD BLOCKED −0.2622 Oct 30. Entry rank 86.3 ✅. |
+| M4 | H1/H5/H3/H2/H4 validation (data runs) | Walk-forward backtest standard | 🔴 BLOCKED — Railway worker not enabled. 15+ hypotheses total blocked. Week **22**. |
 | M5 | Paper-trading gate | Sharpe ≥ 1.5, DD ≤ 8%, 3 months | ⚪ NOT STARTED — depends on M3 |
 | M6 | Client/commercial track | M5 + registration/partner decision | ⚪ NOT STARTED |
 
@@ -58,18 +58,22 @@ failure case study, NOT strategy evidence.
 
 **Railway worker service** (`python agent_worker.py`, env `AGENT_WORKER_ENABLE=true`
 + Alpaca paper keys). Blocks M4 and CODE RED exit (data_run criterion).
-Outstanding **19 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
+Outstanding **22 consecutive weeks** (since W29, Jul 15). ~10 minutes in Railway dashboard.
 
 All 15+ hypothesis validations (H0–H12+) blocked behind this single action.
 
 **SMTP RESOLVED (v0.9.6)** — credential recovered. However EMAIL_ALERTS_ENABLED=false (owner-directed Oct 16) now suppresses ALL email including CB halts, integrity escalations. RISK: halt events are now silent. Must re-enable before live.
 
-**SECOND BOTTLENECK: Kelly probation silence (W44 NEW).** Bot has not entered a trade since Oct 16 (6 trading days). Kelly activated post-Oct 16; Oct 16 losses likely drove fraction into probation without H24/H25 guards in place. Merge PRs #51–57 (FREEZE-EXEMPT) immediately.
-**GOVERNANCE: ✅ W44 zero direct pushes — first clean week in 9.** 50+ open PRs; triage recommended (close superseded: #36, #42, #48, #74).
+**SECOND BOTTLENECK: H36 PR #104 (W45 NEW — CRITICAL).** Serving IC confirmed −0.010 (near-random) vs full-history IC +0.181. Mechanism: ohlcv_1m retention 7d = exactly WARMUP_BARS=1950, no warmup margin; mtf_* features can't converge. H36 fix: retention 7→14d + WARMUP_BARS 1950→3500. PR open, 5 tests pass. Freeze classification pending (owner). Needs Railway worker post-deploy to confirm IC improvement.
+
+**THIRD BOTTLENECK: Kelly hard-blocked again (W45).** Oct 30 worst day (all 6 trades negative, net −$1,439) drove Kelly fraction to −0.2622. H24/H25 guards (PRs #51–57) still unmerged at week 22. Bot will not enter any trades until fraction recovers above −0.25 hard-block threshold.
+
+**GOVERNANCE: ❌ W45 three direct pushes** (v0.9.7, perf/ensemble, v0.9.8) — breach resumed after one clean week (W44). 9 of last 10 weeks breached. 50+ open PRs; triage recommended (close superseded: #36, #42, #48, #74).
 
 ## Freeze Status (TPM-enforced)
 
 - **M3 clock RESET to Oct 8** (v0.9.3 strategy change: LGBM 100% ensemble). No strategy merges until n=100 closed trades on v0.9.3+ or a walk-forward-validated backtest justifies an exception.
+- **H36 (PR #104) — FREEZE CLASSIFICATION PENDING (W45 NEW).** retention 7→14d + WARMUP_BARS 1950→3500. TPM classifies as correctness fix (analogous to v0.7.0 WARMUP_BARS 300→1950 — fixing a serving defect, not changing the strategy). If owner agrees: FREEZE-EXEMPT, M3 clock holds. If classified as strategy change: M3 clock resets to H36 deploy date. Owner confirmation required before merge.
 - **W41 v0.8.4 retrain freeze classification:** M3 clock was Sep 23 either way; v0.9.3 supersedes this classification question — M3 is now Oct 8.
 - **W42: v0.9.1 (Oct 6)** — correctness fix (exit zombie threshold + Kelly carry filter). FREEZE-EXEMPT. Does not reset M3 clock.
 - **W42: v0.9.3 (Oct 8)** — STRATEGY CHANGE (owner-directed). LGBM 100%, Transformer/TCN/Sentiment zeroed. M3 clock resets to Oct 8. Research evidence: Transformer/TCN IC ~0.001 (coin-flip), Sentiment never validated. 405 tests pass.
@@ -100,8 +104,9 @@ All 15+ hypothesis validations (H0–H12+) blocked behind this single action.
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| **Bot silent Oct 19–26 (6 trading days) — Kelly probation, H24/H25 unmerged** | **CRITICAL — NEW W44** | Oct 16 losses (-$1,412) activated Kelly into probation without structural guards. Merge PRs #51–57 (H24/H25, FREEZE-EXEMPT) immediately. Check /diagnostics to confirm Kelly fraction. |
-| **EMAIL_ALERTS_ENABLED=false** — ALL outbound email suppressed incl. CB halts, integrity escalations | **CRITICAL — W43** | Owner-directed Oct 16 (v0.9.6); SMTP credential now works but kill switch defeats it. Must re-enable before live. |
+| **Serving IC=−0.010 — model trading near-random since Oct 8** | **CRITICAL — NEW W45** | Confirmed Oct 27 (sim_live_ic_gap.py). ohlcv_1m retention=7d at WARMUP_BARS ceiling; mtf_* features can't converge. H36 PR #104 is the fix (retention 7→14d + WARMUP_BARS 1950→3500). Freeze classification pending. |
+| **Kelly HARD BLOCKED −0.2622 (Oct 30)** | **CRITICAL — W45** | Oct 30 worst day (all 6 negative, net −$1,439) + near-random IC = fraction went negative again. Bot will not enter until fraction recovers above −0.25. H24/H25 PRs #51–57 still unmerged (week 22). |
+| **EMAIL_ALERTS_ENABLED=false** — ALL outbound email suppressed incl. CB halts, integrity escalations | **CRITICAL — W43** | Owner-directed Oct 16 (v0.9.6); SMTP credential now works but kill switch defeats it. Must re-enable before live. Unchanged W45. |
 | SMTP credential expired | **RESOLVED — v0.9.6** | Credential recovered; superseded by EMAIL_ALERTS_ENABLED concern above |
 | Exit pipeline residual gap | **RESOLVED — v0.9.4** | v0.9.4 (Oct 14) wall-clock SESSION_FLAT_ET=15:55 ET; 4 session_close exits Oct 15 confirm. |
 | **IC fill job dead Oct 8–16** — M3 entries without IC quality gate accumulating | **HIGH — W43** | v0.9.5 (Oct 16) fixed. IC gate now accumulating from Oct 16. M3 early sample (n=13) traded without IC filtering. |
@@ -135,6 +140,7 @@ All 15+ hypothesis validations (H0–H12+) blocked behind this single action.
 
 ## Decision Log
 
+- 2026-11-02: W45 program review — ROOT CAUSE CONFIRMED: serving IC=−0.010 vs full-history IC=+0.181 (sim_live_ic_gap.py Oct 27). Mechanism: ohlcv_1m 7d retention = WARMUP_BARS=1950 ceiling, mtf_* features can't converge. H36 PR #104 opened Oct 31 (retention 7→14d + WARMUP_BARS 1950→3500). M3 updated n=40 (Oct 8–Oct 30): PF=0.310, WR=52.5% (21W/19L), net −$3,711. T30 PF=0.257 (CODE RED criterion active: <0.8). Oct 30 worst day: all 6 trades negative, net −$1,439. Kelly HARD BLOCKED at −0.2622. v0.9.7 (Kelly inactive ramp) + v0.9.8 (probe size fractional) shipped as direct pushes — governance breach resumed (3 direct pushes W45, 9 of last 10 weeks). H24/H25 PRs #51–57 unmerged week 22. Entry rank 86.3 HEALTHY. Railway worker week 22. 6 owner decisions needed. Report: reports/program/2026-W45.md.
 - 2026-10-26: W44 program review — M3 n=13 UNCHANGED (Oct 8–16, no new trades Oct 19–26). Bot silent 6 trading days — Kelly probation suspected (Oct 16 losses hit unguarded Kelly window at activation moment; H24/H25 PRs #51–57 unmerged). Zero commits W44 — first clean governance week since W36. Watchdog OK (light_run, 2/7 checks). Health: v0.9.6, signal_loop active, 0 open positions. EMAIL_ALERTS_ENABLED=false unchanged (no CB alerts). Railway worker week 20. 6 owner decisions needed. Report: reports/program/2026-W44.md.
 - 2026-10-19: W43 program review — M3 n=13 (Oct 8–16): PF=0.349 (noise), WR=46.2%, net −$1,506.99, 0 integrity_broker_reconcile exits ✅. Oct 16 bad batch: 6 simultaneous entries at open, 5 losses, net −$1,412 for day. IC fill job was dead throughout Oct 8–16 (v0.9.5 fixed Oct 16; IC gate now accumulating). v0.9.6 (Oct 16): EMAIL_ALERTS_ENABLED=false — ALL email suppressed incl. CB halts. Kelly activation likely post-Oct 16 (n≈14 in window, H24/H25 guards unmerged). H33 (PR #91) opened Oct 17: post-stop-loss entry pause, freeze classification needed. ≥4 direct pushes W43 (week 8 of governance breach). Railway worker week 19. 6 owner decisions needed. Report: reports/program/2026-W43.md.
 - 2026-10-12: W42 program review — M3 clock RESET Oct 8 (v0.9.3 strategy change: LGBM 100% ensemble, owner-directed). Prior Sep 23-Oct 7 window RETIRED (exit pipeline bug: watchdog force-sold at 90 bars in profit-target mode; 22/27 exits integrity_broker_reconcile). 5 commits W42 all direct pushes: v0.9.1 (exit zombie fix + Kelly carry filter), IC retention fix (7→120d, gate now arms), v0.9.2 (bump), v0.9.3 (LGBM-only). Research: exit_mode_ab.py shows 30-bar timer PF 2.46 vs profit-target PF 1.54 (n=42,472). n=0 closed in new M3 window (1 open: SWKS). Kelly f=−0.0467 probation. Watchdog OK Oct 11. SMTP still dead. Railway worker week 17. 6 owner decisions needed. Report: reports/program/2026-W42.md.
