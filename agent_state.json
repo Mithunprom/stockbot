@@ -1,6 +1,6 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 22). W45 program review Nov 2. ROOT CAUSE CONFIRMED: serving IC=-0.010 vs full-history IC=+0.181 (sim_live_ic_gap.py Oct 27). H36 PR #104 open (retention 7→14d + WARMUP_BARS 1950→3500, freeze classification pending). Kelly HARD BLOCKED -0.2622 (Oct 30 worst day: all 6 negative, -$1,439). M3 n=40: PF=0.310, WR=52.5%, net ~-$3,711. T30 PF≈0.257 (CODE RED criterion active). v0.9.7+v0.9.8 shipped as direct pushes W45 (governance breach resumed: 3 pushes, 9 of 10 weeks). H24/H25 PRs #51-57 unmerged week 22. EMAIL_ALERTS_ENABLED=false unchanged.",
- "last_iteration_date": "2026-11-02",
+ "last_iteration_date": "2026-11-03",
  "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -236,6 +236,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H37",
+   "hypothesis": "Expose kelly_hard_block_exit_eta in /diagnostics: a rolloff-only projection (no new trades assumed, conservative) of the first ISO date when the Kelly hard block is expected to lift as losing trades age out of the 10-day window. Returns null when not hard-blocked. Method: simulate advancing the window cutoff forward one day at a time; return the first date where projected fraction > KELLY_HARD_BLOCK_THRESHOLD OR n < KELLY_MIN_TRADES.",
+   "status": "implemented — PR #107 open (feat/rnd-H37-hard-block-exit-eta, Nov 3 2026, FREEZE-EXEMPT)",
+   "added": "2026-11-03",
+   "added_by": "nightly desk — Kelly hard-blocked at -0.2622 since Oct 30; owner has no way to see when block self-drains; expected lift ~Nov 8-10 as Oct 29-30 losses roll off",
+   "pr_branch": "feat/rnd-H37-hard-block-exit-eta",
+   "pr_number": 107,
+   "pr_state": "OPEN — FREEZE-EXEMPT: diagnostics only. New method _kelly_hard_block_exit_eta() + whitelist entry in main.py. 8 unit tests. Suite: 531 passed, 5 pre-existing failures (unchanged). No risk controls or sizing logic modified.",
+   "priority": "LOW — diagnostics only, but actionable: tells owner when hard-block will self-drain",
+   "freeze_exempt": true
+  },
   {
    "id": "H36",
    "hypothesis": "Restore ohlcv_1m retention 7→14 days + WARMUP_BARS 1950→3500. Root cause of M3 underperformance confirmed Oct 27: IC in serving = −0.010 (near-random) vs +0.181 full-history. Mechanism: 7-day retention (5 sessions ≈ 1950 bars) is EXACTLY the WARMUP_BARS ceiling, leaving mtf_trend_60m EMA(21) with ~5% initial contamination ((1−2/22)^32=0.053) — the #3-ranked FFSA feature. Restoring retention to 14 days lets WARMUP_BARS rise to 3500 (58 60m periods → 0.4% contamination). Expected: IC in serving approaches +0.18. Disk impact: +200k rows (~40MB), safe now that feature_matrix is archived at 3-day. FREEZE CLASSIFICATION: correctness fix (analogous to v0.7.0 WARMUP_BARS 300→1950). M3 clock would reset if classified as strategy change.",
@@ -705,6 +717,17 @@
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
   {
+   "date": "2026-11-03",
+   "hypothesis_id": "H37",
+   "result": "IMPLEMENTED — PR #107 opened. Kelly hard-blocked at -0.2622 since Oct 30 (all-6-negative day, -$1,439). M3 n=40: PF=0.310, WR=52.5%, net ~-$3,711. Expected hard-block lift ~Nov 8-10 (Oct 29-30 losing batches roll off 10-day window). H37 adds _kelly_hard_block_exit_eta() to signal_loop.py and main.py /diagnostics whitelist. Method projects rolloff date without assuming new trades — conservative estimate. Freeze-exempt (diagnostics only). 8 unit tests pass; full suite 531 passed, 5 pre-existing failures unchanged. H36 PR #104 still awaiting merge + Railway data run. CODE RED criterion 3 BLOCKED week 23 (Railway worker).",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "main.py",
+    "tests/unit/test_kelly_hard_block_exit_eta.py",
+    "agent_state.json"
+   ]
+  },
+  {
    "date": "2026-10-31",
    "hypothesis_id": "H36",
    "result": "IMPLEMENTED — PR opened. Oct 29-30 performance: n=12 new trades (IDs 302-313), net -$2,443. Oct 30 worst day: all 6 trades negative, net -$1,439. M3 updated: n=40, PF=0.310, WR=52.5%, net ~-$3,711. Kelly HARD BLOCKED at -0.2622. T30 PF≈0.257 (CODE RED criterion confirmed active). v0.9.8 deployed Oct 29 (probe size fractional + linear ramp). ROOT CAUSE CONFIRMED: train/serve IC gap (IC=-0.010 in serving vs +0.181 full-history, sim_live_ic_gap.py Oct 27). H36 implements fix: ohlcv_1m retention 7→14 days, WARMUP_BARS 1950→3500. 5 unit tests pass (test_warmup_retention_invariant.py). Status: needs_data_run on Railway to confirm IC improvement post-deploy. Entry rank 86.3 HEALTHY (improved from 79.2). H24/H25 PRs #51-57 still unmerged week 22.",
@@ -1062,7 +1085,7 @@
   "exit_criteria_status": {
    "integrity_clean_5_days": "✅ MET — 5 consecutive clean days (2026-07-24 through 2026-07-28). Sentinel ALL GREEN at 08:25 UTC 2026-07-28. All 5 checks pass. Continuing clean: ALL GREEN Aug 12 21:25 UTC.",
    "kelly_window_sane": "✅ FRESH — Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded via KELLY_EPOCH env var. Window starts fresh at epoch date. Entries resumed Sep 29. CAVEAT: structural guards H24 (PRs #51-54) and H25 (PRs #56-57) still unmerged — structural risk persists as Kelly window rebuilds under M3. Monitor fraction closely as trades accumulate.",
-   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (15 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
+   "hypothesis_at_data_run": "❌ BLOCKED — Railway worker not yet enabled (17 consecutive weeks outstanding since Jul 15). Owner must set AGENT_WORKER_ENABLE=true + Alpaca paper keys. ~10 min action. Blocks CODE RED exit + all H0–H12+ validations."
   }
  }
 }
