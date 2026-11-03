@@ -1220,11 +1220,31 @@ class SignalLoop:
             halted=self._cb.is_halted,
         )
 
-    async def _peak_from_broker_history(self, period: str = "3M") -> float:
+    async def _peak_from_broker_history(self, period: str = "1A") -> float:
         """Highest completed-session equity from Alpaca. 0.0 if unavailable.
 
-        Used only to bootstrap the peak when no snapshot exists, so a first
-        deploy of the persistence layer doesn't inherit a reset drawdown.
+        Called on EVERY start, not only to bootstrap — see `_restore_risk_state`,
+        which max()es this against the stored and current values so the
+        high-water mark can only be corrected upward. (The docstring here used
+        to claim bootstrap-only; it was stale.)
+
+        PERIOD WAS "3M" AND THAT WAS THE BUG. A high-water mark is by definition
+        all-time, so a rolling window silently lowers it as the real peak ages
+        out — the precise failure this reconciliation exists to prevent, moved
+        from the store into the query.
+
+        Measured 2026-11-02: the true peak is $108,588.50 (2026-04-03), seven
+        months back and therefore invisible to a 3-month window. The breaker was
+        running on ~$104,278 and reported a 7.33% drawdown against its 8% limit
+        while the real figure was 11.01%. It should have halted days earlier,
+        and the 2026-10-29/30 sessions that lost $2,443 at full size would have
+        been blocked.
+
+        "1A" covers the account's whole life (opened 2026-03-07). Revisit if the
+        account outlives a year: Alpaca caps `period`, so the durable answer is
+        to persist the all-time peak rather than re-derive it from a window.
+        Deliberately NOT paired with a date filter — a shorter effective history
+        can only understate the peak, which is the direction that fails unsafe.
         """
         import httpx
 
@@ -3194,6 +3214,24 @@ class SignalLoop:
                 # genuinely probe-like — ~$4.8k deployed at n=8 instead of
                 # ~$76k, a ~94% reduction — which is what "earn the right to
                 # larger positions" has to mean in code.
+                # Consecutive-loss brake. The breaker has always returned
+                # action="reduce_sizing_50pct"; until 2026-11-02 nothing read
+                # it, so it fired at 6 losses on 2026-10-30 and both later
+                # entries still went out at full ~$12,300. Applied here with
+                # the macro scalar because both are multiplicative haircuts on
+                # a size the sizer already chose.
+                from src.risk.circuit_breakers import consecutive_loss_size_scalar
+                _loss_scalar = consecutive_loss_size_scalar(self._consecutive_losses)
+                if _loss_scalar < 1.0:
+                    notional *= _loss_scalar
+                    logger.warning(
+                        "consecutive_loss_size_reduced",
+                        ticker=ticker,
+                        consecutive_losses=self._consecutive_losses,
+                        scalar=_loss_scalar,
+                        notional=round(notional, 2),
+                    )
+
                 _kmode = self._kelly_mode()
                 _cap = self._kelly_size_cap()
                 if _cap is not None:

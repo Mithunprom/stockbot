@@ -870,7 +870,20 @@ def _load_ffsa_features() -> list[str]:
 # that already existed. `probation` stays flat (it HAS a sample and that sample
 # says non-positive). Bounded above by the per-slot notional, so it can only
 # ever subtract.
-APP_VERSION = "0.9.8"
+# v0.9.9 — two risk controls that reported protection they were not providing.
+#   * max_drawdown measured its peak from a THREE-MONTH broker-history window.
+#     A high-water mark is all-time by definition, so the real peak
+#     ($108,588.50, 2026-04-03) aged out and the breaker ran on ~$104,278 —
+#     reporting 7.33% against an 8% limit while the true drawdown was 11.01%.
+#     Window is now 1A. ON DEPLOY THIS HALTS: 11.01% > 8%. That is the control
+#     working, and resuming needs a human per CLAUDE.md. Kelly already blocks
+#     entries (f=-0.2622), so no NEW restriction today.
+#   * consecutive_losses returned action="reduce_sizing_50pct" and NOTHING READ
+#     IT. It fired at 6 losses on 2026-10-30 and both later entries still went
+#     out at full ~$12,300. Now applied in entry sizing.
+# Neither control stopped the 2026-10-29/30 sessions: 12 entries at full size,
+# 9 losers, -$2,443.
+APP_VERSION = "0.9.9"
 
 app = FastAPI(
     title="StockBot API",

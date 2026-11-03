@@ -29,6 +29,39 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Consecutive-loss sizing brake.
+#
+# `_check_consecutive_losses` has always returned action="reduce_sizing_50pct",
+# and until 2026-11-02 NOTHING READ IT. The breaker fired, logged, and changed
+# nothing — it appeared on the dashboard as protection that did not exist. On
+# 2026-10-30 it triggered at 6 losses and both subsequent entries still went out
+# at full ~$12,300.
+#
+# A breaker whose action is discarded is worse than no breaker: it reads as
+# cover. The scalar is now applied in SignalLoop's entry sizing via
+# `consecutive_loss_size_scalar()`, so the threshold lives here once rather than
+# being duplicated at the call site.
+CONSECUTIVE_LOSS_LIMIT = 5          # losses in a row before sizing is cut
+CONSECUTIVE_LOSS_SIZE_SCALAR = 0.5  # the "50pct" the action has always promised
+
+
+def consecutive_loss_size_scalar(consecutive_losses: int) -> float:
+    """Position-size multiplier given the current loss streak.
+
+    Returns CONSECUTIVE_LOSS_SIZE_SCALAR at or above the limit, else 1.0. Pure
+    and total so it can be asserted directly; the breaker's own check keeps
+    reporting the same threshold.
+
+    Args:
+        consecutive_losses: Current streak length.
+
+    Returns:
+        Multiplier in (0, 1]. Never above 1.0 — this may only reduce size.
+    """
+    if consecutive_losses >= CONSECUTIVE_LOSS_LIMIT:
+        return CONSECUTIVE_LOSS_SIZE_SCALAR
+    return 1.0
+
 DASHBOARD_URL = "https://stockbot-production-cbde.up.railway.app/dashboard"
 
 LIVE_RISK_REPORT = Path("reports/risk/live.json")
@@ -202,7 +235,7 @@ class CircuitBreakers:
         )
 
     def _check_consecutive_losses(self, state: RiskState) -> BreachResult:
-        threshold = 5
+        threshold = CONSECUTIVE_LOSS_LIMIT
         triggered = state.consecutive_losses >= threshold
         return BreachResult(
             breaker_name="consecutive_losses",
