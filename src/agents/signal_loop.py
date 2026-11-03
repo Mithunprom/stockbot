@@ -1404,6 +1404,10 @@ class SignalLoop:
             "kelly_epoch": KELLY_EPOCH_ISO or None,
             "kelly_hard_block_threshold": KELLY_HARD_BLOCK_THRESHOLD,
             "kelly_entries_hard_blocked": self._kelly_entries_blocked(),
+            # Rolloff-only projection: the first date the hard block is expected
+            # to lift as losing trades age out of the 10-day window. null if not
+            # currently hard-blocked. Does not assume any new winning trades.
+            "kelly_hard_block_exit_eta": self._kelly_hard_block_exit_eta(),
             "kelly_lookback_days": KELLY_LOOKBACK_DAYS,
             "probation_entries_today": self._probation_entries_today,
             # Resume ramp: entries permitted today while the sample rebuilds,
@@ -2195,6 +2199,58 @@ class SignalLoop:
         if self._kelly_mode() == "inactive":
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
+
+    def _kelly_hard_block_exit_eta(self) -> str | None:
+        """ISO date when the Kelly hard block is expected to lift via rolloff.
+
+        Returns None when the bot is not currently hard-blocked. When it is,
+        simulates rolling the lookback window forward one day at a time and
+        returns the first date on which either:
+          - the projected Kelly fraction rises above KELLY_HARD_BLOCK_THRESHOLD, or
+          - the remaining sample falls below KELLY_MIN_TRADES (inactive → no block).
+
+        No new trades are assumed — a conservative, rolloff-only projection.
+        Any winning trades before that date would accelerate recovery.
+        """
+        if not self._kelly_entries_blocked():
+            return None
+
+        import statistics as _stats
+        from datetime import timedelta as _td
+
+        outcomes = list(self._sizing_recent_outcomes)
+        if not outcomes:
+            return None
+
+        now = datetime.now(timezone.utc)
+        epoch = _kelly_epoch()
+
+        for days_ahead in range(1, KELLY_LOOKBACK_DAYS + 2):
+            future = now + _td(days=days_ahead)
+            cutoff = future - _td(days=KELLY_LOOKBACK_DAYS)
+            if epoch is not None and epoch > cutoff:
+                cutoff = epoch
+
+            remaining = [p for ts, p in outcomes if ts is not None and ts >= cutoff]
+
+            if len(remaining) < self._kelly_min_trades:
+                return future.date().isoformat()
+
+            wins = [p for p in remaining if p > 0]
+            losses = [p for p in remaining if p < 0]
+            if not wins or not losses:
+                return future.date().isoformat()
+
+            p = len(wins) / len(remaining)
+            avg_win = _stats.mean(wins)
+            avg_loss = abs(_stats.mean(losses))
+            b = avg_win / max(avg_loss, 1e-9)
+            projected = (p * b - (1 - p)) / max(b, 1e-9)
+
+            if projected > KELLY_HARD_BLOCK_THRESHOLD:
+                return future.date().isoformat()
+
+        return None
 
     def _kelly_probe_notional(self) -> float:
         """Probe notional in dollars, scaled to the current portfolio."""
