@@ -1254,6 +1254,9 @@ async def diagnostics() -> JSONResponse:
             "kelly_epoch": summary.get("kelly_epoch"),
             "kelly_hard_block_threshold": summary.get("kelly_hard_block_threshold"),
             "kelly_entries_hard_blocked": summary.get("kelly_entries_hard_blocked"),
+            # Rolloff projection: ISO date the hard block is expected to lift.
+            # null when not hard-blocked. Conservative: no new trades assumed.
+            "kelly_hard_block_exit_eta": summary.get("kelly_hard_block_exit_eta"),
             "kelly_lookback_days": summary.get("kelly_lookback_days"),
             "probation_entries_today": summary.get("probation_entries_today", 0),
             # Resume ramp (v0.9.7). null = ramp not applying. Compare against
