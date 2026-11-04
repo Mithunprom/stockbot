@@ -2547,11 +2547,17 @@ class SignalLoop:
             return False
 
         # Gate 6: Signal quality (threshold self-calibrates to the live model)
+        # Phase 5 is long-only: require dir_prob >= hi (0.60) explicitly.
+        # The prior `not (lo < dir_prob < hi)` also passed strongly bearish
+        # signals (dir_prob < 0.40); they were caught downstream by the
+        # direction block, but the gate itself was inconsistent with its own
+        # comment and inflated `signals_passing` in /diagnostics.  Supersedes
+        # H17 (PR #39) which patched the diagnostic path only.
         pred_ret = float(sig.lgbm_pred_return)
         dir_prob = float(sig.lgbm_dir_prob)
-        lo, hi = SIZING_DIR_PROB_DEAD_ZONE
+        _lo, hi = SIZING_DIR_PROB_DEAD_ZONE
         signal_ok = (abs(pred_ret) > self._dynamic_cost_threshold()
-                     and not (lo < dir_prob < hi))
+                     and dir_prob >= hi)
         return signal_ok
 
     def _update_kelly(self) -> None:
