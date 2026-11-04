@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 22). W45 program review Nov 2. ROOT CAUSE CONFIRMED: serving IC=-0.010 vs full-history IC=+0.181 (sim_live_ic_gap.py Oct 27). H36 PR #104 open (retention 7→14d + WARMUP_BARS 1950→3500, freeze classification pending). Kelly HARD BLOCKED -0.2622 (Oct 30 worst day: all 6 negative, -$1,439). M3 n=40: PF=0.310, WR=52.5%, net ~-$3,711. T30 PF≈0.257 (CODE RED criterion active). v0.9.7+v0.9.8 shipped as direct pushes W45 (governance breach resumed: 3 pushes, 9 of 10 weeks). H24/H25 PRs #51-57 unmerged week 22. EMAIL_ALERTS_ENABLED=false unchanged.",
- "last_iteration_date": "2026-11-02",
- "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
+ "last_iteration_date": "2026-11-04",
+ "active_hypothesis": "H37. LONG-ONLY ENTRY GATE BUG FIXED (freeze-exempt diagnostic/code-comment correctness). Gate 6 in _sizing_entry_gate_open used `not (lo < dir_prob < hi)` which passed strongly bearish signals (dir_prob < 0.40) through the gate — observed Nov 4 as IDXX dir_prob=0.2715 showing would_trade=true in /diagnostics despite being bearish. Fix: `dir_prob >= hi` (>= 0.60). Freeze-exempt: bearish signals were already blocked downstream at line 3146 by the Phase 5 short-disable check; actual trades taken are identical. Impact: /diagnostics signals_passing 6→4 for long-only signals; would_trade diagnostic accuracy restored. Supersedes H17 (PR #39) which patched diagnostic path only. 6 unit tests pass. Full suite: 531 passed (vs 523 baseline), 12 failed (vs 14 baseline). SECONDARY CRITICAL: circuit_breaker_halted=true as of Nov 4 00:18 UTC (halt_reason=max_drawdown). EMAIL_ALERTS_ENABLED=false → owner not notified. H36 PR #104 still open (needs_data_run). Kelly HARD BLOCKED -0.2622.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -123,10 +123,10 @@
   "v061_note": "Resume-persistence fix: /admin/resume-trading now snapshots immediately after resuming. Prior gap: resume issued outside market hours survived only in memory; any redeploy before open would re-apply the persisted halt, undoing the human decision silently.",
   "v062_note": "Universe-rotation zombie fix: _owned_tickers now tracked independently of screener membership. sync_from_broker includes any position we own per ledger even if it left the universe. Root event: MSCI (id 119) sat open 14 calendar days, $12.6k (12.9% account) invisible to portfolio_heat. Also added _managed_tickers persistence so orphan detection survives redeploys.",
   "h5_status_note": "H5 (hold extension) effectively disabled by v0.6.0: MAX_HOLD_EXTENSIONS=0. Extension logic kept in code and covered by tests but will never fire. The 30-bar cap + 2 extensions would be 90 bars, back in the IC≈0.06 region. H5 needs re-evaluation under the new horizon.",
-  "circuit_breaker_halted": false,
-  "circuit_breaker_halt_reason": "max_drawdown — RESOLVED. Halt lifted Aug 6 (inferred from first new entry GS Aug 6).",
-  "circuit_breaker_halted_since": "2026-07-28",
-  "circuit_breaker_lifted": "~2026-08-06",
+  "circuit_breaker_halted": true,
+  "circuit_breaker_halt_reason": "max_drawdown — NEW HALT Nov 4 2026 (detected in live diagnostics snapshot 00:18 UTC). Prior halt Jul 28-Aug 6 resolved. Current halt: M3 drawdown breach from Oct 29-30 all-negative cluster. EMAIL_ALERTS_ENABLED=false → owner NOT notified by email/push. MUST NOT re-enable without human confirmation.",
+  "circuit_breaker_halted_since": "2026-11-04",
+  "circuit_breaker_lifted": null,
   "n_open_positions_aug13": 0,
   "n_open_positions_aug10": 0,
   "n_open_positions_jul31": 6,
@@ -166,12 +166,12 @@
    "signal_reversal": 0
   },
   "m2_v060_note": "n=110 Aug 6–Sep 11 — RETIRED (v0.7.0 deployed Sep 21). WAS: PF=0.857, WR=44.5% (49W/1T/60L), net -$804.19. RETIRED because this window measured a bot with corrupted feature serving (OBV session-anchoring bug; entries at ~46th pctile of model's own ranking). ALL 111 exits via max_hold (barriers were dead code). ALL entries were LONG (long-bias from +0.00034 mean shift in corrupted predictions). Not strategy evidence — infrastructure failure case study.",
-  "trailing_30_pf": 0.265,
-  "trailing_30_pf_stored": 0.265,
-  "trailing_30_pf_fill_corrected": 0.265,
-  "trailing_30_win_rate": 0.333,
-  "trailing_30_net_pnl": -1494.23,
-  "trailing_30_note": "IDs 207-236 (30 most recent closed trades under v0.6.x, Aug 21–Sep 11). 10W/20L, PF=0.265. FINAL v0.6.x T30 — all exits via max_hold (barriers dead code). Not carried forward; M3 (v0.7.0) window starts fresh today.",
+  "trailing_30_pf": 0.256,
+  "trailing_30_pf_stored": 0.256,
+  "trailing_30_pf_fill_corrected": 0.256,
+  "trailing_30_win_rate": 0.50,
+  "trailing_30_net_pnl": -2816.30,
+  "trailing_30_note": "IDs 284-313 (30 most recent closed trades as of Nov 4 00:18 UTC). 15W/15L, PF=0.256, gross_profit=$969.42, gross_loss=$3,785.72, net=-$2,816.30, expectancy=-$93.88/trade. CODE RED criterion active (T30 PF < 0.80). Circuit breaker halted Nov 4 (max_drawdown). Prior T30 note (IDs 207-236, v0.6.x) archived in history.",
   "m3_v070_n": 11,
   "m3_v070_win_rate": 0.273,
   "m3_v070_pf": 0.587,
@@ -236,6 +236,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H37",
+   "hypothesis": "Long-only entry gate fix: _sizing_entry_gate_open Gate 6 used `not (lo < dir_prob < hi)` which incorrectly passed strongly bearish signals (dir_prob < 0.40) through the gate. For a long-only Phase 5 system, the correct check is `dir_prob >= hi` (>= 0.60). The bearish signals were blocked downstream at line 3146 by the direction block, so actual trades taken are unchanged. This fix restores diagnostic accuracy: signals_passing in /diagnostics now correctly shows only long-qualified candidates, and would_trade=true only appears for signals with dir_prob >= 0.60. Freeze-exempt: no change to actual trades taken. Supersedes H17 (PR #39).",
+   "status": "implemented — PR opened Nov 4 (feat/rnd-H37-direction-gate-longonly)",
+   "added": "2026-11-04",
+   "added_by": "nightly desk — Nov 4 diagnostics: IDXX dir_prob=0.2715 showed would_trade=true; signals_passing=6 instead of 4 for long-only",
+   "pr_branch": "feat/rnd-H37-direction-gate-longonly",
+   "freeze_classification": "FREEZE-EXEMPT — no change to actual trades taken (bearish already blocked downstream); diagnostic/code-comment correctness only",
+   "priority": "HIGH — diagnostic integrity; merge soon (freeze-exempt, clean diff)",
+   "pm_flag": "Freeze-exempt code quality fix. Closes root diagnostic false-positive that made /diagnostics untrustworthy for long-only gate analysis. Supersedes H17 PR #39."
+  },
   {
    "id": "H36",
    "hypothesis": "Restore ohlcv_1m retention 7→14 days + WARMUP_BARS 1950→3500. Root cause of M3 underperformance confirmed Oct 27: IC in serving = −0.010 (near-random) vs +0.181 full-history. Mechanism: 7-day retention (5 sessions ≈ 1950 bars) is EXACTLY the WARMUP_BARS ceiling, leaving mtf_trend_60m EMA(21) with ~5% initial contamination ((1−2/22)^32=0.053) — the #3-ranked FFSA feature. Restoring retention to 14 days lets WARMUP_BARS rise to 3500 (58 60m periods → 0.4% contamination). Expected: IC in serving approaches +0.18. Disk impact: +200k rows (~40MB), safe now that feature_matrix is archived at 3-day. FREEZE CLASSIFICATION: correctness fix (analogous to v0.7.0 WARMUP_BARS 300→1950). M3 clock would reset if classified as strategy change.",
@@ -704,6 +715,16 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-11-04",
+   "hypothesis_id": "H37",
+   "result": "IMPLEMENTED — PR opened. CIRCUIT BREAKER HALTED as of Nov 4 00:18 UTC (halt_reason=max_drawdown). EMAIL_ALERTS_ENABLED=false → owner not notified. T30 (IDs 284-313): n=30, WR=50.0%, PF=0.256, gross_profit=$969.42, gross_loss=$3,785.72, net=-$2,816, expectancy=-$93.88/trade. M3 updated: n=40, PF=0.310, WR=52.5%, net ~-$3,711. Kelly HARD BLOCKED -0.2622. H37 fix: `_sizing_entry_gate_open` Gate 6 changed from `not (lo < dir_prob < hi)` to `dir_prob >= hi` for long-only correctness. Freeze-exempt (no actual trade change). 6 unit tests pass, full suite 531 passed (vs 523 baseline), 12 failed (vs 14 baseline). H36 PR #104 still open (needs_data_run on Railway). Governance: PR via GitHub MCP (no direct push).",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_h37_direction_gate_longonly.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-10-31",
    "hypothesis_id": "H36",
