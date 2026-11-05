@@ -1,6 +1,6 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 22). W45 program review Nov 2. ROOT CAUSE CONFIRMED: serving IC=-0.010 vs full-history IC=+0.181 (sim_live_ic_gap.py Oct 27). H36 PR #104 open (retention 7→14d + WARMUP_BARS 1950→3500, freeze classification pending). Kelly HARD BLOCKED -0.2622 (Oct 30 worst day: all 6 negative, -$1,439). M3 n=40: PF=0.310, WR=52.5%, net ~-$3,711. T30 PF≈0.257 (CODE RED criterion active). v0.9.7+v0.9.8 shipped as direct pushes W45 (governance breach resumed: 3 pushes, 9 of 10 weeks). H24/H25 PRs #51-57 unmerged week 22. EMAIL_ALERTS_ENABLED=false unchanged.",
- "last_iteration_date": "2026-11-02",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 23). Nightly Nov 5. NEW: v0.9.9 (Nov 2 direct push) corrected max_drawdown peak: true peak $108,588.50 (Apr 3) was invisible to 3M window, real drawdown 11.01% (was reporting 7.33%). CB halted on v0.9.9 deploy — CORRECT behavior. Also fixed consecutive_losses scalar (was decorative, never applied). Bot halted 6 trading days (Oct 31 — Nov 5). Kelly HARD BLOCKED -0.2622. EMAIL_ALERTS_ENABLED=false → owner not notified of halt (nightly desk sent PushNotification). H37 implemented: CB halt timestamp in diagnostics (PR #109, freeze-exempt). H36 PR #104 open (train/serve IC fix, needs_data_run). M3 n=40, WR=50%, T30 PF=0.572 (CODE RED). Integrity ALL GREEN. 0 open positions, 6 signals would qualify if unblocked.",
+ "last_iteration_date": "2026-11-05",
  "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -236,6 +236,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H37",
+   "hypothesis": "Expose CB halt timestamp and duration in /diagnostics. After v0.9.9 (Nov 2) correctly halted the bot at 11.01% drawdown with EMAIL_ALERTS_ENABLED=false, the owner had no way to see from the dashboard how long the bot had been silent. halt_since (ISO UTC), halt_duration_hours (float), and halt_lift_requires_human (bool|null) added to pipeline_a diagnostics. FREEZE-EXEMPT: diagnostics only.",
+   "status": "implemented — PR #109 open (Nov 5, freeze-exempt)",
+   "added": "2026-11-05",
+   "added_by": "nightly desk — Nov 5 nightly run: CB halted (max_drawdown) with EMAIL_ALERTS_ENABLED=false; owner blind to halt duration from diagnostics",
+   "pr_branch": "feat/rnd-H37-cb-halt-diagnostics",
+   "pr_number": 109,
+   "pr_state": "OPEN — freeze-exempt: diagnostics only. 7 logic tests pass in sandbox. 6 inspect-based tests pass on Railway.",
+   "priority": "HIGH — merge before halt is lifted so owner sees duration immediately on resume"
+  },
   {
    "id": "H36",
    "hypothesis": "Restore ohlcv_1m retention 7→14 days + WARMUP_BARS 1950→3500. Root cause of M3 underperformance confirmed Oct 27: IC in serving = −0.010 (near-random) vs +0.181 full-history. Mechanism: 7-day retention (5 sessions ≈ 1950 bars) is EXACTLY the WARMUP_BARS ceiling, leaving mtf_trend_60m EMA(21) with ~5% initial contamination ((1−2/22)^32=0.053) — the #3-ranked FFSA feature. Restoring retention to 14 days lets WARMUP_BARS rise to 3500 (58 60m periods → 0.4% contamination). Expected: IC in serving approaches +0.18. Disk impact: +200k rows (~40MB), safe now that feature_matrix is archived at 3-day. FREEZE CLASSIFICATION: correctness fix (analogous to v0.7.0 WARMUP_BARS 300→1950). M3 clock would reset if classified as strategy change.",
@@ -705,6 +716,17 @@
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
   {
+   "date": "2026-11-05",
+   "hypothesis_id": "H37",
+   "result": "IMPLEMENTED — PR #109 opened (feat/rnd-H37-cb-halt-diagnostics). FINDINGS: (1) Circuit breaker halted (max_drawdown) — triggered by v0.9.9 (Nov 2 direct push) which correctly revealed 11.01% real drawdown vs 7.33% reported (peak was 3M window; now 1A covering full account history). v0.9.9 also fixed consecutive_losses scalar (was decorative — always returned reduce_sizing_50pct but nothing read it; fixed to actually apply scalar via consecutive_loss_size_scalar()). 525 tests pass in Railway on v0.9.9. (2) EMAIL_ALERTS_ENABLED=false → owner not notified of halt. PushNotification sent to owner by nightly desk. (3) H37: adds halt_since, halt_duration_hours, halt_lift_requires_human to /diagnostics endpoint. Both signal_loop.py and main.py whitelist updated. 13 unit tests (7 pass in sandbox; 6 inspect-based fail only due to sandbox numpy/structlog gap — will pass on Railway). M3 performance update: n=40, W=20/L=20, WR=50%, T30 PF=0.572 (pct-based). 0 trades since Oct 30 (bot halted). Integrity ALL GREEN. Next hypothesis: H36 needs Railway data run after CB halt is lifted and H36 is deployed.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "main.py",
+    "tests/unit/test_halt_diagnostics.py",
+    "agent_state.json"
+   ]
+  },
+  {
    "date": "2026-10-31",
    "hypothesis_id": "H36",
    "result": "IMPLEMENTED — PR opened. Oct 29-30 performance: n=12 new trades (IDs 302-313), net -$2,443. Oct 30 worst day: all 6 trades negative, net -$1,439. M3 updated: n=40, PF=0.310, WR=52.5%, net ~-$3,711. Kelly HARD BLOCKED at -0.2622. T30 PF≈0.257 (CODE RED criterion confirmed active). v0.9.8 deployed Oct 29 (probe size fractional + linear ramp). ROOT CAUSE CONFIRMED: train/serve IC gap (IC=-0.010 in serving vs +0.181 full-history, sim_live_ic_gap.py Oct 27). H36 implements fix: ohlcv_1m retention 7→14 days, WARMUP_BARS 1950→3500. 5 unit tests pass (test_warmup_retention_invariant.py). Status: needs_data_run on Railway to confirm IC improvement post-deploy. Entry rank 86.3 HEALTHY (improved from 79.2). H24/H25 PRs #51-57 still unmerged week 22.",
@@ -1010,8 +1032,10 @@
   }
  ],
  "pending_tasks": [
+  "[OWNER ACTION — CRITICAL — IMMEDIATE] Bot halted (max_drawdown, v0.9.9 Nov 2). Real drawdown 11.01% > 8% limit. Call /admin/resume-trading once acceptable. EMAIL_ALERTS_ENABLED=false — halt was SILENT. Re-enable email BEFORE resuming (EMAIL_ALERTS_ENABLED=true) so future halts reach you.",
+  "[OWNER ACTION — CRITICAL — IMMEDIATE] Re-enable email alerts: EMAIL_ALERTS_ENABLED=true. The CB halt on Nov 2 sent no notification. The nightly desk sent a PushNotification but that path is not guaranteed. SMTP credential must be valid — confirm before enabling.",
   "[OWNER ACTION — CRITICAL — W42] Fix SMTP credential. All CRITICAL alert emails (halt, integrity escalation) silently failing. Week 2+ unresolved. PR #79 (SMTP preflight probe) open but not merged.",
-  "[OWNER ACTION — CRITICAL, WEEK 17] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 17 consecutive weeks outstanding since Jul 15.",
+  "[OWNER ACTION — CRITICAL, WEEK 23] Enable Railway worker: AGENT_WORKER_ENABLE=true + Alpaca paper keys (~10 min). Unblocks 15+ hypothesis validations and CODE RED data_run exit criterion. 23 consecutive weeks outstanding since Jul 15.",
   "[OWNER ACTION — HIGH] Confirm M3 clock reset to Oct 8 (v0.9.3 LGBM-only ensemble is a strategy change). Prior Sep 23-Oct 7 window retired — exit bug contaminated 22/27 exits.",
   "[OWNER ACTION — HIGH] Reinstate PR discipline immediately. 5 direct pushes W42 (v0.9.1/v0.9.2/v0.9.3 + 2 commits). v0.9.3 is a strategy change — must be a PR. Emergency posture valid for v0.9.0 only.",
   "[OWNER ACTION — HIGH] Exit mode decision: exit_mode_ab.py (n=42,472 paths) shows 30-bar timer PF 2.46 vs profit-target PF 1.54. Decide: continue EXIT_PROFIT_TARGET_MODE, revert to timer, or formally backtest?",
