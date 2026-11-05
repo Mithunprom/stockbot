@@ -1258,6 +1258,12 @@ async def diagnostics() -> JSONResponse:
             "pipeline": label,
             "circuit_breaker_halted": summary.get("halted", False),
             "halt_reason": summary.get("halt_reason", ""),
+            # NOTE: adding a field to signal_loop's summary is NOT enough — it must
+            # also be listed here, in this whitelist. The comment at the top of this
+            # block says so. halt_since/halt_duration_hours follow that rule.
+            "halt_since": summary.get("halt_since"),
+            "halt_duration_hours": summary.get("halt_duration_hours"),
+            "halt_lift_requires_human": summary.get("halt_lift_requires_human"),
             "market_open": summary.get("market_open", False),
             "sizing_mode": summary.get("sizing_mode", False),
             "kelly_fraction": summary.get("kelly_fraction", 0.0),
