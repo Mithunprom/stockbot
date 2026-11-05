@@ -1405,6 +1405,27 @@ class SignalLoop:
             "consecutive_losses": self._consecutive_losses,
             "halted": self._cb.is_halted,
             "halt_reason": self._cb.halt_reason,
+            # Halt timestamp is persisted through restarts (RiskStateSnapshot.halt_time)
+            # so it reflects WHEN the control actually fired, not when the process
+            # started. null when not halted. halt_duration_hours is the wall-clock
+            # age of the halt — after 2026-11-02 this answers "how long has the bot
+            # been silent?" from the diagnostics page without reading logs.
+            "halt_since": (
+                self._cb._halt_time.isoformat()
+                if getattr(self._cb, "_halt_time", None) else None
+            ),
+            "halt_duration_hours": (
+                round(
+                    (datetime.now(timezone.utc) - self._cb._halt_time).total_seconds() / 3600,
+                    1,
+                )
+                if getattr(self._cb, "_halt_time", None) else None
+            ),
+            # max_drawdown halts require explicit human clearance (resume_trading).
+            # daily_loss clears automatically at next market open. Null when not halted.
+            "halt_lift_requires_human": (
+                self._cb.halt_reason == "max_drawdown" if self._cb.is_halted else None
+            ),
             "mode": get_settings().alpaca_mode,
             "market_open": self._is_market_hours(),
             "sizing_mode": self._sizing_mode,
