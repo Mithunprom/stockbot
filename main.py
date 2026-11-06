@@ -1294,6 +1294,7 @@ async def diagnostics() -> JSONResponse:
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),
             "tickers_ic_blocked": summary.get("tickers_ic_blocked", []),
             "tickers_probe_eligible": summary.get("tickers_probe_eligible", []),
+            "ic_outcomes_epoch": summary.get("ic_outcomes_epoch"),
             "n_trades_today": summary.get("n_trades_today", 0),
             "max_trades_per_day": summary.get("max_trades_per_day", 8),
             "max_open_positions": summary.get("max_open_positions"),

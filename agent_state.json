@@ -1,6 +1,6 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 23). Nightly Nov 5. NEW: v0.9.9 (Nov 2 direct push) corrected max_drawdown peak: true peak $108,588.50 (Apr 3) was invisible to 3M window, real drawdown 11.01% (was reporting 7.33%). CB halted on v0.9.9 deploy — CORRECT behavior. Also fixed consecutive_losses scalar (was decorative, never applied). Bot halted 6 trading days (Oct 31 — Nov 5). Kelly HARD BLOCKED -0.2622. EMAIL_ALERTS_ENABLED=false → owner not notified of halt (nightly desk sent PushNotification). H37 implemented: CB halt timestamp in diagnostics (PR #109, freeze-exempt). H36 PR #104 open (train/serve IC fix, needs_data_run). M3 n=40, WR=50%, T30 PF=0.572 (CODE RED). Integrity ALL GREEN. 0 open positions, 6 signals would qualify if unblocked.",
- "last_iteration_date": "2026-11-05",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 23). Nightly Nov 6. H38 implemented: IC_OUTCOMES_EPOCH env var filters contaminated pre-H36-fix prediction outcomes from the IC block gate (PR opened Nov 6, freeze-exempt — measurement integrity category). 19 tickers falsely blocked (serving IC=-0.010 accumulated n>=300 of near-random outcomes). After H36 deploy, operator sets IC_OUTCOMES_EPOCH=<H36_deploy_date> on Railway to clear them. Probe unaffected (uses full unfiltered window to avoid re-deadlocking Kelly-probation governor). Bot halted 7 trading days (Oct 31 — Nov 6). Kelly HARD BLOCKED -0.2622. EMAIL_ALERTS_ENABLED=false → owner not notified of halt (nightly desk sent PushNotification). H37 CB-halt diagnostics PR #109 open. H36 train/serve IC fix PR #104 open (needs_data_run after CB lifted + H36 deployed). M3 n=40, WR=50%, T30 PF=0.572 (CODE RED threshold PF<0.8). Integrity ALL GREEN. 51 open PRs unmerged — TPM bottleneck.",
+ "last_iteration_date": "2026-11-06",
  "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -236,6 +236,18 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H38",
+   "hypothesis": "IC_OUTCOMES_EPOCH env var: wire to `since` parameter of `_compute_per_ticker_ic` in signal_loop._maybe_refresh_ticker_ic for the IC-block gate only. 19 tickers are falsely blocked in the Nov 6 snapshot — all accumulated n>=300 from the contaminated serving window (H36 not yet deployed; serving IC=-0.010). After H36 fixes the serving pipeline, operator sets IC_OUTCOMES_EPOCH=<H36_deploy_date> on Railway to exclude pre-fix outcomes from the IC-block gate. Probe intentionally unfiltered (needs full window to avoid re-deadlocking Kelly-probation governor). FREEZE-EXEMPT: measurement integrity (same category as KELLY_EPOCH).",
+   "status": "implemented — PR #111 open (feat/rnd-H38-ic-outcomes-epoch, Nov 6, freeze-exempt)",
+   "added": "2026-11-06",
+   "pr_number": 111,
+   "needs_data_run": false,
+   "freeze_classification": "FREEZE-EXEMPT (measurement integrity — not a strategy change)",
+   "expected_impact": "Clears 19 falsely-blocked tickers after H36 deploy. No behavior change until IC_OUTCOMES_EPOCH is set on Railway. After set: IC block gate re-arms cleanly on post-fix predictions only.",
+   "validation_evidence": "7 unit tests in tests/unit/test_ic_outcomes_epoch.py. Key test: ic_block_still_rearms_on_fresh_contaminated_outcomes — block re-arms on post-epoch near-random predictions, proving epoch is a re-seed not a removal. Probe separation test: probe_uses_no_epoch_filter_when_epoch_set confirms probe issues separate unfiltered query when IC_OUTCOMES_EPOCH set.",
+   "priority": "HIGH — dependency of H36 recovery (must deploy before or with H36 to avoid 30-day false-block window)"
+  },
   {
    "id": "H37",
    "hypothesis": "Expose CB halt timestamp and duration in /diagnostics. After v0.9.9 (Nov 2) correctly halted the bot at 11.01% drawdown with EMAIL_ALERTS_ENABLED=false, the owner had no way to see from the dashboard how long the bot had been silent. halt_since (ISO UTC), halt_duration_hours (float), and halt_lift_requires_human (bool|null) added to pipeline_a diagnostics. FREEZE-EXEMPT: diagnostics only.",
@@ -715,6 +727,17 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-11-06",
+   "hypothesis_id": "H38",
+   "result": "IMPLEMENTED — PR opened (feat/rnd-H38-ic-outcomes-epoch). FINDINGS: 19 tickers on IC block list in Nov 6 snapshot (AAPL ABBV ACN BAC EFX GD GEV GOOG JNJ MPWR MRK MRNA PANW PNR RDDT REGN SNPS VST WFC) — all accumulated n>=300 from contaminated serving window (serving IC=-0.010, H36 not yet deployed). After H36 fixes serving IC to ~+0.18, those 19 tickers would stay blocked for 30 more days based on noise outcomes. FIX: add IC_OUTCOMES_EPOCH env var; wire to `since` param of `_compute_per_ticker_ic` in _maybe_refresh_ticker_ic for IC-block gate only. Probe unaffected (separate unfiltered query when epoch set + windows match). `_compute_per_ticker_ic` already had `since` param — minimal change (3 effective lines in signal_loop.py). Also adds `ic_outcomes_epoch` field to summary dict and diagnostics endpoint. 7 unit tests (tests/unit/test_ic_outcomes_epoch.py). Key safety test: block re-arms on post-epoch contaminated outcomes (epoch is a re-seed, not a removal). Note: PRs #107 (H37 Kelly hard-block exit ETA, Nov 3) and #108 (H37 long-only entry gate dir_prob fix, Nov 4) opened by prior nightly runs but not tracked here — see GitHub. M3 metrics unchanged: n=40, WR=50%, T30 PF=0.572 (CODE RED). Bot halted day 7.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "main.py",
+    "tests/unit/test_ic_outcomes_epoch.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-11-05",
    "hypothesis_id": "H37",
