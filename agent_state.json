@@ -239,9 +239,9 @@
   {
    "id": "H38",
    "hypothesis": "IC_OUTCOMES_EPOCH env var: wire to `since` parameter of `_compute_per_ticker_ic` in signal_loop._maybe_refresh_ticker_ic for the IC-block gate only. 19 tickers are falsely blocked in the Nov 6 snapshot — all accumulated n>=300 from the contaminated serving window (H36 not yet deployed; serving IC=-0.010). After H36 fixes the serving pipeline, operator sets IC_OUTCOMES_EPOCH=<H36_deploy_date> on Railway to exclude pre-fix outcomes from the IC-block gate. Probe intentionally unfiltered (needs full window to avoid re-deadlocking Kelly-probation governor). FREEZE-EXEMPT: measurement integrity (same category as KELLY_EPOCH).",
-   "status": "implemented — PR opened 2026-11-06 (feat/rnd-H38-ic-outcomes-epoch)",
+   "status": "implemented — PR #111 open (feat/rnd-H38-ic-outcomes-epoch, Nov 6, freeze-exempt)",
    "added": "2026-11-06",
-   "pr_number": null,
+   "pr_number": 111,
    "needs_data_run": false,
    "freeze_classification": "FREEZE-EXEMPT (measurement integrity — not a strategy change)",
    "expected_impact": "Clears 19 falsely-blocked tickers after H36 deploy. No behavior change until IC_OUTCOMES_EPOCH is set on Railway. After set: IC block gate re-arms cleanly on post-fix predictions only.",
