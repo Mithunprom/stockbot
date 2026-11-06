@@ -444,6 +444,42 @@ def _kelly_epoch() -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+# IC_OUTCOMES_EPOCH — analogous to KELLY_EPOCH for the per-ticker IC block gate.
+# When set, the IC-block gate ignores prediction outcomes recorded BEFORE this
+# date. Used to clear contaminated measurements after a serving-pipeline fix.
+#
+# WHY IT EXISTS: v0.9.5 (2026-10-16) fixed the IC fill job after it had been
+# completely dead since deployment. During the dead period, the serving pipeline
+# ran near-random predictions (serving IC ≈ −0.010 vs full-history IC ≈ +0.181
+# — the train/serve IC skew from mtf_trend_60m EMA initial contamination, H36).
+# Those near-random outcomes accumulated 300+ filled rows per ticker and armed
+# the IC block gate on 19 tickers BEFORE H36 is deployed to fix the root cause.
+# Setting IC_OUTCOMES_EPOCH to the H36 deploy date lets the gate re-arm cleanly
+# on post-fix predictions only without deleting historical data.
+#
+# The Kelly-probation PROBE intentionally does NOT use this filter: the probe
+# needs the widest possible sample to stay above KELLY_PROBE_MIN_N = 30, and a
+# contaminated-but-available sample is better than no sample for routing (small-n
+# probe eligibility is loose by design — see KELLY_PROBE_MIN_N).
+#
+# Same rationale for DEFAULTS TO EMPTY as KELLY_EPOCH: operational config,
+# not a code constant. Set `IC_OUTCOMES_EPOCH` on Railway, not here.
+IC_OUTCOMES_EPOCH_ISO = os.environ.get("IC_OUTCOMES_EPOCH", "")
+
+
+def _ic_outcomes_epoch() -> datetime | None:
+    """Parse IC_OUTCOMES_EPOCH_ISO, or None when unset/invalid (no filtering)."""
+    raw = (IC_OUTCOMES_EPOCH_ISO or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        logger.warning("ic_outcomes_epoch_unparseable", value=raw)
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _carried_overnight(entry: datetime | None, exit_: datetime | None) -> bool:
     """True when a trade spanned an ET session boundary.
 
@@ -1465,6 +1501,8 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic_probe.items()
                 if n >= KELLY_PROBE_MIN_N and ic >= KELLY_PROBATION_MIN_TICKER_IC
             ],
+            # ISO string of IC_OUTCOMES_EPOCH if set; null means full window.
+            "ic_outcomes_epoch": IC_OUTCOMES_EPOCH_ISO or None,
             "tickers_on_cooldown": list(self._ticker_cooldown.keys()),
             "sector_notionals": self._compute_sector_notionals(),
             "data_fresh": self._data_fresh,
@@ -1959,9 +1997,12 @@ class SignalLoop:
             return
         self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
         try:
-            # 30d, no `since` — see TICKER_IC_WINDOW_DAYS for why both changed.
+            # 30d. IC_OUTCOMES_EPOCH filters contaminated pre-fix predictions
+            # from the IC-block gate (see IC_OUTCOMES_EPOCH_ISO). None → full
+            # window (default, identical behaviour to before this change).
             by_ticker = await self._ic_tracker._compute_per_ticker_ic(
                 window_days=TICKER_IC_WINDOW_DAYS,
+                since=_ic_outcomes_epoch(),
             )
             self._ticker_ic = {
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
@@ -1972,10 +2013,12 @@ class SignalLoop:
             # governor). Skipped when Kelly is healthy to save a query.
             self._ticker_ic_probe = {}
             if self._kelly_mode() == "probation":
-                if KELLY_PROBE_IC_WINDOW_DAYS == TICKER_IC_WINDOW_DAYS:
+                if KELLY_PROBE_IC_WINDOW_DAYS == TICKER_IC_WINDOW_DAYS and _ic_outcomes_epoch() is None:
                     # Same window, same (absent) `since` → identical query.
                     # Reuse rather than pay a second round-trip; the two gates
                     # differ only in their thresholds, not their sample.
+                    # When IC_OUTCOMES_EPOCH is set, _ticker_ic is filtered but
+                    # the probe must stay unfiltered — a separate query is needed.
                     self._ticker_ic_probe = dict(self._ticker_ic)
                 else:
                     probe_by_ticker = await self._ic_tracker._compute_per_ticker_ic(
@@ -1999,6 +2042,7 @@ class SignalLoop:
                 ic_blocked=blocked or None,
                 kelly_mode=self._kelly_mode(),
                 probe_eligible=probe_eligible or None,
+                ic_outcomes_epoch=IC_OUTCOMES_EPOCH_ISO or None,
             )
         except Exception as exc:
             # Fail open: missing IC data never blocks trading by itself
