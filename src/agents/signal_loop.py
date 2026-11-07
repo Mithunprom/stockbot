@@ -824,6 +824,32 @@ def _compute_earnings_blackout(tickers: list[str]) -> dict[str, date | None]:
     return out
 
 
+# ─── Kelly recovery helpers ───────────────────────────────────────────────────
+
+def _kelly_fraction_from_pnls(outcomes: list[float]) -> float:
+    """Compute Kelly fraction from a list of pnl_pct values.
+
+    Extracted for testability — SignalLoop._update_kelly() is the live path.
+    Returns 0.0 when the sample has no wins or no losses (indeterminate edge).
+
+    Args:
+        outcomes: Closed-trade pnl_pct values (positive = win, negative = loss).
+
+    Returns:
+        Kelly fraction f* in (-inf, 1].
+    """
+    wins = [o for o in outcomes if o > 0]
+    losses = [o for o in outcomes if o < 0]
+    if not wins or not losses:
+        return 0.0
+    import statistics
+    p = len(wins) / len(outcomes)
+    avg_win = statistics.mean(wins)
+    avg_loss = abs(statistics.mean(losses))
+    b = avg_win / max(avg_loss, 1e-9)
+    return (p * b - (1 - p)) / max(b, 1e-9)
+
+
 # ─── RL agent loader ──────────────────────────────────────────────────────────
 
 def _load_rl_agent() -> Any | None:
@@ -1526,6 +1552,12 @@ class SignalLoop:
                 for e in [_atr_exits(self._daily_vol_for(t))]
             },
             "daily_vol_cache_n": len(self._ticker_daily_vol),
+            # H38: mechanical Kelly-block rolloff schedule.  Shows when each
+            # day's outcomes leave the 10-day window and when hard-block lifts —
+            # so the owner knows the earliest possible entry date without having
+            # to query the DB manually.  Also surfaces CB halt state so the
+            # /diagnostics endpoint alone answers "can the bot trade today?"
+            "kelly_recovery_eta": self._kelly_recovery_eta(),
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -2215,6 +2247,142 @@ class SignalLoop:
         if self._kelly_mode() == "inactive":
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
+
+    def _kelly_recovery_eta(self) -> dict[str, Any]:
+        """When Kelly hard-block naturally lifts as old losses roll off the window.
+
+        Iterates through dates present in _sizing_recent_outcomes (oldest first)
+        and simulates removing all outcomes on or before each date.  The first
+        date whose removal would push the simulated Kelly above
+        KELLY_HARD_BLOCK_THRESHOLD (or drop the sample below the minimum so the
+        governor goes inactive) is the recovery date.  No new trades are assumed.
+
+        Returns a dict suitable for embedding directly in /diagnostics JSON:
+          blocking_outcomes_rolloff_schedule — per-date rolloff detail
+          earliest_kelly_unblock_date        — ISO date, or null
+          days_until_kelly_unblock           — integer, or null
+          cb_halt_active                     — bool
+          cb_halt_requires_manual_resume     — bool
+          earliest_entry_possible            — human-readable summary string
+        """
+        from collections import defaultdict
+        from datetime import timedelta
+
+        now = datetime.now(timezone.utc)
+        today = now.date()
+        outcomes: list[tuple[datetime, float]] = list(self._sizing_recent_outcomes)
+
+        all_pnls = [p for _, p in outcomes]
+        n = len(all_pnls)
+
+        # Determine current hard-block status without mutating state.
+        # Mirror _kelly_entries_blocked() logic: governor is "inactive" when
+        # the sample is too thin, in which case there is no hard-block.
+        currently_hard_blocked = (
+            n >= self._kelly_min_trades
+            and _kelly_fraction_from_pnls(all_pnls) <= KELLY_HARD_BLOCK_THRESHOLD
+        )
+
+        if not outcomes or not currently_hard_blocked:
+            cb_halted = self._cb.is_halted
+            if not outcomes:
+                early_msg = "No outcomes in window — Kelly inactive (no hard-block)."
+            elif cb_halted:
+                early_msg = (
+                    "CB halt active — requires manual /admin/resume-trading. "
+                    "Kelly not hard-blocked."
+                )
+            else:
+                early_msg = (
+                    "No Kelly hard-block. Entries permitted (subject to CB and other gates)."
+                )
+            return {
+                "blocking_outcomes_rolloff_schedule": [],
+                "earliest_kelly_unblock_date": None,
+                "days_until_kelly_unblock": None,
+                "cb_halt_active": cb_halted,
+                "cb_halt_requires_manual_resume": cb_halted,
+                "earliest_entry_possible": early_msg,
+            }
+
+        by_date: dict[date, list[float]] = defaultdict(list)
+        for ts, p in outcomes:
+            if ts is not None:
+                by_date[ts.date()].append(p)
+
+        sorted_dates = sorted(by_date.keys())
+
+        rolloff_schedule = []
+        for d in sorted_dates:
+            rolloff_date = d + timedelta(days=KELLY_LOOKBACK_DAYS)
+            day_pnls = by_date[d]
+            rolloff_schedule.append({
+                "outcome_date": d.isoformat(),
+                "rolloff_date": rolloff_date.isoformat(),
+                "n_outcomes": len(day_pnls),
+                "net_pnl_pct": round(sum(day_pnls), 4),
+                "days_until_rolloff": max(0, (rolloff_date - today).days),
+            })
+
+        # Walk through dates oldest-first; simulate Kelly after each drops off.
+        earliest_unblock: date | None = None
+        for cutoff_date in sorted_dates:
+            remaining = [
+                p for ts, p in outcomes
+                if ts is not None and ts.date() > cutoff_date
+            ]
+            n = len(remaining)
+            if n < self._kelly_min_trades:
+                # Sample too thin — governor goes inactive → no hard-block.
+                simulated = 0.0
+            else:
+                simulated = _kelly_fraction_from_pnls(remaining)
+
+            if simulated > KELLY_HARD_BLOCK_THRESHOLD:
+                earliest_unblock = cutoff_date + timedelta(days=KELLY_LOOKBACK_DAYS)
+                break
+
+        cb_halted = self._cb.is_halted
+        days_until = (
+            (earliest_unblock - today).days if earliest_unblock is not None else None
+        )
+
+        if cb_halted and earliest_unblock is not None:
+            summary = (
+                f"CB halt active — requires manual /admin/resume-trading. "
+                f"Kelly hard-block lifts ~{earliest_unblock.isoformat()} "
+                f"({days_until}d, as {sorted_dates[0].isoformat()} losses roll off)."
+            )
+        elif cb_halted:
+            summary = (
+                "CB halt active — requires manual /admin/resume-trading. "
+                "Kelly unblocked (no hard-block in current window)."
+            )
+        elif earliest_unblock is not None:
+            summary = (
+                f"Kelly hard-block lifts ~{earliest_unblock.isoformat()} "
+                f"({days_until}d, as {sorted_dates[0].isoformat()} rolls off). "
+                "No CB halt."
+            )
+        else:
+            # Hard-blocked but no rolloff date found — all outcomes in window are
+            # negative together; block lifts when the full window drains.
+            last_rolloff = sorted_dates[-1] + timedelta(days=KELLY_LOOKBACK_DAYS)
+            summary = (
+                f"Kelly hard-block; no single-day removal resolves it. "
+                f"Window fully drains ~{last_rolloff.isoformat()}."
+            )
+
+        return {
+            "blocking_outcomes_rolloff_schedule": rolloff_schedule,
+            "earliest_kelly_unblock_date": (
+                earliest_unblock.isoformat() if earliest_unblock is not None else None
+            ),
+            "days_until_kelly_unblock": days_until,
+            "cb_halt_active": cb_halted,
+            "cb_halt_requires_manual_resume": cb_halted,
+            "earliest_entry_possible": summary,
+        }
 
     def _kelly_probe_notional(self) -> float:
         """Probe notional in dollars, scaled to the current portfolio."""
