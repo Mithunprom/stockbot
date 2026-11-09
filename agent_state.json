@@ -1,6 +1,6 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 23). Nightly Nov 5. NEW: v0.9.9 (Nov 2 direct push) corrected max_drawdown peak: true peak $108,588.50 (Apr 3) was invisible to 3M window, real drawdown 11.01% (was reporting 7.33%). CB halted on v0.9.9 deploy — CORRECT behavior. Also fixed consecutive_losses scalar (was decorative, never applied). Bot halted 6 trading days (Oct 31 — Nov 5). Kelly HARD BLOCKED -0.2622. EMAIL_ALERTS_ENABLED=false → owner not notified of halt (nightly desk sent PushNotification). H37 implemented: CB halt timestamp in diagnostics (PR #109, freeze-exempt). H36 PR #104 open (train/serve IC fix, needs_data_run). M3 n=40, WR=50%, T30 PF=0.572 (CODE RED). Integrity ALL GREEN. 0 open positions, 6 signals would qualify if unblocked.",
- "last_iteration_date": "2026-11-05",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 24). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly HARD BLOCKED -0.4259 (worsened: Oct 29-30 losses 12 trades 3W/9L net -$2,443 pushed from -0.2622). EMAIL_ALERTS_ENABLED=false → halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 8; 7+ trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). W46: 0 direct pushes — 2nd clean governance week since W36. Railway worker week 23. Integrity ALL GREEN. 0 open positions.",
+ "last_iteration_date": "2026-11-09",
  "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
@@ -29,7 +29,7 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Oct 28 22:10 UTC (v0.9.7, light_run). 2 checks: loop_tick_fresh OK (last tick 22:55 UTC), tick_errors OK (lifetime 0). last_exit_at 19:55:48 UTC Oct 28 (15:55 ET session_close). 0 open positions. PDT 5/5 day trades used.",
+  "watchdog_status": "OK Nov 8 12:52 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 12:52 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: -0.4259 hard-blocked.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
@@ -237,14 +237,38 @@
  },
  "hypothesis_queue": [
   {
+   "id": "H38",
+   "hypothesis": "Two-part diagnostic cluster (W46). Part A: IC_OUTCOMES_EPOCH env var clears contaminated IC block outcomes — entries made Oct 8-16 without the IC fill job running may have produced poisoned IC scores that incorrectly block tickers. IC_OUTCOMES_EPOCH env var allows operator to discard outcomes before a given timestamp from the IC window. Part B: Kelly recovery ETA at /diagnostics — exposes how many trading days until Kelly exits hard-block based on loss rolloff schedule (Oct 29-30 losses roll off ~Nov 8-10).",
+   "status": "implemented — 2 PRs open (Nov 6-7, freeze-exempt)",
+   "added": "2026-11-07",
+   "added_by": "nightly desk W46 — IC block may be contaminated from Oct 8-16 period; Kelly recovery ETA needed ahead of halt lift",
+   "sub_prs": {
+    "PR111": {
+     "number": 111,
+     "title": "feat(signal_loop): H38 — IC_OUTCOMES_EPOCH env var clears contaminated IC block",
+     "state": "OPEN",
+     "date": "2026-11-06"
+    },
+    "PR112": {
+     "number": 112,
+     "title": "feat(diagnostics): H38 — Kelly recovery ETA in /diagnostics",
+     "state": "OPEN",
+     "date": "2026-11-07"
+    }
+   },
+   "priority": "MEDIUM — merge before halt lift; sets IC block to clean state for first post-halt entries"
+  },
+  {
    "id": "H37",
-   "hypothesis": "Expose CB halt timestamp and duration in /diagnostics. After v0.9.9 (Nov 2) correctly halted the bot at 11.01% drawdown with EMAIL_ALERTS_ENABLED=false, the owner had no way to see from the dashboard how long the bot had been silent. halt_since (ISO UTC), halt_duration_hours (float), and halt_lift_requires_human (bool|null) added to pipeline_a diagnostics. FREEZE-EXEMPT: diagnostics only.",
-   "status": "implemented — PR #109 open (Nov 5, freeze-exempt)",
+   "hypothesis": "Expose CB halt timestamp and duration in /diagnostics. After v0.9.9 (Nov 2) correctly halted the bot at 11.01% drawdown with EMAIL_ALERTS_ENABLED=false, the owner had no way to see from the dashboard how long the bot had been silent. halt_since (ISO UTC), halt_duration_hours (float), and halt_lift_requires_human (bool|null) added to pipeline_a diagnostics. Also: explicit dir_prob>=0.60 gate in long-only entry path (was implicit), Kelly hard-block exit ETA. FREEZE-EXEMPT cluster.",
+   "status": "implemented — 3 PRs open (Nov 3-5, all freeze-exempt)",
    "added": "2026-11-05",
    "added_by": "nightly desk — Nov 5 nightly run: CB halted (max_drawdown) with EMAIL_ALERTS_ENABLED=false; owner blind to halt duration from diagnostics",
-   "pr_branch": "feat/rnd-H37-cb-halt-diagnostics",
-   "pr_number": 109,
-   "pr_state": "OPEN — freeze-exempt: diagnostics only. 7 logic tests pass in sandbox. 6 inspect-based tests pass on Railway.",
+   "sub_prs": {
+    "PR107": {"number": 107, "title": "H37 — Kelly hard-block exit ETA in /diagnostics", "state": "OPEN", "date": "2026-11-03"},
+    "PR108": {"number": 108, "title": "H37 — explicit dir_prob>=0.60 gate in long-only entry path", "state": "OPEN", "date": "2026-11-04"},
+    "PR109": {"number": 109, "title": "H37 — CB halt timestamp and duration in /diagnostics", "state": "OPEN", "date": "2026-11-05"}
+   },
    "priority": "HIGH — merge before halt is lifted so owner sees duration immediately on resume"
   },
   {
