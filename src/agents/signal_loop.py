@@ -1459,6 +1459,25 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
             ],
+            # H39: detail for each IC-blocked ticker, sorted worst-IC first.
+            # The bare list above names blocked tickers; this explains why —
+            # the ic value and the sample size are both needed to judge whether
+            # the block is statistically meaningful or noise from a thin window.
+            "ic_block_detail": sorted(
+                [
+                    {"ticker": t, "ic": round(ic, 4), "n": n}
+                    for t, (ic, n) in self._ticker_ic.items()
+                    if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+                ],
+                key=lambda x: x["ic"],
+            ),
+            # H39: Kelly window state at the moment this snapshot is taken.
+            # Critical at halt-lift time: if window_fully_drained is True, the
+            # bot starts the first post-halt session in Kelly-inactive mode with
+            # zero edge measurement. activation_cliff_risk=True means the
+            # partial sample already projects a hard-block fraction — the first
+            # N trades will be small but the N+1th will immediately hard-block.
+            "kelly_window_summary": self._kelly_window_summary(),
             # Names the Kelly-probation probe may fire on (30d IC window). When
             # Kelly is in probation and this is empty, ALL entries are blocked.
             "tickers_probe_eligible": [
@@ -2215,6 +2234,60 @@ class SignalLoop:
         if self._kelly_mode() == "inactive":
             return False
         return self._kelly_fraction <= KELLY_HARD_BLOCK_THRESHOLD
+
+    def _kelly_window_summary(self) -> dict[str, Any]:
+        """Kelly window composition for halt-lift briefing.
+
+        Freeze-exempt: diagnostics only. Answers the question needed before
+        lifting the CB halt: how many trades are in the window, what direction
+        is the edge, and will Kelly hard-block again the moment it activates?
+
+        Activation cliff risk: when fewer than KELLY_MIN_TRADES outcomes exist
+        but the projected fraction (from the small sample) is already below
+        KELLY_HARD_BLOCK_THRESHOLD, the bot will immediately enter probation
+        (or hard-block) the moment it accumulates enough trades to leave
+        "inactive" mode — a trap the owner should know about before lifting
+        the halt.
+        """
+        import statistics as _stats
+        self._prune_kelly_window()
+        outcomes = [p for _, p in self._sizing_recent_outcomes]
+        n = len(outcomes)
+        if n == 0:
+            return {
+                "n": 0,
+                "n_wins": 0,
+                "n_losses": 0,
+                "win_rate": None,
+                "projected_fraction": None,
+                "activation_cliff_risk": None,
+                "trades_until_activation": KELLY_MIN_TRADES,
+                "window_fully_drained": True,
+            }
+        wins = [o for o in outcomes if o > 0]
+        losses = [o for o in outcomes if o < 0]
+        win_rate: float | None = round(len(wins) / n, 3) if n >= 2 else None
+        projected: float | None = None
+        if wins and losses:
+            p = len(wins) / n
+            avg_win = _stats.mean(wins)
+            avg_loss = abs(_stats.mean(losses))
+            b = avg_win / max(avg_loss, 1e-9)
+            raw = (p * b - (1 - p)) / max(b, 1e-9)
+            projected = round(raw, 4)
+        cliff_risk = (
+            projected is not None and projected < KELLY_HARD_BLOCK_THRESHOLD
+        )
+        return {
+            "n": n,
+            "n_wins": len(wins),
+            "n_losses": len(losses),
+            "win_rate": win_rate,
+            "projected_fraction": projected,
+            "activation_cliff_risk": cliff_risk,
+            "trades_until_activation": max(0, KELLY_MIN_TRADES - n),
+            "window_fully_drained": False,
+        }
 
     def _kelly_probe_notional(self) -> float:
         """Probe notional in dollars, scaled to the current portfolio."""
