@@ -1293,6 +1293,11 @@ async def diagnostics() -> JSONResponse:
             "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),
             "tickers_ic_blocked": summary.get("tickers_ic_blocked", []),
+            # H39: IC block detail (ticker, ic, n) sorted worst IC first.
+            "ic_block_detail": summary.get("ic_block_detail", []),
+            # H39: Kelly window composition at snapshot time (n, wins, losses,
+            # projected_fraction, activation_cliff_risk, window_fully_drained).
+            "kelly_window_summary": summary.get("kelly_window_summary", {}),
             "tickers_probe_eligible": summary.get("tickers_probe_eligible", []),
             "n_trades_today": summary.get("n_trades_today", 0),
             "max_trades_per_day": summary.get("max_trades_per_day", 8),

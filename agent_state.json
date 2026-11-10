@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 24). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly HARD BLOCKED -0.4259 (worsened: Oct 29-30 losses 12 trades 3W/9L net -$2,443 pushed from -0.2622). EMAIL_ALERTS_ENABLED=false → halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 8; 7+ trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). W46: 0 direct pushes — 2nd clean governance week since W36. Railway worker week 23. Integrity ALL GREEN. 0 open positions.",
- "last_iteration_date": "2026-11-09",
- "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 25). CB HALTED day 8 since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly RECOVERED to INACTIVE (0.0) Nov 10 — Oct 29-30 losses (12 trades, 3W/9L, net -$2,443) have rolled off KELLY_LOOKBACK_DAYS=10 window; hard-block released. POST-HALT STRUCTURAL RISK: Kelly window fully drained + H24/H25 guards unmerged = same risk profile as Aug 31 blowup (-$937 12 full-size entries). EMAIL_ALERTS_ENABLED=false → halt still silent. M3 n=40 (zero trades Oct 30 - Nov 10; 8+ trading days halted). WR=50% PF=0.310. T30 PF=0.256 CODE RED. H39 implemented tonight: Kelly window composition + IC block detail diagnostics for halt-lift briefing. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). Railway worker week 25. Integrity ALL GREEN. 0 open positions.",
+ "last_iteration_date": "2026-11-10",
+ "active_hypothesis": "H39. KELLY WINDOW COMPOSITION + IC BLOCK DETAIL DIAGNOSTIC. Implemented 2026-11-10. Added _kelly_window_summary() to SignalLoop — returns n, wins, losses, win_rate, projected_fraction, activation_cliff_risk, trades_until_activation, window_fully_drained. Added ic_block_detail field: list of {ticker, ic, n} for blocked tickers sorted by worst IC. Both fields added to get_portfolio_summary() and to main.py _pipeline_diagnostics() whitelist. 19/19 unit tests pass (stdlib-only). Freeze-exempt: diagnostics only, no strategy logic changed. PR on branch feat/rnd-H39-halt-lift-diagnostics. RATIONALE: Kelly window fully drained as of Nov 10 (Oct 29-30 losses rolled off 10-day window). When CB halt is lifted, bot enters with zero Kelly history AND H24/H25 unmerged — identical structural setup to Aug 31 blowup. This diagnostic makes the risk visible immediately from /diagnostics at halt-lift time (window_fully_drained=True, trades_until_activation=10, activation_cliff_risk=null). Status: PR_OPEN — no data run needed (pure diagnostics).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,7 +29,17 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Nov 8 12:52 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 12:52 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: -0.4259 hard-blocked.",
+  "watchdog_status": "OK Nov 9 22:49 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 22:49 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: -0.4259 hard-blocked at time of snapshot. NOTE Nov 10: Kelly window has since drained — Oct 29-30 outcomes (12 trades) now > KELLY_LOOKBACK_DAYS=10 days old. Live Kelly mode = inactive (0.0). Hard block released.",
+  "m3_current_n": 40,
+  "m3_current_win_rate": 0.5,
+  "m3_current_pf": 0.310,
+  "m3_current_net_pnl": -3711.47,
+  "m3_current_gross_profit": 1670.37,
+  "m3_current_gross_loss": 5381.84,
+  "m3_current_t30_pf": 0.256,
+  "m3_current_t30_net_pnl": -2816.31,
+  "m3_current_zero_trades_since": "2026-10-30",
+  "m3_current_note": "Nov 10 live fetch (IDs 274-313). n=40 (Oct 8 v0.9.3 clock). 20W/20L. All trades Oct 8-29. Zero trades Oct 30 - Nov 10 (CB halt). Gross profit $1,670.37, gross loss $5,381.84. T30 (IDs 284-313): 15W/15L, net -$2,816.31, PF=0.256. CODE RED: PF<<1.2 gate.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
@@ -739,6 +749,19 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-11-10",
+   "hypothesis_id": "H39",
+   "result": "IMPLEMENTED — PR opened (feat/rnd-H39-halt-lift-diagnostics). H39: Kelly Window Composition + IC Block Detail diagnostic. Added _kelly_window_summary() to SignalLoop — returns n, wins, losses, win_rate, projected_fraction, activation_cliff_risk, trades_until_activation, window_fully_drained. Added ic_block_detail field: list of {ticker, ic, n} for blocked tickers sorted by worst IC. Both fields added to get_portfolio_summary() and to main.py _pipeline_diagnostics() whitelist. 19/19 unit tests pass (stdlib-only test_h39_halt_lift_diagnostics.py). Freeze-exempt: diagnostics only, no strategy logic changed. RATIONALE: Kelly window fully drained as of Nov 10 (Oct 29-30 losses rolled off KELLY_LOOKBACK_DAYS=10). H24/H25 unmerged = Aug 31 replay risk on halt lift. This diagnostic makes window state visible from /diagnostics at halt-lift time. KELLY STATUS UPDATE: Oct 29-30 outcomes now >10 days old, rolled off window; Kelly mode = inactive (0.0); hard-block released. CB halted day 8. M3 n=40 (zero new trades since Oct 30). M3 WR=50%, PF=0.310, net -$3,711.47. T30 PF=0.256 CODE RED. No data run needed — pure diagnostics.",
+   "tests_status": "19/19 pass (test_h39_halt_lift_diagnostics.py, stdlib-only). 35 other collection errors pre-existing sandbox numpy/structlog limitation.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "main.py",
+    "tests/unit/test_h39_halt_lift_diagnostics.py",
+    "agent_state.json"
+   ],
+   "pr_branch": "feat/rnd-H39-halt-lift-diagnostics"
+  },
   {
    "date": "2026-11-05",
    "hypothesis_id": "H37",
