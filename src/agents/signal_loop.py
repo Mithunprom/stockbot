@@ -1526,7 +1526,31 @@ class SignalLoop:
                 for e in [_atr_exits(self._daily_vol_for(t))]
             },
             "daily_vol_cache_n": len(self._ticker_daily_vol),
+            # H40: synthesised go/no-go checklist for the owner before they
+            # call /admin/resume-trading. Pure diagnostics — no execution logic.
+            "halt_lift_readiness": self._halt_lift_readiness_snapshot(),
         }
+
+    def _halt_lift_readiness_snapshot(self) -> dict:
+        """Return the halt-lift readiness block for /diagnostics (H40)."""
+        from src.config import get_settings
+        from src.risk.halt_lift import halt_lift_readiness
+
+        settings = get_settings()
+        n_ic_blocked = sum(
+            1
+            for _t, (ic, n) in self._ticker_ic.items()
+            if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+        )
+        return halt_lift_readiness(
+            cb_halted=self._cb.is_halted,
+            kelly_fraction=self._kelly_fraction,
+            kelly_n_trades=len(self._sizing_recent_outcomes),
+            kelly_mode=self._kelly_mode(),
+            n_open_positions=len(self._pm._positions),
+            n_ic_blocked=n_ic_blocked,
+            email_alerts_enabled=settings.email_alerts_enabled,
+        )
 
     # ── Main tick ────────────────────────────────────────────────────────────
 
