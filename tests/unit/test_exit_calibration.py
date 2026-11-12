@@ -197,6 +197,7 @@ def test_catastrophic_threshold_only_ever_tightens_the_pdt_path():
 
 def _loop_with_open_long(daily_vol: float, entry_price: float = 100.0):
     """A SignalLoop holding one long that has not yet reached max_hold."""
+    from datetime import date
     from unittest.mock import MagicMock
 
     from src.agents.signal_loop import SignalLoop
@@ -218,6 +219,8 @@ def _loop_with_open_long(daily_vol: float, entry_price: float = 100.0):
     loop._peak_prices["AAPL"] = entry_price
     loop._bars_held["AAPL"] = 1          # well short of max_hold
     loop._ticker_daily_vol["AAPL"] = daily_vol
+    # Prevent wall-clock session-boundary from firing during nightly test runs
+    loop._session_boundary_crossed = lambda ticker, _now=None: False  # type: ignore[method-assign]
     return loop
 
 
