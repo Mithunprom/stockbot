@@ -2873,7 +2873,9 @@ class SignalLoop:
 
         return reason
 
-    def _session_boundary_crossed(self, ticker: str) -> bool:
+    def _session_boundary_crossed(
+        self, ticker: str, _now: datetime | None = None
+    ) -> bool:
         """True when an open position must be flat on wall-clock grounds.
 
         Two conditions, both time-based so no bar counter can defeat them:
@@ -2887,6 +2889,7 @@ class SignalLoop:
 
         Args:
             ticker: Open position to test.
+            _now: Override current ET time (tests only).
 
         Returns:
             True if the position should be closed now for session reasons.
@@ -2895,7 +2898,7 @@ class SignalLoop:
             from zoneinfo import ZoneInfo
         except ImportError:  # pragma: no cover - py<3.9 fallback
             from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
-        now = datetime.now(ZoneInfo("America/New_York"))
+        now = _now if _now is not None else datetime.now(ZoneInfo("America/New_York"))
         entry_date = self._entry_dates.get(ticker)
         if entry_date is not None and entry_date < now.date():
             return True

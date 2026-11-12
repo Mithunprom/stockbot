@@ -204,6 +204,9 @@ def test_exits_still_fire_while_entries_are_blocked():
     flat.lgbm_pred_return = 0.0
     flat.lgbm_dir_prob = 0.5
 
+    # Prevent wall-clock session-boundary from firing during nightly test runs
+    loop._session_boundary_crossed = lambda ticker, _now=None: False  # type: ignore[method-assign]
+
     loop._bars_held["AAPL"] = 1
     assert loop._check_sizing_exit("AAPL", 98.5, flat) == "stop_loss"
     assert loop._check_sizing_exit("AAPL", 102.0, flat) == "take_profit"

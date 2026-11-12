@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 24). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly HARD BLOCKED -0.4259 (worsened: Oct 29-30 losses 12 trades 3W/9L net -$2,443 pushed from -0.2622). EMAIL_ALERTS_ENABLED=false → halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 8; 7+ trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). W46: 0 direct pushes — 2nd clean governance week since W36. Railway worker week 23. Integrity ALL GREEN. 0 open positions.",
- "last_iteration_date": "2026-11-09",
- "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 25). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly CLEARED Nov 12: kelly_n_trades=0, kelly_fraction=0.0, kelly_mode=inactive, kelly_entries_hard_blocked=FALSE — Oct 29-30 losses (12 trades) naturally rolled off KELLY_LOOKBACK_DAYS=10 window by Nov 12. EMAIL_ALERTS_ENABLED=false → CB halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 12; 13 trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). H39 PR #114 open (Kelly window composition + IC block detail). H40 PR #115 open (halt_lift_readiness checklist). H41 PR #116 open (test suite time-independence fix — FREEZE-EXEMPT). W47 Nov 12: 3 signals would trade on halt lift (ANET ensemble=0.3126, MRVL=0.212, MSTR=0.209). Kelly ramp: kelly_ramp_entry_cap=1 (first post-halt day max 1 entry). Railway worker week 25. Integrity ALL GREEN.",
+ "last_iteration_date": "2026-11-12",
+ "active_hypothesis": "H41. TEST SUITE TIME-INDEPENDENCE FIX. FINDING: `_session_boundary_crossed()` reads real wall clock — after 15:55 ET (09:55 UTC) it always returns True. Three unit tests failed every nightly run: test_max_hold_still_governs_an_untriggered_trade, test_exits_still_fire_while_entries_are_blocked, test_normal_wander_still_does_not_stop_the_trade. FIX: added `_now: datetime | None = None` to `_session_boundary_crossed()` for injection in tests (zero production behaviour change). Test helpers mock `_session_boundary_crossed` to return False for clock-independent assertions. ALSO LOGGED: Kelly cleared naturally (n=0, inactive, not hard-blocked) — material state change from Nov 9 log. H39 (PR #114) and H40 (PR #115) logged below.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,7 +29,7 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Nov 8 12:52 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 12:52 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: -0.4259 hard-blocked.",
+  "watchdog_status": "OK Nov 12 01:47 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 01:47 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: CLEARED (n=0, fraction=0.0, inactive, NOT hard-blocked). Signal gate analysis Nov 12: 3 signals passing (ANET 0.3126, MRVL 0.212, MSTR 0.209), all blocked by CB halt only. kelly_ramp_entry_cap=1 (first post-halt day cap). PDT budget 3/5. 19 tickers IC-blocked.",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
@@ -257,6 +257,40 @@
     }
    },
    "priority": "MEDIUM — merge before halt lift; sets IC block to clean state for first post-halt entries"
+  },
+  {
+   "id": "H41",
+   "hypothesis": "Test suite time-independence fix. `_session_boundary_crossed()` reads real wall clock — after 15:55 ET (20:55 UTC) it always returns True, causing three unit tests to fail every nightly run: test_max_hold_still_governs_an_untriggered_trade, test_exits_still_fire_while_entries_are_blocked, test_normal_wander_still_does_not_stop_the_trade. These are CRITICAL tests (exit barrier calibration + Kelly entry block). Fix: add `_now: datetime | None = None` to `_session_boundary_crossed()` for injection in tests (zero production behavior change). Test helpers mock `_session_boundary_crossed` to return False for clock-independent assertions.",
+   "status": "implemented — PR #116 open (Nov 12, freeze-exempt)",
+   "added": "2026-11-12",
+   "added_by": "nightly desk Nov 12 — 3 unit tests failing every nightly run due to wall-clock boundary check firing after market hours",
+   "pr_branch": "feat/rnd-H41-test-clock-independence",
+   "pr_number": 116,
+   "pr_state": "OPEN — FREEZE-EXEMPT: test code + non-behavioral source change. 537 passed, 0 failed, 3 skipped.",
+   "priority": "HIGH — test suite was silently broken for every nightly run; CRITICAL exit-barrier and Kelly-block tests were false-negatives",
+   "validation": "537 passed, 0 failed, 3 skipped. All 3 previously-failing tests now pass at any time of day."
+  },
+  {
+   "id": "H40",
+   "hypothesis": "halt_lift_readiness synthesised checklist in /diagnostics. Single field enumerating every blocker between current halted state and a safe halt lift: (1) CB halt active, (2) Kelly state, (3) IC block count, (4) H36 warmup/retention deployed, (5) PR merge status. Gives owner a one-glance readiness score.",
+   "status": "implemented — PR #115 open (Nov 11, freeze-exempt)",
+   "added": "2026-11-11",
+   "added_by": "nightly desk Nov 11",
+   "pr_branch": "feat/rnd-H40-halt-lift-readiness",
+   "pr_number": 115,
+   "pr_state": "OPEN — FREEZE-EXEMPT: diagnostics only.",
+   "priority": "HIGH — merge before halt lift"
+  },
+  {
+   "id": "H39",
+   "hypothesis": "Kelly window composition + IC block detail for halt-lift briefing. Exposes per-ticker IC block detail (ic, n, threshold, blocked flag) and Kelly window trade-by-trade breakdown in /diagnostics. Enables owner to audit which tickers are blocked and why before lifting halt.",
+   "status": "implemented — PR #114 open (Nov 10, freeze-exempt)",
+   "added": "2026-11-10",
+   "added_by": "nightly desk Nov 10",
+   "pr_branch": "feat/rnd-H39-halt-lift-diagnostics",
+   "pr_number": 114,
+   "pr_state": "OPEN — FREEZE-EXEMPT: diagnostics only.",
+   "priority": "HIGH — merge before halt lift"
   },
   {
    "id": "H37",
@@ -739,6 +773,17 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-11-12",
+   "hypothesis_id": "H41",
+   "result": "IMPLEMENTED — PR #116 opened (feat/rnd-H41-test-clock-independence). FINDING: `_session_boundary_crossed()` reads real wall clock; after 15:55 ET (20:55 UTC) it always returns True. Three CRITICAL unit tests were failing every nightly run: test_max_hold_still_governs_an_untriggered_trade (exit barrier calibration), test_exits_still_fire_while_entries_are_blocked (Kelly entry block), test_normal_wander_still_does_not_stop_the_trade. Fix: added `_now: datetime | None = None` parameter to `_session_boundary_crossed()` for testability (zero production behaviour change). Test helpers mock `_session_boundary_crossed` to return False. ALSO: pytest-asyncio and yfinance installed (were missing from sandbox, caused additional test collection failures). Full suite: 537 passed, 0 failed, 3 skipped. KELLY STATE UPDATE: Kelly has cleared naturally as of Nov 12 (KELLY_LOOKBACK_DAYS=10; Oct 29-30 losses 13 calendar days ago). kelly_n_trades=0, kelly_fraction=0.0, kelly_mode=inactive, kelly_entries_hard_blocked=FALSE. This supersedes Nov 9 log which showed Kelly at -0.4259 hard-blocked. H39 (PR #114, Nov 10) and H40 (PR #115, Nov 11) logged in hypothesis_queue above.",
+   "files_changed": [
+    "src/agents/signal_loop.py",
+    "tests/unit/test_exit_calibration.py",
+    "tests/unit/test_kelly_entry_block.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-11-05",
    "hypothesis_id": "H37",
