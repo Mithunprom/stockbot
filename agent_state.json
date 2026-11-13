@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 24). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly HARD BLOCKED -0.4259 (worsened: Oct 29-30 losses 12 trades 3W/9L net -$2,443 pushed from -0.2622). EMAIL_ALERTS_ENABLED=false → halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 8; 7+ trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). W46: 0 direct pushes — 2nd clean governance week since W36. Railway worker week 23. Integrity ALL GREEN. 0 open positions.",
  "last_iteration_date": "2026-11-09",
- "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
+ "active_hypothesis": "H42. H36's diagnosis is right but its remedy is falsified — warmup is inert (rank agreement flat at 0.83 from 1950 to 7800 bars). Root cause localised to 7 of 30 features in two anchor-dependent families (mtf_*, orb_*), five of which are FFSA top-5. DO NOT MERGE PR #104 on its current rationale. Fitness = per-feature NRMSE, which cannot be overfit.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -237,6 +237,16 @@
  },
  "hypothesis_queue": [
   {
+   "id": "H42",
+   "status": "proposed",
+   "priority": "P0 — supersedes H36/PR #104",
+   "hypothesis": "H36's REMEDY IS FALSIFIED; its diagnosis stands. Measured 2026-11-12 on the 20-ticker research cache: rank agreement between full-history and trailing-window features is FLAT at ~0.83 across WARMUP_BARS of 1950/3900/5850/7800 (serving IC -0.0918/-0.0872/-0.0872/-0.0872). More warmup does NOT converge the paths, so PR #104 (retention 7->14d, WARMUP_BARS 1950->3500) buys disk and no measurable convergence — 3500 lies between two warmups that measured identically. DO NOT MERGE PR #104 on its current rationale. ACTUAL MECHANISM, newly localised: exactly 7 of the model's 30 features diverge; the other 23 are BIT-IDENTICAL, including rs_vwap_dev (the v0.8.2 cross-sectional fix holds). By NRMSE vs full-history: mtf_trend_15m 0.238, mtf_rsi_15m 0.203, orb_dev 0.162, mtf_confluence 0.155, orb_vpin_interact 0.138, mtf_trend_5m 0.137, orb_range_atr 0.126. Two families: mtf_* (resample + Wilder EWM) and orb_* (session-anchored opening range). FIVE of the seven are in FFSA's top five most predictive features. Both families depend on an ANCHOR (resample origin, session open) rather than a lookback length — which is exactly why warmup is inert. TESTED AND NOT CONFIRMED: that the research path cheats via orb_high = high.where(is_orb).groupby(date).transform('max') seeing later bars in the session. On real 09:40 ET bars full-session and causal orb_high were identical. Plausible but unproven — retest on bars where the session high lands AFTER the scored bar before claiming the backtest is inflated.",
+   "test_plan": "Per-feature, not per-model. For each of the 7, compute the value both ways at the SAME timestamps (compute_indicators_for_universe over full history vs over a trailing window) and drive NRMSE to 0. Fitness = feature-level NRMSE: no model, no P&L, no train/val split, so it CANNOT be overfit and success is unambiguous. Start with mtf_trend_15m (largest divergence): check the resample origin — bins aligned to the window start rather than a fixed clock differ from full-history bins at ANY window length. Then orb_dev: check behaviour when the scored bar falls inside the 09:30-10:00 ORB window versus after it.",
+   "success_criteria": "All 7 features reach NRMSE < 0.01 vs full-history at a fixed warmup; rank agreement rises from 0.83 toward 1.0 and serving IC approaches full-history IC. Only then is the backtest trustworthy enough to evaluate any strategy search.",
+   "evidence": "scripts/sim_live_ic_gap.py (commit 5458c8f); warmup sweep + per-feature NRMSE, 2026-11-12",
+   "proposed_by": "claude-code session 2026-11-12"
+  },
+  {
    "id": "H38",
    "hypothesis": "Two-part diagnostic cluster (W46). Part A: IC_OUTCOMES_EPOCH env var clears contaminated IC block outcomes — entries made Oct 8-16 without the IC fill job running may have produced poisoned IC scores that incorrectly block tickers. IC_OUTCOMES_EPOCH env var allows operator to discard outcomes before a given timestamp from the IC window. Part B: Kelly recovery ETA at /diagnostics — exposes how many trading days until Kelly exits hard-block based on loss rolloff schedule (Oct 29-30 losses roll off ~Nov 8-10).",
    "status": "implemented — 2 PRs open (Nov 6-7, freeze-exempt)",
@@ -265,9 +275,24 @@
    "added": "2026-11-05",
    "added_by": "nightly desk — Nov 5 nightly run: CB halted (max_drawdown) with EMAIL_ALERTS_ENABLED=false; owner blind to halt duration from diagnostics",
    "sub_prs": {
-    "PR107": {"number": 107, "title": "H37 — Kelly hard-block exit ETA in /diagnostics", "state": "OPEN", "date": "2026-11-03"},
-    "PR108": {"number": 108, "title": "H37 — explicit dir_prob>=0.60 gate in long-only entry path", "state": "OPEN", "date": "2026-11-04"},
-    "PR109": {"number": 109, "title": "H37 — CB halt timestamp and duration in /diagnostics", "state": "OPEN", "date": "2026-11-05"}
+    "PR107": {
+     "number": 107,
+     "title": "H37 — Kelly hard-block exit ETA in /diagnostics",
+     "state": "OPEN",
+     "date": "2026-11-03"
+    },
+    "PR108": {
+     "number": 108,
+     "title": "H37 — explicit dir_prob>=0.60 gate in long-only entry path",
+     "state": "OPEN",
+     "date": "2026-11-04"
+    },
+    "PR109": {
+     "number": 109,
+     "title": "H37 — CB halt timestamp and duration in /diagnostics",
+     "state": "OPEN",
+     "date": "2026-11-05"
+    }
    },
    "priority": "HIGH — merge before halt is lifted so owner sees duration immediately on resume"
   },
