@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 24). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly HARD BLOCKED -0.4259 (worsened: Oct 29-30 losses 12 trades 3W/9L net -$2,443 pushed from -0.2622). EMAIL_ALERTS_ENABLED=false → halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 8; 7+ trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). W46: 0 direct pushes — 2nd clean governance week since W36. Railway worker week 23. Integrity ALL GREEN. 0 open positions.",
- "last_iteration_date": "2026-11-09",
- "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy.",
+ "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 25). Nov 13 nightly. CB HALTED since Nov 2 (11+ trading days, 0 trades since Oct 30). Kelly RECOVERED to 0.0 inactive (Oct 29-30 losses rolled off ~Nov 8-10; H38 ETA confirmed ✓). EMAIL_ALERTS_ENABLED=false — halt still silent. M3 n=40 UNCHANGED. T30 PF≈0.256 CODE RED (no new trades). H36 PR #104 unmerged (CRITICAL: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics). H38 PRs #111-112 open (IC epoch, Kelly ETA). H39 NEW: IC block contamination analysis — 20/57 tickers blocked by near-random model era (Oct 14-Nov 2); H38 Oct17 epoch INSUFFICIENT; must use H36 deploy date as IC_OUTCOMES_EPOCH. IC block: 20 tickers (AAPL BAC GOOG MRK among them). Would-trade: MU, CIEN only. Integrity ALL GREEN. 0 open positions. 3rd clean governance week. Railway worker week 25.",
+ "last_iteration_date": "2026-11-13",
+ "active_hypothesis": "H36. TRAIN/SERVE SKEW ROOT CAUSE CONFIRMED Oct 27 (sim_live_ic_gap.py): full-history IC=+0.181, serving IC=-0.010 (near-random), rank agreement=0.64. Mechanism: ohlcv_1m retention=7 days (5 sessions) = WARMUP_BARS=1950 exactly at ceiling. mtf_trend_60m EMA(21) has 5% initial-condition contamination at 32 60m periods. H36: restore retention 7→14 days + WARMUP_BARS 1950→3500 (58 60m periods → 0.4% contamination). PR opened. Status: needs_data_run on Railway to confirm IC improvement post-deploy. See H39 for IC epoch recommendation tied to H36 deploy date.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,7 +29,7 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) — ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "OK Nov 8 12:52 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 12:52 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: -0.4259 hard-blocked.",
+  "watchdog_status": "OK Nov 13 01:37 UTC (v0.9.9, light_run). 2 checks: loop_tick_fresh OK (last tick 01:37 UTC), tick_errors OK (lifetime 0). last_exit_at null (0 trades since Oct 30). 0 open positions. CB: HALTED (max_drawdown). Kelly: 0.0 inactive (RECOVERED — Oct 29-30 losses rolled off ~Nov 8-10 as H38 ETA predicted).",
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51–57) still unmerged — structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP — H27 (PR #62) fixes this.",
@@ -236,6 +236,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H39",
+   "hypothesis": "IC block universe contamination — wrong epoch setting for halt lift. H38 Part A recommended IC_OUTCOMES_EPOCH=Oct 17 (after IC fill job fix). Analysis (scripts/ic_epoch_recommendation.py, Nov 13): the LARGER contamination is the broken-model era Oct 14–Nov 2 when serving IC=-0.010 (near-random). With n≥300 predictions/ticker and IC≈0, ~35% of tickers show IC≤0 by chance (57.6% analytically, observed 20/57 at IC<-0.05 diagnostic threshold). Setting IC_OUTCOMES_EPOCH=Oct 17 leaves ~13 days of broken-model outcomes in the 30d window (n≈325/ticker still above MIN_N=300), so ~33 tickers remain blocked. Setting IC_OUTCOMES_EPOCH=<H36_deploy_date> clears ALL contaminated outcomes, immediately unblocking ~33 tickers and restoring the full 57-ticker universe from day 1. IC re-arms at IC≈+0.181 after ~12 trading days (300 preds/ticker at 25/day).",
+   "status": "implemented — script at scripts/ic_epoch_recommendation.py; needs_data_run to confirm actual n/ticker",
+   "added": "2026-11-13",
+   "added_by": "nightly desk Nov 13 — IC block 20/57 in diagnostics (AAPL BAC GOOG MRK blocked); H38 Oct17 epoch insufficient",
+   "needs_data_run": true,
+   "priority": "CRITICAL — merge before halt lift. Without correct epoch, bot resumes with ~33/57 tickers blocked (58% of universe excluded) for 30 days. Combined with Kelly inactive (small sizes), entry frequency near-zero.",
+   "pm_flag": "Pre-halt-lift checklist: (1) Merge H36 PR #104, (2) Merge H38 PR #111, (3) Set IC_OUTCOMES_EPOCH=<H36_deploy_date> NOT Oct 17, (4) EMAIL_ALERTS_ENABLED=true, (5) Merge H37, (6) /admin/resume-trading. Skipping step 3 starves the Kelly window rebuild and extends M3 freeze by ~30 days.",
+   "index_risk_quant_note": "Analysis is directionally sound: near-random IC on 375 observations produces ~57% negative-IC tickers by chance (σ=0.052, threshold=0.0). The 20 observed blocked tickers at the stricter -0.05 threshold (vs 0.0 entry gate) confirms contamination. No leakage or overfitting concern — this is a universe-narrowing correctness issue, not an alpha claim."
+  },
   {
    "id": "H38",
    "hypothesis": "Two-part diagnostic cluster (W46). Part A: IC_OUTCOMES_EPOCH env var clears contaminated IC block outcomes — entries made Oct 8-16 without the IC fill job running may have produced poisoned IC scores that incorrectly block tickers. IC_OUTCOMES_EPOCH env var allows operator to discard outcomes before a given timestamp from the IC window. Part B: Kelly recovery ETA at /diagnostics — exposes how many trading days until Kelly exits hard-block based on loss rolloff schedule (Oct 29-30 losses roll off ~Nov 8-10).",
@@ -739,6 +750,15 @@
  "v092_note": "Oct 8 2026. Version bump for watchdog + IC gate fixes. No behavior change.",
  "v093_note": "Oct 8 2026. STRATEGY CHANGE (owner-directed Oct 7). Ensemble weights 0.60/0.10/0.10/0.20 → 1.0/0/0/0. Transformer/TCN/Sentiment zeroed. Sentiment inference cost eliminated (guarded: weights.sentiment > 0). LightGBM only. ensemble_signal max 1.0 vs prior 0.6. Effect: entry gate reads lgbm_pred_return/lgbm_dir_prob directly (bit-identical); ranking via |ensemble_signal| changes (LGBM-only ranking for probe path). from_staging fallback fixed (was hardcoded old weights). renormalize_dropping_dead_models fixed (was rescaling from cls() at 1/0/0/0 — collapsed). HISTORICAL_ALLOCATION introduced for attribution interpretability. M3 clock RESETS to Oct 8. 405 tests pass. Direct push — governance breach.",
  "completed_iterations": [
+  {
+   "date": "2026-11-13",
+   "hypothesis_id": "H39",
+   "result": "IMPLEMENTED — H39 IC block contamination analysis. FINDINGS: (1) Kelly RECOVERED to 0.0 inactive (Oct 29-30 losses ~12 trades rolled off Kelly window ~Nov 8-10, H38 ETA confirmed). M3 n=40 UNCHANGED. CB still HALTED (max_drawdown). (2) IC block: 20/57 tickers blocked at diagnostics threshold IC<-0.05 (AAPL, BAC, GOOG, MRK among them). Would-trade: only MU and CIEN. (3) H39 KEY FINDING: H38 Part A originally recommended IC_OUTCOMES_EPOCH=Oct 17. This is INSUFFICIENT — the broken-model era (Oct 14–Nov 2, IC≈-0.010) accounts for all current IC blocks. At n≈375 preds/ticker and IC≈0, 57.6% of tickers expected to show IC≤0.0 by chance (observed 20/57 at stricter -0.05 threshold — model consistent). Setting epoch to Oct 17 leaves 13 days of broken-model outcomes in window (n≈325, still ≥MIN_N=300), resulting in ~33 tickers remaining blocked. RECOMMENDATION: Set IC_OUTCOMES_EPOCH=<H36_deploy_date> to fully reset contamination and restore 57-ticker universe from day 1. (4) Integrity ALL GREEN 2026-11-13 01:25 UTC (all 5 checks pass, 0 open positions, no alert channel error). Watchdog OK 01:37 UTC, 0 errors. (5) Test suite: not runnable in sandbox (structlog/scipy missing — matches all prior nightly runs). Railway confirmed 525 tests pass on v0.9.9. (6) PRs #104 (H36), #107-109 (H37), #111-112 (H38) all still OPEN awaiting owner merge. 3rd consecutive clean governance week.",
+   "files_changed": [
+    "scripts/ic_epoch_recommendation.py",
+    "agent_state.json"
+   ]
+  },
   {
    "date": "2026-11-05",
    "hypothesis_id": "H37",
