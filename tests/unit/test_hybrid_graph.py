@@ -311,3 +311,16 @@ def test_seed_catalog_covers_all_five_repos():
     assert any(s.startswith("hybrid") for s in names)
     assert any(s.name == "hybrid_defensive" for s in seed_strategies())
     assert any(s.name == "hybrid_defensive_search" for s in seed_strategies())
+
+
+def test_strategy_search_is_not_an_http_admin_route():
+    """The search must not hang off the unauthenticated FastAPI app.
+
+    It loads multi-year bars, runs a walk-forward loop, and overwrites
+    staging. Operators trigger it via the CLI or the Saturday scheduler —
+    both off the trading event loop. CORS is ``*`` on this app, so an HTTP
+    RPC here is a control-plane DoS/write.
+    """
+    src = Path("main.py").read_text()
+    assert '@app.post("/admin/strategy-search")' not in src
+    assert "def trigger_strategy_search" not in src

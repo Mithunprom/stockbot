@@ -1184,19 +1184,6 @@ async def trigger_research_weekly() -> JSONResponse:
     return JSONResponse(content=report)
 
 
-@app.post("/admin/strategy-search")
-async def trigger_strategy_search() -> JSONResponse:
-    """Manually trigger the hybrid-graph strategy search (Opportunity Agent).
-
-    Writes a proposal to config/staging/strategy_search.json — never live.yaml.
-    """
-    agent = getattr(app.state, "strategy_search_agent", None)
-    if agent is None:
-        return JSONResponse(content={"error": "Strategy search agent not initialized"}, status_code=503)
-    report = await agent.run()
-    return JSONResponse(content=jsonable_encoder(report))
-
-
 @app.get("/diagnostics")
 async def diagnostics() -> JSONResponse:
     """Real-time signal gate diagnostics — shows why trades aren't happening.
