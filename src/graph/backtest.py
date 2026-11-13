@@ -165,6 +165,25 @@ def _metrics(equity: list[float], trades: list[dict], label: str, start: str, en
     )
 
 
+def _stop_target_fill(
+    pos: dict,
+    high: float,
+    low: float,
+    close: float,
+    holding_days: int,
+) -> tuple[str | None, float | None]:
+    """Pessimistic same-bar exit: stop before target, then max-hold at close."""
+    sl = pos["entry_px"] * (1.0 - pos["stop_pct"])
+    tp = pos["entry_px"] * (1.0 + pos["target_pct"])
+    if low <= sl:
+        return "stop_loss", sl
+    if high >= tp:
+        return "take_profit", tp
+    if pos["days"] >= holding_days:
+        return "max_hold", close
+    return None, None
+
+
 def simulate_portfolio(
     bars: dict[str, pd.DataFrame],
     signals: pd.DataFrame,
@@ -260,7 +279,9 @@ def simulate_portfolio(
         today = ts.date()
         if today != cur_day:
             cur_day = today
-            day_start_value = mark(ts) if equity else capital
+            # Prior session close — not today's close — so a gap/move can
+            # trip the daily −3% breaker.
+            day_start_value = equity[-1] if equity else capital
             trades_today = 0
             if pause_left > 0:
                 pause_left -= 1
@@ -277,22 +298,12 @@ def simulate_portfolio(
             if df is None or ts not in df.index:
                 continue
             pos = positions[t]
-            o = float(df.at[ts, "open"])
             h = float(df.at[ts, "high"])
             l = float(df.at[ts, "low"])
             c = float(df.at[ts, "close"])
             pos["days"] += 1
             pos["peak"] = max(pos["peak"], h)
-            sl = pos["entry_px"] * (1 - pos["stop_pct"])
-            tp = pos["entry_px"] * (1 + pos["target_pct"])
-            reason = None
-            fill = None
-            if l <= sl:
-                reason, fill = "stop_loss", sl
-            elif h >= tp:
-                reason, fill = "take_profit", tp
-            elif pos["days"] >= spec.holding_days:
-                reason, fill = "max_hold", c
+            reason, fill = _stop_target_fill(pos, h, l, c, spec.holding_days)
             if reason is not None:
                 close_pos(t, float(fill), ts, reason)
 
@@ -374,6 +385,15 @@ def simulate_portfolio(
                     "target_pct": float(r.target_pct),
                 }
                 trades_today += 1
+                h = float(df.at[ts, "high"])
+                l = float(df.at[ts, "low"])
+                c = float(df.at[ts, "close"])
+                positions[r.ticker]["peak"] = max(o, h)
+                reason, fill = _stop_target_fill(
+                    positions[r.ticker], h, l, c, spec.holding_days
+                )
+                if reason is not None:
+                    close_pos(r.ticker, float(fill), ts, reason)
                 pv = mark(ts)
 
         equity.append(mark(ts))

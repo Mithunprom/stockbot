@@ -15,7 +15,7 @@ import pandas as pd
 from src.graph.analysts import score_all
 from src.graph.catalog import StrategySpec
 from src.graph.debate import risk_committee, run_debate, trader_plan
-from src.graph.indicators import attach_quant_overlay, compute_daily_indicators
+from src.graph.indicators import attach_quant_overlay, compute_daily_indicators, regime_int
 from src.graph.state import Action, GraphState
 
 
@@ -93,7 +93,7 @@ def build_analyst_panel(store: dict[str, pd.DataFrame]) -> pd.DataFrame:
                 "ticker": ticker,
                 "close": float(row["close"]),
                 "atr_pct": float(row.get("atr_pct", 0.015) or 0.015),
-                "hmm_regime": int(row.get("hmm_regime", 1) or 1),
+                "hmm_regime": regime_int(row.get("hmm_regime", 1), default=1),
                 "spy_vs_sma200": float(row.get("spy_vs_sma200", 0.0) or 0.0),
                 "spy_rvol_20": float(row.get("spy_rvol_20", 0.15) or 0.15),
             }
@@ -282,7 +282,7 @@ def explain_ticker(store: dict[str, pd.DataFrame], ticker: str, spec: StrategySp
     risk = risk_committee(
         plan,
         risk_mode=spec.risk_mode if spec.risk_mode != "none" else "balanced",
-        hmm_regime=int(row.get("hmm_regime", 1) or 1),
+        hmm_regime=regime_int(row.get("hmm_regime", 1), default=1),
         spy_vs_sma200=float(row.get("spy_vs_sma200", 0.0) or 0.0),
         portfolio_heat=0.0,
         heat_ceiling=spec.heat_ceiling,

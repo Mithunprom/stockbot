@@ -3,8 +3,8 @@
 Tries (in order): on-disk cache, Yahoo chart API, yfinance, Stooq.
 Never looks into the future — callers pass an explicit end date.
 
-Look-ahead: none. Bars are daily, unadjusted-split Yahoo adjusted close is
-used as ``close`` so corporate actions do not fake jumps.
+Look-ahead: none. Bars are daily. Yahoo adjclose is applied as a ratio to
+open/high/low/close so OHLC stays on one scale after splits and dividends.
 """
 
 from __future__ import annotations
@@ -20,8 +20,35 @@ from urllib.request import Request, urlopen
 import numpy as np
 import pandas as pd
 
-CACHE_DIR = Path("data/research/hybrid")
+CACHE_DIR = Path("data/research/hybrid_adj")
 _USER_AGENT = "StockBotHybrid/1.0 (research backtest)"
+
+
+def _as_float_array(values: object) -> np.ndarray:
+    if values is None:
+        return np.array([], dtype=float)
+    return np.array([np.nan if v is None else v for v in values], dtype=float)
+
+
+def apply_split_adjustment(
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    adjclose: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Scale raw OHLC by adjclose/close so every column is split-adjusted.
+
+    Using adjclose as ``close`` while leaving open/high/low on the quote
+    scale makes stops and ATR percentages jump on ex-div / split days.
+    """
+    if adjclose is None or adjclose.size == 0:
+        return open_, high, low, close
+    ratio = np.ones_like(close, dtype=float)
+    ok = np.isfinite(close) & (close != 0.0) & np.isfinite(adjclose)
+    ratio[ok] = adjclose[ok] / close[ok]
+    adj_close = np.where(np.isfinite(adjclose), adjclose, close)
+    return open_ * ratio, high * ratio, low * ratio, adj_close
 
 
 def cache_path(ticker: str) -> Path:
@@ -93,14 +120,20 @@ def _fetch_yahoo_chart(ticker: str, start: date, end: date) -> pd.DataFrame:
     result = payload["chart"]["result"][0]
     ts = result["timestamp"]
     q = result["indicators"]["quote"][0]
-    adj = result["indicators"].get("adjclose", [{}])[0].get("adjclose")
-    close = adj if adj else q["close"]
+    adj_raw = result["indicators"].get("adjclose", [{}])[0].get("adjclose")
+    open_, high, low, close = apply_split_adjustment(
+        _as_float_array(q["open"]),
+        _as_float_array(q["high"]),
+        _as_float_array(q["low"]),
+        _as_float_array(q["close"]),
+        _as_float_array(adj_raw) if adj_raw else None,
+    )
     idx = pd.to_datetime(ts, unit="s", utc=True)
     df = pd.DataFrame(
         {
-            "open": q["open"],
-            "high": q["high"],
-            "low": q["low"],
+            "open": open_,
+            "high": high,
+            "low": low,
             "close": close,
             "volume": q["volume"],
         },

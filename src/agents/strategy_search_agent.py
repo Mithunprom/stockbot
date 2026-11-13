@@ -16,6 +16,7 @@ Escalate if no candidate beats buy-and-hold on validation with DD ≤ 12%.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -53,6 +54,26 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return float(min(hi, max(lo, x)))
 
 
+def spec_cache_key(spec: StrategySpec) -> str:
+    """Fingerprint of every field that changes signals or fills.
+
+    Mutation names reuse short suffixes (``~stop``, ``~w``), so caching by
+    ``spec.name`` would replay another child's signals.
+    """
+    payload = spec.to_dict()
+    payload.pop("name", None)
+    payload.pop("source", None)
+    blob = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def _fresh_name(spec: StrategySpec, tag: str, rng: np.random.Generator) -> str:
+    root = spec.name.split("~")[0]
+    if root.startswith("x_"):
+        root = spec.topology
+    return f"{root}~{tag}~{int(rng.integers(0, 1_000_000)):06d}"
+
+
 def mutate_spec(spec: StrategySpec, rng: np.random.Generator) -> StrategySpec:
     """Perturb one lever of a spec — the search's exploration step."""
     if spec.topology == "buy_hold":
@@ -67,44 +88,44 @@ def mutate_spec(spec: StrategySpec, rng: np.random.Generator) -> StrategySpec:
             w[k] = max(0.02, w[k] + n)
         s = sum(w.values())
         w = {k: v / s for k, v in w.items()}
-        return spec.mutated(name=f"{spec.name}~w", weights=w)
+        return spec.mutated(name=_fresh_name(spec, "w", rng), weights=w)
     if choice == 1:
         return spec.mutated(
-            name=f"{spec.name}~thr",
+            name=_fresh_name(spec, "thr", rng),
             entry_threshold=_clamp(spec.entry_threshold + float(rng.normal(0, 0.04)), 0.08, 0.40),
         )
     if choice == 2:
         return spec.mutated(
-            name=f"{spec.name}~stop",
+            name=_fresh_name(spec, "stop", rng),
             stop_atr=_clamp(spec.stop_atr + float(rng.normal(0, 0.25)), 0.7, 2.8),
         )
     if choice == 3:
         return spec.mutated(
-            name=f"{spec.name}~tp",
+            name=_fresh_name(spec, "tp", rng),
             tp_atr=_clamp(spec.tp_atr + float(rng.normal(0, 0.4)), 1.2, 4.5),
         )
     if choice == 4:
         hold = int(_clamp(spec.holding_days + int(rng.integers(-3, 4)), 3, 21))
-        return spec.mutated(name=f"{spec.name}~hold", holding_days=hold)
+        return spec.mutated(name=_fresh_name(spec, "hold", rng), holding_days=hold)
     if choice == 5:
         modes = ["aggressive", "conservative", "balanced", "committee"]
         modes = [m for m in modes if m != spec.risk_mode] or modes
-        return spec.mutated(name=f"{spec.name}~risk", risk_mode=str(rng.choice(modes)))
+        return spec.mutated(name=_fresh_name(spec, "risk", rng), risk_mode=str(rng.choice(modes)))
     if choice == 6:
         return spec.mutated(
-            name=f"{spec.name}~sz",
+            name=_fresh_name(spec, "sz", rng),
             size_pct=_clamp(spec.size_pct * float(rng.uniform(0.5, 1.15)), 0.02, 0.12),
             max_positions=int(_clamp(spec.max_positions + int(rng.integers(-1, 2)), 2, 6)),
         )
     if choice == 7:
         return spec.mutated(
-            name=f"{spec.name}~heat",
+            name=_fresh_name(spec, "heat", rng),
             heat_ceiling=_clamp(spec.heat_ceiling + float(rng.choice([-0.15, -0.10, 0.0, 0.05])), 0.30, 0.80),
         )
     # Toggle a filter.
     if rng.random() < 0.5:
-        return spec.mutated(name=f"{spec.name}~trend", trend_filter=not spec.trend_filter)
-    return spec.mutated(name=f"{spec.name}~hmm", hmm_filter=not spec.hmm_filter)
+        return spec.mutated(name=_fresh_name(spec, "trend", rng), trend_filter=not spec.trend_filter)
+    return spec.mutated(name=_fresh_name(spec, "hmm", rng), hmm_filter=not spec.hmm_filter)
 
 
 def crossover(a: StrategySpec, b: StrategySpec, rng: np.random.Generator) -> StrategySpec:
@@ -122,7 +143,7 @@ def crossover(a: StrategySpec, b: StrategySpec, rng: np.random.Generator) -> Str
     w = {k: v / s for k, v in w.items() if v > 0} if s > 0 else dict(parent_w.weights)
     return replace(
         parent_w,
-        name=f"x_{parent_w.name[:12]}_{parent_x.name[:12]}",
+        name=f"x_{parent_w.topology}_{int(rng.integers(0, 1_000_000)):06d}",
         analysts=tuple(w),
         weights=w,
         entry_threshold=parent_x.entry_threshold,
@@ -165,7 +186,7 @@ class StrategySearchAgent:
         end: str,
         cache: dict[str, pd.DataFrame] | None = None,
     ) -> BacktestResult:
-        key = spec.name
+        key = spec_cache_key(spec)
         sig_cache = cache if cache is not None else {}
         if key not in sig_cache:
             sig_cache[key] = build_signals(
@@ -225,12 +246,13 @@ class StrategySearchAgent:
                 children.append(child)
             ranked_c = rank(children, tune_s, tune_e)
             merged = ranked + ranked_c
-            # Unique by name, keep best score.
+            # Unique by fingerprint (names are labels only), keep best score.
             best: dict[str, tuple[StrategySpec, BacktestResult]] = {}
             for s, r in merged:
-                prev = best.get(s.name)
+                key = spec_cache_key(s)
+                prev = best.get(key)
                 if prev is None or r.score > prev[1].score:
-                    best[s.name] = (s, r)
+                    best[key] = (s, r)
             ranked = sorted(best.values(), key=lambda x: x[1].score, reverse=True)
             history.append(
                 {"gen": gen, "results": [r.to_dict() | {"spec": s.name} for s, r in ranked[:12]]}
@@ -248,9 +270,10 @@ class StrategySearchAgent:
             elites.append(next(s for s in seed_strategies() if s.topology == "buy_hold"))
         val_ranked = rank(elites, val_s, val_e)
         tune_by_name = {s.name: r for s, r in ranked}
+        tune_by_key = {spec_cache_key(s): r for s, r in ranked}
 
         def both_legs_ok(spec: StrategySpec, val_res: BacktestResult) -> bool:
-            tune_res = tune_by_name.get(spec.name)
+            tune_res = tune_by_name.get(spec.name) or tune_by_key.get(spec_cache_key(spec))
             if tune_res is None:
                 return False
             if spec.topology == "buy_hold":
@@ -268,7 +291,7 @@ class StrategySearchAgent:
 
         def pick_key(item: tuple[StrategySpec, BacktestResult]) -> float:
             spec, val_res = item
-            tune_res = tune_by_name.get(spec.name)
+            tune_res = tune_by_name.get(spec.name) or tune_by_key.get(spec_cache_key(spec))
             tune_score = tune_res.score if tune_res else -9.0
             # Prefer candidates that beat buy-hold on validation Sharpe.
             bh_bonus = 0.0
@@ -283,7 +306,7 @@ class StrategySearchAgent:
             winner_spec, winner_val = val_ranked[0] if val_ranked else ranked[0]
 
         holdout = self.evaluate(winner_spec, store, bars, hold_s, hold_e)
-        winner_tune = tune_by_name.get(winner_spec.name)
+        winner_tune = tune_by_name.get(winner_spec.name) or tune_by_key.get(spec_cache_key(winner_spec))
 
         needs_review = True
         ready_for_paper = (

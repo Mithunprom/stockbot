@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.graph.indicators import regime_int
 from src.graph.state import AnalystReport
 
 
@@ -188,7 +189,7 @@ def score_macro(row: pd.Series) -> AnalystReport:
     spy_vs = float(row.get("spy_vs_sma200", 0.0) or 0.0)
     spy_vol = float(row.get("spy_rvol_20", 0.15) or 0.15)
     rs = float(row.get("rs_spy_21", 0.0) or 0.0)
-    regime = int(row.get("hmm_regime", 1) or 1)
+    regime = regime_int(row.get("hmm_regime", 1), default=1)
 
     score = _tanh(spy_vs, 0.08) * 0.55
     score += _tanh(rs, 0.08) * 0.30
@@ -208,7 +209,7 @@ def score_macro(row: pd.Series) -> AnalystReport:
 def score_quant(row: pd.Series) -> AnalystReport:
     """Quant overlay — HMM + sequence predictor + swing geometry."""
     pred = float(row.get("seq_pred", 0.0) or 0.0)
-    regime = int(row.get("hmm_regime", 1) or 1)
+    regime = regime_int(row.get("hmm_regime", 1), default=1)
     atr = float(row.get("atr_pct", 0.015) or 0.015)
     don = float(row.get("donchian_pos", 0.5) or 0.5)
     rsi = float(row.get("rsi_14", 50.0) or 50.0)

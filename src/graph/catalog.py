@@ -235,9 +235,11 @@ def seed_strategies() -> list[StrategySpec]:
         size_pct=0.0,
         long_only=True,
     )
-    # Locked search winner (2026-W45 walk-forward). Same topology as
-    # hybrid_defensive with a slightly tighter stop discovered by mutation.
-    # Staged only — not live. See reports/research/hybrid_strategy_search_2026-W45.json.
+    # Defensive hybrid seed (small size + trend/HMM + tighter stop).
+    # After look-ahead / fill fixes, the 2026-W45 causal rerun ranked
+    # alpaca_five first on the composite; that topology is already a seed.
+    # Neither meets paper-promotion gates. Staged only — not live.
+    # See reports/research/hybrid_strategy_search_2026-W45.json.
     hybrid_defensive_search = hybrid_defensive.mutated(
         name="hybrid_defensive_search",
         stop_atr=1.08,

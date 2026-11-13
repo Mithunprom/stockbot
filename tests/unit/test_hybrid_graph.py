@@ -12,12 +12,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.graph.analysts import score_all, score_technical
+from src.graph.analysts import score_all, score_quant, score_technical
 from src.graph.backtest import composite_score, simulate_portfolio
 from src.graph.catalog import StrategySpec, seed_strategies
-from src.graph.data import synthetic_ohlcv
+from src.graph.data import apply_split_adjustment, synthetic_ohlcv
 from src.graph.debate import risk_committee, run_debate, trader_plan
-from src.graph.indicators import compute_daily_indicators
+from src.graph.indicators import attach_quant_overlay, compute_daily_indicators, regime_int
 from src.graph.pipeline import build_feature_store, build_signals
 from src.graph.state import AnalystReport, TradePlan
 
@@ -51,6 +51,56 @@ def test_unshifted_indicators_do_see_the_spike():
     spiked.iloc[-1, spiked.columns.get_loc("close")] *= 1.25
     alt = compute_daily_indicators(spiked, shift=False)
     assert base["rsi_14"].iloc[-1] != pytest.approx(alt["rsi_14"].iloc[-1])
+
+
+def test_quant_overlay_shifts_spy_features():
+    """A last-bar SPY spike must not change overlay columns at the last row."""
+    df = synthetic_ohlcv(n=260, seed=3)
+    spy = synthetic_ohlcv(n=260, seed=0)
+    feat = compute_daily_indicators(df, shift=True)
+    base = attach_quant_overlay(feat, spy["close"])
+    spiked = spy.copy()
+    spiked.iloc[-1, spiked.columns.get_loc("close")] *= 1.25
+    alt = attach_quant_overlay(feat, spiked["close"])
+    for col in ("spy_vs_sma200", "spy_rvol_20", "rs_spy_21"):
+        assert base[col].iloc[-1] == pytest.approx(alt[col].iloc[-1], nan_ok=True)
+
+
+def test_regime_int_preserves_trending_zero():
+    assert regime_int(0) == 0
+    assert regime_int(None) == 1
+    assert regime_int(float("nan")) == 1
+    row = pd.Series(
+        {
+            "seq_pred": 0.04,
+            "hmm_regime": 0,
+            "atr_pct": 0.015,
+            "donchian_pos": 0.6,
+            "rsi_14": 50.0,
+        }
+    )
+    trending = score_quant(row)
+    choppy_row = row.copy()
+    choppy_row["hmm_regime"] = 1
+    choppy = score_quant(choppy_row)
+    assert trending.score > choppy.score
+
+
+def test_yahoo_ohlc_shares_adjclose_scale():
+    """2-for-1 split: raw OHLC on quote scale, adjclose already halved."""
+    open_, high, low, close = apply_split_adjustment(
+        np.array([198.0, 99.0]),
+        np.array([200.0, 101.0]),
+        np.array([196.0, 98.0]),
+        np.array([200.0, 100.0]),
+        np.array([100.0, 100.0]),
+    )
+    assert close[0] == pytest.approx(100.0)
+    assert open_[0] == pytest.approx(99.0)
+    assert high[0] == pytest.approx(100.0)
+    assert low[0] == pytest.approx(98.0)
+    assert close[1] == pytest.approx(100.0)
+    assert open_[1] == pytest.approx(99.0)
 
 
 # ─── Analyst + debate ────────────────────────────────────────────────────────
@@ -201,6 +251,75 @@ def test_backtest_stop_hits_before_target_on_same_bar():
     assert res.exit_reasons.get("stop_loss", 0) >= 1
 
 
+def test_backtest_entry_bar_can_hit_stop():
+    """Fill at the open, then the same bar's range is allowed to stop us out."""
+    idx = pd.bdate_range("2024-01-02", periods=6, tz="UTC")
+    bars = {
+        "AAPL": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+                "high": [101.0, 110.0, 101.0, 101.0, 101.0, 101.0],
+                "low": [99.0, 90.0, 99.0, 99.0, 99.0, 99.0],
+                "close": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+                "volume": 1e6,
+            },
+            index=idx,
+        )
+    }
+    signals = pd.DataFrame(
+        [{
+            "time": idx[1],
+            "ticker": "AAPL",
+            "action": "LONG",
+            "score": 0.8,
+            "confidence": 0.8,
+            "size_pct": 0.10,
+            "stop_pct": 0.05,
+            "target_pct": 0.05,
+            "atr_pct": 0.02,
+            "close": 100.0,
+            "hmm_regime": 0,
+        }]
+    )
+    spec = _spec(holding_days=10, cost_bps=0.0, heat_ceiling=0.9, max_positions=1, size_pct=0.10)
+    res = simulate_portfolio(bars, signals, spec, start="2024-01-02", end="2024-01-12", capital=10_000)
+    assert res.exit_reasons.get("stop_loss", 0) == 1
+    assert res.exit_reasons.get("eod_liquidate", 0) == 0
+
+
+def test_daily_loss_breaker_uses_prior_close():
+    """A 5% gap against a 90% book must trip the −3% daily breaker."""
+    idx = pd.bdate_range("2024-01-02", periods=6, tz="UTC")
+    aaa = pd.Series([100.0, 100.0, 95.0, 95.0, 95.0, 95.0], index=idx)
+    bbb = pd.Series([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], index=idx)
+    bars = {
+        "AAA": pd.DataFrame(
+            {"open": aaa, "high": aaa, "low": aaa, "close": aaa, "volume": 1e6}, index=idx
+        ),
+        "BBB": pd.DataFrame(
+            {"open": bbb, "high": bbb, "low": bbb, "close": bbb, "volume": 1e6}, index=idx
+        ),
+    }
+    signals = pd.DataFrame(
+        [
+            {
+                "time": idx[1], "ticker": "AAA", "action": "LONG", "score": 0.9,
+                "confidence": 0.9, "size_pct": 0.90, "stop_pct": 0.50, "target_pct": 0.90,
+                "atr_pct": 0.02, "close": 100.0, "hmm_regime": 0,
+            },
+            {
+                "time": idx[2], "ticker": "BBB", "action": "LONG", "score": 0.9,
+                "confidence": 0.9, "size_pct": 0.90, "stop_pct": 0.50, "target_pct": 0.90,
+                "atr_pct": 0.02, "close": 100.0, "hmm_regime": 0,
+            },
+        ]
+    )
+    spec = _spec(holding_days=30, cost_bps=0.0, heat_ceiling=1.0, max_positions=2, size_pct=0.90)
+    res = simulate_portfolio(bars, signals, spec, start="2024-01-02", end="2024-01-10", capital=10_000)
+    # BBB is offered on the crash bar; the daily breaker must refuse it.
+    assert res.n_trades == 1
+
+
 def test_backtest_buy_hold_tracks_price():
     idx = pd.bdate_range("2024-01-02", periods=40, tz="UTC")
     close = pd.Series(np.linspace(100, 110, len(idx)), index=idx)
@@ -311,6 +430,43 @@ def test_seed_catalog_covers_all_five_repos():
     assert any(s.startswith("hybrid") for s in names)
     assert any(s.name == "hybrid_defensive" for s in seed_strategies())
     assert any(s.name == "hybrid_defensive_search" for s in seed_strategies())
+
+
+def test_spec_cache_key_separates_same_named_mutations():
+    from src.agents.strategy_search_agent import mutate_spec, spec_cache_key
+
+    base = _spec(stop_atr=1.0)
+    a = base.mutated(name="same~stop", stop_atr=1.0)
+    b = base.mutated(name="same~stop", stop_atr=2.4)
+    assert spec_cache_key(a) != spec_cache_key(b)
+    rng = np.random.default_rng(3)
+    names = [mutate_spec(base, rng).name for _ in range(12)]
+    assert len(set(names)) == 12
+
+
+def test_evaluate_cache_does_not_reuse_foreign_stops():
+    from src.agents.strategy_search_agent import StrategySearchAgent, spec_cache_key
+
+    bars = {
+        "SPY": synthetic_ohlcv(n=220, seed=0, drift=0.0005),
+        "AAPL": synthetic_ohlcv(n=220, seed=1, drift=0.0006),
+    }
+    store = build_feature_store(bars, bars["SPY"]["close"])
+    idx = bars["SPY"].index
+    start, end = str(idx[40].date()), str(idx[120].date())
+    tight = _spec(name="same", stop_atr=1.0)
+    wide = _spec(name="same", stop_atr=2.5)
+    agent = StrategySearchAgent(generations=0, children_per_gen=0, elite_k=1, seed=1)
+    cache: dict = {}
+    agent.evaluate(tight, store, bars, start, end, cache)
+    agent.evaluate(wide, store, bars, start, end, cache)
+    assert spec_cache_key(tight) in cache
+    assert spec_cache_key(wide) in cache
+    assert spec_cache_key(tight) != spec_cache_key(wide)
+    t_stops = cache[spec_cache_key(tight)]["stop_pct"]
+    w_stops = cache[spec_cache_key(wide)]["stop_pct"]
+    if len(t_stops) and len(w_stops):
+        assert float(t_stops.median()) < float(w_stops.median())
 
 
 def test_strategy_search_is_not_an_http_admin_route():

@@ -19,6 +19,22 @@ REGIME_CHOPPY = 1
 REGIME_HIGH_VOL = 2
 
 
+def regime_int(value: object, default: int = REGIME_CHOPPY) -> int:
+    """Parse an HMM regime label.
+
+    Trending is ``0``, so callers must never write ``int(x or default)`` —
+    that silently maps a valid trending bar onto choppy.
+    """
+    if value is None:
+        return default
+    try:
+        if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _ema(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(span=n, adjust=False).mean()
 
@@ -317,18 +333,25 @@ def attach_quant_overlay(
     feat: pd.DataFrame,
     spy_close: pd.Series | None = None,
 ) -> pd.DataFrame:
-    """Add HMM regime, sequence prediction, and relative-strength vs SPY."""
+    """Add HMM regime, sequence prediction, and relative-strength vs SPY.
+
+    Overlay columns that are computed from unshifted closes are lagged one
+    bar so a signal at timestamp t never sees t's close (fill is t's open).
+    ``hmm_regime`` already lags inside ``causal_hmm_regime``; ``seq_pred``
+    reads indicator columns that ``compute_daily_indicators`` already shifted.
+    """
     out = feat.copy()
     out["hmm_regime"] = causal_hmm_regime(feat["close"], spy_close)
     out["seq_pred"] = causal_sequence_predictor(feat)
     if spy_close is not None:
         spy = spy_close.reindex(feat.index).ffill()
         spy_ret_21 = spy.pct_change(21)
-        out["rs_spy_21"] = feat["close"].pct_change(21) - spy_ret_21
-        out["spy_vs_sma200"] = spy / spy.rolling(200, min_periods=50).mean() - 1.0
-        out["spy_rvol_20"] = spy.pct_change().rolling(20).std() * np.sqrt(252)
+        out["rs_spy_21"] = (feat["close"].pct_change(21) - spy_ret_21).shift(1)
+        out["spy_vs_sma200"] = (spy / spy.rolling(200, min_periods=50).mean() - 1.0).shift(1)
+        out["spy_rvol_20"] = (spy.pct_change().rolling(20).std() * np.sqrt(252)).shift(1)
     else:
+        rvol = out["rvol_20"] if "rvol_20" in out.columns else 0.15
         out["rs_spy_21"] = 0.0
         out["spy_vs_sma200"] = 0.0
-        out["spy_rvol_20"] = out.get("rvol_20", 0.15)
+        out["spy_rvol_20"] = rvol
     return out
