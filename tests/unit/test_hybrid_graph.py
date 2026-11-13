@@ -320,6 +320,42 @@ def test_daily_loss_breaker_uses_prior_close():
     assert res.n_trades == 1
 
 
+def test_entry_bar_stop_trips_daily_breaker_before_next_fill():
+    """A same-bar stop that realizes >3% must halt later names on that timestamp."""
+    idx = pd.bdate_range("2024-01-02", periods=6, tz="UTC")
+    crash = pd.DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "high": [101.0, 101.0, 101.0, 101.0, 101.0, 101.0],
+            "low": [99.0, 90.0, 99.0, 99.0, 99.0, 99.0],
+            "close": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "volume": 1e6,
+        },
+        index=idx,
+    )
+    calm = crash.copy()
+    calm["low"] = 99.0
+    bars = {"AAA": crash, "BBB": calm}
+    signals = pd.DataFrame(
+        [
+            {
+                "time": idx[1], "ticker": "AAA", "action": "LONG", "score": 0.95,
+                "confidence": 0.9, "size_pct": 0.90, "stop_pct": 0.05, "target_pct": 0.90,
+                "atr_pct": 0.02, "close": 100.0, "hmm_regime": 0,
+            },
+            {
+                "time": idx[1], "ticker": "BBB", "action": "LONG", "score": 0.80,
+                "confidence": 0.9, "size_pct": 0.90, "stop_pct": 0.50, "target_pct": 0.90,
+                "atr_pct": 0.02, "close": 100.0, "hmm_regime": 0,
+            },
+        ]
+    )
+    spec = _spec(holding_days=30, cost_bps=0.0, heat_ceiling=1.0, max_positions=2, size_pct=0.90)
+    res = simulate_portfolio(bars, signals, spec, start="2024-01-02", end="2024-01-10", capital=10_000)
+    assert res.n_trades == 1
+    assert res.exit_reasons.get("stop_loss", 0) == 1
+
+
 def test_backtest_buy_hold_tracks_price():
     idx = pd.bdate_range("2024-01-02", periods=40, tz="UTC")
     close = pd.Series(np.linspace(100, 110, len(idx)), index=idx)
@@ -442,6 +478,11 @@ def test_spec_cache_key_separates_same_named_mutations():
     rng = np.random.default_rng(3)
     names = [mutate_spec(base, rng).name for _ in range(12)]
     assert len(set(names)) == 12
+    shuffled = base.mutated(
+        analysts=("news", "technical"),
+        weights={"news": base.weights["news"], "technical": base.weights["technical"]},
+    )
+    assert spec_cache_key(base) == spec_cache_key(shuffled)
 
 
 def test_evaluate_cache_does_not_reuse_foreign_stops():

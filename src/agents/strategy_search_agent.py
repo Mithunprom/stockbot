@@ -63,6 +63,11 @@ def spec_cache_key(spec: StrategySpec) -> str:
     payload = spec.to_dict()
     payload.pop("name", None)
     payload.pop("source", None)
+    # Analyst order is cosmetic: build_signals weights by name, but crossover
+    # sorts the tuple and seeds do not. Canonicalize so permutations merge.
+    payload["analysts"] = sorted(payload.get("analysts") or [])
+    weights = payload.get("weights") or {}
+    payload["weights"] = {k: float(weights[k]) for k in sorted(weights)}
     blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 

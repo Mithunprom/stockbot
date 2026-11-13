@@ -220,6 +220,7 @@ def simulate_portfolio(
         by_day = {}
 
     cash = capital
+    pv = capital
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity: list[float] = []
@@ -307,34 +308,46 @@ def simulate_portfolio(
             if reason is not None:
                 close_pos(t, float(fill), ts, reason)
 
-        pv = mark(ts)
-        peak = max(peak, pv)
-        dd = (pv - peak) / peak if peak else 0.0
-        daily_pnl = (pv - day_start_value) / day_start_value if day_start_value else 0.0
-
         # Buy-and-hold is the unmanaged benchmark: it does not run circuit
         # breakers. Active graphs do. Production needs a human to resume after
         # an 8% DD halt; the research sim models that as a 21-session pause,
         # half-size restart, and a fresh high-water mark — capped at 3 halts
         # per window so a reckless book still dies.
-        if (not buy_hold) and daily_pnl <= -0.03:
-            halted = True
-            halt_reason = "daily_loss_limit"
-        if (not buy_hold) and dd <= -0.08 and halt_reason != "drawdown_pause":
-            for t in list(positions):
-                df = bars.get(t)
-                px = float(df.at[ts, "close"]) if df is not None and ts in df.index else positions[t]["last"]
-                close_pos(t, px, ts, "drawdown_halt")
-            halt_count += 1
-            halted = True
-            if halt_count >= 3:
-                terminal_halt = True
-                halt_reason = "max_drawdown"
-            else:
-                pause_left = 21
-                resume_size_scalar = 0.5
-                peak = mark(ts)
-                halt_reason = "drawdown_pause"
+        def apply_breakers() -> None:
+            nonlocal halted, halt_reason, halt_count, pause_left
+            nonlocal resume_size_scalar, peak, terminal_halt, pv
+            pv = mark(ts)
+            if buy_hold or halt_reason in ("drawdown_pause", "max_drawdown"):
+                peak = max(peak, pv)
+                return
+            peak = max(peak, pv)
+            dd = (pv - peak) / peak if peak else 0.0
+            daily_pnl = (pv - day_start_value) / day_start_value if day_start_value else 0.0
+            if daily_pnl <= -0.03:
+                halted = True
+                halt_reason = "daily_loss_limit"
+            if dd <= -0.08 and halt_reason != "drawdown_pause":
+                for t in list(positions):
+                    df = bars.get(t)
+                    px = (
+                        float(df.at[ts, "close"])
+                        if df is not None and ts in df.index
+                        else positions[t]["last"]
+                    )
+                    close_pos(t, px, ts, "drawdown_halt")
+                halt_count += 1
+                halted = True
+                if halt_count >= 3:
+                    terminal_halt = True
+                    halt_reason = "max_drawdown"
+                else:
+                    pause_left = 21
+                    resume_size_scalar = 0.5
+                    peak = mark(ts)
+                    halt_reason = "drawdown_pause"
+                pv = mark(ts)
+
+        apply_breakers()
 
         # ── 2. Entries ──
         if buy_hold and not allocated_bh:
@@ -394,8 +407,11 @@ def simulate_portfolio(
                 )
                 if reason is not None:
                     close_pos(r.ticker, float(fill), ts, reason)
-                pv = mark(ts)
+                apply_breakers()
+                if halted:
+                    break
 
+        apply_breakers()
         equity.append(mark(ts))
 
     # Liquidate leftovers at last close (counted as time-exit, not a forced loss).
