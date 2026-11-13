@@ -37,6 +37,7 @@ def create_scheduler(
     watchdog_agent: Any | None = None,
     integrity_agent: Any | None = None,
     news_risk_agent: Any | None = None,
+    strategy_search_agent: Any | None = None,
     mode: str = "paper",
 ) -> AsyncIOScheduler:
     """Build and configure the APScheduler instance.
@@ -47,6 +48,7 @@ def create_scheduler(
         profit_agent: ProfitAgent instance (optional — enable after Week 4).
         drift_agent: DriftAgent instance (optional — enable after Week 4).
         live_ic_tracker: LiveICTracker instance (optional).
+        strategy_search_agent: Opportunity-agent search over hybrid graphs.
         mode: "paper" or "live".
 
     Returns:
@@ -316,6 +318,25 @@ def create_scheduler(
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,
+        )
+
+    # ── Strategy Search (Opportunity Agent): weekly Saturday 12:00 ET ─────────
+    # Backtests hybrid graphs seeded from the five public architectures.
+    # Writes to config/staging/strategy_search.json — never config/live.yaml.
+    if strategy_search_agent is not None:
+        scheduler.add_job(
+            strategy_search_agent.run,
+            trigger=CronTrigger(
+                day_of_week="sat",
+                hour=12,
+                minute=0,
+                timezone="America/New_York",
+            ),
+            id="strategy_search_agent",
+            name="Strategy Search Agent (weekly opportunity backtest)",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=7200,
         )
 
     # ── Data Retention: daily cleanup at 05:00 ET (before market) ──────────────

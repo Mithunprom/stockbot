@@ -462,6 +462,8 @@ async def lifespan(app: FastAPI):
     )
     from src.agents.news_risk_agent import NewsRiskAgent
     news_risk_agent = NewsRiskAgent()
+    from src.agents.strategy_search_agent import StrategySearchAgent
+    strategy_search_agent = StrategySearchAgent()
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
@@ -471,6 +473,7 @@ async def lifespan(app: FastAPI):
     app.state.watchdog_agent = watchdog_agent
     app.state.integrity_agent = integrity_agent
     app.state.news_risk_agent = news_risk_agent
+    app.state.strategy_search_agent = strategy_search_agent
     app.state.ensemble = ensemble
     app.state.screener_agent = screener_agent
 
@@ -488,6 +491,7 @@ async def lifespan(app: FastAPI):
         watchdog_agent=watchdog_agent,
         integrity_agent=integrity_agent,
         news_risk_agent=news_risk_agent,
+        strategy_search_agent=strategy_search_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
@@ -1178,6 +1182,19 @@ async def trigger_research_weekly() -> JSONResponse:
         return JSONResponse(content={"error": "Quant research agent not initialized"}, status_code=503)
     report = await agent.run_weekly()
     return JSONResponse(content=report)
+
+
+@app.post("/admin/strategy-search")
+async def trigger_strategy_search() -> JSONResponse:
+    """Manually trigger the hybrid-graph strategy search (Opportunity Agent).
+
+    Writes a proposal to config/staging/strategy_search.json — never live.yaml.
+    """
+    agent = getattr(app.state, "strategy_search_agent", None)
+    if agent is None:
+        return JSONResponse(content={"error": "Strategy search agent not initialized"}, status_code=503)
+    report = await agent.run()
+    return JSONResponse(content=jsonable_encoder(report))
 
 
 @app.get("/diagnostics")
