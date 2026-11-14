@@ -444,7 +444,12 @@ async def init_db() -> None:
 # Aggressive retention to keep disk under control (was at 96% capacity).
 _RETENTION_POLICIES: list[tuple[str, str, int]] = [
     ("feature_matrix", "time", 3),          # biggest consumer, 3 days enough
-    ("ohlcv_1m", "time", 7),                # 7 days (was 14)
+    # 10 days: live.py fetches WARMUP_BARS + _WARMUP_BUFFER = 2370 rows so that
+    # _snap_to_session_start can drop a partial leading session and still deliver
+    # WARMUP_BARS bars to the indicator pipeline. 7 days = ~1950 bars = exactly
+    # WARMUP_BARS with no room for the buffer. 10 calendar days = at least 7 RTH
+    # sessions = ~2730 bars, which guarantees the 420-bar snap buffer exists.
+    ("ohlcv_1m", "time", 10),               # 10 days (was 7) — see H42 / live.py
     ("ohlcv_5m", "time", 7),                # 7 days (was 14)
     ("ohlcv_1h", "time", 30),               # NEW: was missing, grew forever
     ("signals", "time", 7),

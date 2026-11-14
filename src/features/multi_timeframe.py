@@ -56,7 +56,9 @@ def _resample_trend(df: pd.DataFrame, period: str) -> pd.Series:
 
     Returns +1 (bullish), −1 (bearish) mapped back to original 1m index.
     """
-    resampled = df[["open", "high", "low", "close", "volume"]].resample(period).agg({
+    resampled = df[["open", "high", "low", "close", "volume"]].resample(
+        period, origin="epoch"
+    ).agg({
         "open": "first",
         "high": "max",
         "low": "min",
@@ -80,7 +82,7 @@ def _resample_rsi(df: pd.DataFrame, period: str, n: int = 14) -> pd.Series:
 
     Returns RSI rescaled to [-1, 1] (centered at 50).
     """
-    resampled = df["close"].resample(period).last().dropna()
+    resampled = df["close"].resample(period, origin="epoch").last().dropna()
 
     if len(resampled) < n + 5:
         return pd.Series(0.0, index=df.index)
