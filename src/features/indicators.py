@@ -39,7 +39,13 @@ _REQUIRED_COLS = {"open", "high", "low", "close", "volume"}
 #   2  2026-09-16 — obv anchored to the ET session instead of the first bar of
 #      whatever series it was handed (it was unreproducible between the
 #      full-history training path and the windowed live path)
-FEATURE_PIPELINE_VERSION = 2
+#   3  2026-11-14 — session-snapping in the live warmup window (H42): when the
+#      trailing window starts mid-session the orb_* features (ORB NaN on first
+#      day) and mtf_rsi_15m (Wilder EWM initialized from wrong partial bin)
+#      diverge from the full-history path; _snap_to_session_start() in
+#      src/features/live.py ensures the window always begins at an ET 09:30
+#      open, and origin='epoch' is now explicit on all resample() calls.
+FEATURE_PIPELINE_VERSION = 3
 
 
 def _validate(df: pd.DataFrame) -> None:

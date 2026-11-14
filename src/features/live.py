@@ -72,6 +72,41 @@ logger = structlog.get_logger(__name__)
 #
 # 1950 bars = 5 trading sessions.
 WARMUP_BARS = 1950
+
+# Extra bars fetched so that _snap_to_session_start() can discard a partial
+# first session and still deliver WARMUP_BARS bars to the indicator pipeline.
+# 390 bars = 1 full session; 30 extra guards against session-length variations.
+_WARMUP_BUFFER = 420
+
+
+def _snap_to_session_start(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop bars from a partial first trading session.
+
+    When _load_ohlcv fetches WARMUP_BARS + _WARMUP_BUFFER rows the resulting
+    window may begin mid-session (e.g. 10:47 ET). Two feature families diverge
+    in that case:
+
+    * orb_* — the opening range (09:30-10:00 ET) is absent from the first day,
+      so orb_high / orb_low are NaN for every bar on that day.
+    * mtf_rsi_15m — Wilder EWM initialises from the first partial 15m bin
+      instead of a full session bin, leaving a small but measurable residual
+      (~NRMSE 0.04-0.10) across the entire window.
+
+    If the first bar's ET time is after 09:30, all bars from that calendar date
+    are removed so the window begins cleanly at the next session open.
+    """
+    if df.empty:
+        return df
+    et_index = df.index.tz_convert("America/New_York")
+    first_et = et_index[0]
+    # 09:30 ET is the regular session open; allow up to 1 minute of clock drift.
+    session_open_minute = first_et.hour * 60 + first_et.minute
+    if session_open_minute <= 9 * 60 + 31:
+        return df  # already starts at (or before) session open — nothing to trim
+    # Drop the entire partial first day.
+    first_date = first_et.date()
+    keep = et_index.date > first_date
+    return df.loc[keep]
 FFSA_VERSION = "v1"
 
 
@@ -269,13 +304,20 @@ class LiveFeatureComputer:
         )
 
     async def _load_ohlcv(self, ticker: str) -> pd.DataFrame:
-        """Load the last WARMUP_BARS 1m bars for a ticker from DB."""
+        """Load WARMUP_BARS 1m bars for a ticker, snapped to a session boundary.
+
+        Fetches WARMUP_BARS + _WARMUP_BUFFER rows so that _snap_to_session_start
+        can discard a partial leading session and still deliver a full WARMUP_BARS
+        window. Without the snap, orb_* features have NaN on the first day and
+        mtf_rsi_15m has a Wilder-EWM initialisation residual — both diverge from
+        the full-history training path. See H42 in agent_state.json.
+        """
         async with self._sf() as session:
             result = await session.execute(
                 select(OHLCV1m)
                 .where(OHLCV1m.ticker == ticker)
                 .order_by(OHLCV1m.time.desc())
-                .limit(WARMUP_BARS)
+                .limit(WARMUP_BARS + _WARMUP_BUFFER)
             )
             rows = list(reversed(result.scalars().all()))
 
@@ -297,4 +339,5 @@ class LiveFeatureComputer:
             ]
         )
         df["time"] = pd.to_datetime(df["time"], utc=True)
-        return df.set_index("time").sort_index()
+        df = df.set_index("time").sort_index()
+        return _snap_to_session_start(df)
