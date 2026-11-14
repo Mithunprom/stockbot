@@ -324,6 +324,18 @@ class LiveFeatureComputer:
         if not rows:
             return pd.DataFrame()
 
+        if len(rows) < WARMUP_BARS + _WARMUP_BUFFER:
+            logger.warning(
+                "live_feature_ohlcv_buffer_short",
+                ticker=ticker,
+                got=len(rows),
+                wanted=WARMUP_BARS + _WARMUP_BUFFER,
+                note=(
+                    "ohlcv_1m retention may be too short; snap may shrink "
+                    "window below WARMUP_BARS — check data/db.py retention policy"
+                ),
+            )
+
         df = pd.DataFrame(
             [
                 {
