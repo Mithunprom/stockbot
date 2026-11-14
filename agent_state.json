@@ -1,7 +1,7 @@
 {
  "current_phase": "CODE RED — Validation Recovery (integrity criterion MET; data_run criterion BLOCKED week 24). W46 program review Nov 9. CB HALTED since Nov 2 (v0.9.9 max_drawdown fix exposed true 11.01% DD from Apr 3 peak $108,588.50). Kelly HARD BLOCKED -0.4259 (worsened: Oct 29-30 losses 12 trades 3W/9L net -$2,443 pushed from -0.2622). EMAIL_ALERTS_ENABLED=false → halt silent; owner reached only by nightly PushNotification. M3 n=40 UNCHANGED (zero trades Oct 31 - Nov 8; 7+ trading days halted). T30 PF=0.256 CODE RED. H36 PR #104 unmerged (highest EV fix: serving IC=-0.010). H37 PRs #107-109 open (CB halt diagnostics, dir_prob gate, Kelly ETA). H38 PRs #111-112 open (IC outcomes epoch, Kelly recovery ETA). W46: 0 direct pushes — 2nd clean governance week since W36. Railway worker week 23. Integrity ALL GREEN. 0 open positions.",
- "last_iteration_date": "2026-11-09",
- "active_hypothesis": "H42. H36's diagnosis is right but its remedy is falsified — warmup is inert (rank agreement flat at 0.83 from 1950 to 7800 bars). Root cause localised to 7 of 30 features in two anchor-dependent families (mtf_*, orb_*), five of which are FFSA top-5. DO NOT MERGE PR #104 on its current rationale. Fitness = per-feature NRMSE, which cannot be overfit.",
+ "last_iteration_date": "2026-11-14",
+ "active_hypothesis": "H42 IMPLEMENTED — PR #119 open 2026-11-14. Root cause confirmed: mid-session warmup window start causes orb_* NaN (no ORB window) and mtf_rsi_15m Wilder EWM residual (wrong init bin). Fix: session-snap in _load_ohlcv (loads WARMUP_BARS+_WARMUP_BUFFER=2370 rows, discards partial leading session). All 7 diverging features now NRMSE < 0.01 (orb_* ~0.000, mtf_rsi_15m ~0.0032). FEATURE_PIPELINE_VERSION bumped 2→3. 20 tests passing. Next: (1) human merges PR #119 after review, (2) retrain model at FEATURE_PIPELINE_VERSION=3, (3) Railway worker data_run to validate serving IC. PR #104 (H36) SUPERSEDED — close, do not merge.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -238,7 +238,18 @@
  "hypothesis_queue": [
   {
    "id": "H42",
-   "status": "proposed",
+   "status": "implemented — PR #119 open (feat/rnd-H42-anchor-feature-fix, Nov 14). DO NOT MERGE until FEATURE_PIPELINE_VERSION=3 model retrain is planned. PR #104 (H36) superseded and should be CLOSED, NOT MERGED.",
+   "pr_branch": "feat/rnd-H42-anchor-feature-fix",
+   "pr_number": 119,
+   "pr_state": "OPEN",
+   "pr_date": "2026-11-14",
+   "needs_data_run": true,
+   "needs_model_retrain": true,
+   "feature_pipeline_version_required": 3,
+   "nrmse_before": {"orb_dev": 0.80, "orb_range_atr": 0.75, "orb_vpin_interact": 0.72, "mtf_trend_5m": 0.137, "mtf_trend_15m": 0.238, "mtf_trend_60m": 0.08, "mtf_rsi_15m": 0.203},
+   "nrmse_after": {"orb_dev": 0.000, "orb_range_atr": 0.000, "orb_vpin_interact": 0.000, "mtf_trend_5m": 0.000, "mtf_trend_15m": 0.000, "mtf_trend_60m": 0.000, "mtf_rsi_15m": 0.0032},
+   "nrmse_threshold": 0.01,
+   "tests_added": "tests/unit/test_h42_anchor_feature_parity.py — 11 tests, 20 passing total with existing parity suite",
    "priority": "P0 — supersedes H36/PR #104",
    "hypothesis": "H36's REMEDY IS FALSIFIED; its diagnosis stands. Measured 2026-11-12 on the 20-ticker research cache: rank agreement between full-history and trailing-window features is FLAT at ~0.83 across WARMUP_BARS of 1950/3900/5850/7800 (serving IC -0.0918/-0.0872/-0.0872/-0.0872). More warmup does NOT converge the paths, so PR #104 (retention 7->14d, WARMUP_BARS 1950->3500) buys disk and no measurable convergence — 3500 lies between two warmups that measured identically. DO NOT MERGE PR #104 on its current rationale. ACTUAL MECHANISM, newly localised: exactly 7 of the model's 30 features diverge; the other 23 are BIT-IDENTICAL, including rs_vwap_dev (the v0.8.2 cross-sectional fix holds). By NRMSE vs full-history: mtf_trend_15m 0.238, mtf_rsi_15m 0.203, orb_dev 0.162, mtf_confluence 0.155, orb_vpin_interact 0.138, mtf_trend_5m 0.137, orb_range_atr 0.126. Two families: mtf_* (resample + Wilder EWM) and orb_* (session-anchored opening range). FIVE of the seven are in FFSA's top five most predictive features. Both families depend on an ANCHOR (resample origin, session open) rather than a lookback length — which is exactly why warmup is inert. TESTED AND NOT CONFIRMED: that the research path cheats via orb_high = high.where(is_orb).groupby(date).transform('max') seeing later bars in the session. On real 09:40 ET bars full-session and causal orb_high were identical. Plausible but unproven — retest on bars where the session high lands AFTER the scored bar before claiming the backtest is inflated.",
    "test_plan": "Per-feature, not per-model. For each of the 7, compute the value both ways at the SAME timestamps (compute_indicators_for_universe over full history vs over a trailing window) and drive NRMSE to 0. Fitness = feature-level NRMSE: no model, no P&L, no train/val split, so it CANNOT be overfit and success is unambiguous. Start with mtf_trend_15m (largest divergence): check the resample origin — bins aligned to the window start rather than a fixed clock differ from full-history bins at ANY window length. Then orb_dev: check behaviour when the scored bar falls inside the 09:30-10:00 ORB window versus after it.",
