@@ -25,7 +25,11 @@ Also from Murphy (Technical Analysis of the Financial Markets):
   ad_line_slope      : 10-bar slope of Accumulation/Distribution line
   psar_signal        : +1 price above PSAR, −1 below
 
-All features use only past data. No lookahead.
+All features use only past data. No lookahead. This was ASPIRATIONAL until
+2026-11-12: `_resample_*` forward-filled each higher-timeframe bin from its
+LEFT edge, handing 1m bars a value computed from the bin's close — up to 14
+minutes of future. See `_ffill_completed_bins`. Verified by
+scripts/point_in_time_audit.py, which must report 0.000e+00 for every feature.
 Shift-by-1 is handled at the pipeline level (indicators.py), NOT here.
 """
 
@@ -51,6 +55,43 @@ def _rsi(close: pd.Series, n: int = 14) -> pd.Series:
 
 # ─── Multi-timeframe resampling ──────────────────────────────────────────────
 
+def _ffill_completed_bins(
+    resampled: pd.Series, target_index: pd.Index
+) -> pd.Series:
+    """Map a higher-timeframe series back to 1m, exposing only CLOSED bins.
+
+    THIS IS THE LOOK-AHEAD FIX (2026-11-12). The previous one-liner was
+    `resampled.reindex(df.index, method="ffill")`, and it leaked the future.
+
+    `df.resample("15min")` labels each bin at its LEFT edge, so the bin labelled
+    09:30 spans 09:30–09:44 and its `close` is the 09:44 print. Forward-filling
+    from the label handed that value to the 1m bar at 09:31 — thirteen minutes
+    of future data, at every 1m bar that is not exactly on a bin boundary.
+
+    Measured by scripts/point_in_time_audit.py: mtf_rsi_15m differed from its
+    point-in-time value on 138 of 176 (ticker, bar) rows, and mtf_trend_5m /
+    _15m / mtf_confluence flipped sign outright (max relative difference 2.0).
+    Five of the seven leaking features were FFSA's top five, which is why the
+    backtest read +0.181 IC while live measured +0.025 — a feature that can see
+    the future looks extremely predictive.
+
+    Shifting by one bin means a 1m bar sees the last bin that had CLOSED before
+    it: at 09:50 the newest usable 15m bin is 09:30–09:44, known from 09:45.
+    That is the same value the serving path can compute, which is the point.
+
+    The module docstring claimed "All features use only past data. No
+    lookahead." for the entire life of this bug. It is now true.
+
+    Args:
+        resampled: Series indexed by higher-timeframe bin label (left edge).
+        target_index: The 1m index to project onto.
+
+    Returns:
+        Series on `target_index`, zero-filled before the first closed bin.
+    """
+    return resampled.shift(1).reindex(target_index, method="ffill").fillna(0.0)
+
+
 def _resample_trend(df: pd.DataFrame, period: str) -> pd.Series:
     """Resample OHLCV to a higher timeframe and compute EMA trend direction.
 
@@ -71,8 +112,7 @@ def _resample_trend(df: pd.DataFrame, period: str) -> pd.Series:
     ema_slow = _ema(resampled["close"], 21)
     trend = np.sign(ema_fast - ema_slow)
 
-    # Forward-fill back to 1m index (each higher TF bar covers N 1m bars)
-    return trend.reindex(df.index, method="ffill").fillna(0.0)
+    return _ffill_completed_bins(trend, df.index)
 
 
 def _resample_rsi(df: pd.DataFrame, period: str, n: int = 14) -> pd.Series:
@@ -89,7 +129,7 @@ def _resample_rsi(df: pd.DataFrame, period: str, n: int = 14) -> pd.Series:
     # Rescale: 0→-1, 50→0, 100→+1
     rsi_centered = (rsi_vals - 50) / 50
 
-    return rsi_centered.reindex(df.index, method="ffill").fillna(0.0)
+    return _ffill_completed_bins(rsi_centered, df.index)
 
 
 # ─── Murphy indicators ──────────────────────────────────────────────────────

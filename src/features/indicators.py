@@ -39,7 +39,22 @@ _REQUIRED_COLS = {"open", "high", "low", "close", "volume"}
 #   2  2026-09-16 — obv anchored to the ET session instead of the first bar of
 #      whatever series it was handed (it was unreproducible between the
 #      full-history training path and the windowed live path)
-FEATURE_PIPELINE_VERSION = 2
+#   3  2026-11-12 — LOOK-AHEAD REMOVED from 7 of 30 features. `mtf_*` forward-
+#      filled each resampled bin from its LEFT edge, so a 1m bar saw a value
+#      computed from that bin's close (up to 14 minutes ahead); `orb_*` used
+#      `groupby(date).transform("max")`, so a bar inside the 09:30-10:00 opening
+#      range saw the rest of it. Measured by scripts/point_in_time_audit.py:
+#      mtf_rsi_15m leaked on 138 of 176 rows, orb_dev on 24; all 30 features now
+#      report 0.000e+00.
+#
+#      EVERY CHECKPOINT ON DISK IS NOW STALE. They were trained on the leaky
+#      definitions and learned to lean on features that behaved differently in
+#      production — five of the seven were FFSA's top five. This version bump is
+#      what stops prod loading one of them and serving it clean inputs, which
+#      would be a train/serve skew introduced BY the fix. The guard fails closed:
+#      no LightGBM signal, therefore no entries, until a v3 model is trained.
+#      For a trading system that is the correct failure mode.
+FEATURE_PIPELINE_VERSION = 3
 
 
 def _validate(df: pd.DataFrame) -> None:
@@ -241,10 +256,29 @@ def _orb_features(
     # Group by ET date so ORB resets correctly each session
     date_key = pd.Series(idx_et.date, index=close.index)
 
-    # transform('max'/'min') on masked series: NaN (outside ORB) excluded,
-    # so each bar of the day gets the ORB high/low as a day-constant value.
-    orb_high = high.where(is_orb).groupby(date_key).transform("max")
-    orb_low  = low.where(is_orb).groupby(date_key).transform("min")
+    # RUNNING extremes, not whole-window extremes. This is the look-ahead fix
+    # (2026-11-12).
+    #
+    # The previous form was `.groupby(date_key).transform("max")`, which gives
+    # every bar of the day the max over the ENTIRE opening range. For a bar at
+    # 09:40 — inside the 09:30–10:00 window, and squarely inside the 09:40–15:30
+    # entry window — that includes 09:41–09:59, i.e. the future. Measured by
+    # scripts/point_in_time_audit.py: orb_dev and orb_vpin_interact differed
+    # from their point-in-time values on 24 of 176 (ticker, bar) rows,
+    # orb_range_atr on 25.
+    #
+    # cummax/cummin within the day give the running extreme over ORB bars seen
+    # SO FAR; ffill then holds the completed value for the rest of the session,
+    # so behaviour after 10:00 is unchanged. Before 10:00 the feature now says
+    # what was actually knowable, which is what serving computes.
+    #
+    # An earlier spot check on three 09:40 bars found no leak and I concluded
+    # there was none — those happened to be bars where the session high was
+    # already set. Three samples is not a test.
+    _orb_high_masked = high.where(is_orb)
+    _orb_low_masked = low.where(is_orb)
+    orb_high = _orb_high_masked.groupby(date_key).cummax().groupby(date_key).ffill()
+    orb_low  = _orb_low_masked.groupby(date_key).cummin().groupby(date_key).ffill()
 
     orb_range     = (orb_high - orb_low).clip(lower=0)
     orb_range_atr = orb_range / atr_14.replace(0, np.nan)
