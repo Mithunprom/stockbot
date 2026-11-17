@@ -73,8 +73,23 @@ def main() -> None:
     from src.features.indicators import compute_indicators_for_universe
     from src.models.lgbm import LGBMSignalModel
 
-    model = LGBMSignalModel.load()
-    cols = list(model.feature_cols)
+    # Only the COLUMN LIST is needed — no prediction happens here. Loading the
+    # model would couple this audit to FEATURE_PIPELINE_VERSION, and after the
+    # v2->v3 bump that guard (correctly) refuses every checkpoint on disk,
+    # which would disable the very tool used to verify the fix. Read the
+    # sidecar metadata and fall back to a model load only if that is absent.
+    cols: list[str] = []
+    try:
+        ckpt = LGBMSignalModel._select_checkpoint()
+        meta = ckpt.with_suffix(".json")
+        if meta.exists():
+            import json as _json
+            cols = list(_json.load(open(meta)).get("feature_cols") or [])
+            print(f"feature_cols from {meta.name} ({len(cols)})")
+    except Exception:
+        pass
+    if not cols:
+        cols = list(LGBMSignalModel.load().feature_cols)
 
     bars, _ = load_cache()
     if not bars:
