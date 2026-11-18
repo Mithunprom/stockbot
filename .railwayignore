@@ -29,4 +29,11 @@ __pycache__/
 /models/lgbm/*
 !/models/lgbm/lgbm_ic_0.2063.pkl
 !/models/lgbm/lgbm_ic_0.2063.json
+# v3 clean model (pipeline v3, look-ahead-free features). The v2 model above
+# can no longer LOAD (pipeline guard), but stays whitelisted as a safe
+# fallback: if LGBM_MODEL_PATH is ever unset, _select_checkpoint finds only
+# a v2 file, the guard refuses it, and the bot produces no signal rather than
+# a wrong one.
+!/models/lgbm/lgbm_v3_clean.pkl
+!/models/lgbm/lgbm_v3_clean.json
 !/models/lgbm/reference_distributions.json

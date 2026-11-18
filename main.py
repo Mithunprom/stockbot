@@ -883,7 +883,22 @@ def _load_ffsa_features() -> list[str]:
 #     out at full ~$12,300. Now applied in entry sizing.
 # Neither control stopped the 2026-10-29/30 sessions: 12 entries at full size,
 # 9 losers, -$2,443.
-APP_VERSION = "0.9.9"
+# v0.10.0 — honest features, honest model, trading restored. Owner-authorised
+# 2026-11-17 after 13 flat sessions.
+#   * FEATURE_PIPELINE_VERSION 3 goes live: look-ahead removed from 7 of 30
+#     features (mtf_* resample bins exposed from their LEFT edge; orb_* used a
+#     whole-window max). All 30 now pass scripts/point_in_time_audit.py.
+#   * LGBM_MODEL_PATH pins models/lgbm/lgbm_v3_clean.pkl — trained on clean
+#     features. It is BELOW MIN_VAL_IC=0.05 (val_ic 0.0218, OOS IC 0.0078) and
+#     is reachable only by explicit pin; owner accepted that trade-off. Expected
+#     to lose slowly: 0.46 bps edge against 2.0 bps costs.
+#   * DRAWDOWN_PEAK_EPOCH re-anchors the high-water mark so the 11.01% halt can
+#     clear. The 8% limit is UNCHANGED and still halts on an 8% fall from the
+#     epoch forward.
+# Kelly governs size: inactive -> ramp cap 1 entry/day at ~1.25% notional, and
+# it will throttle to probation then hard-block on its own if the edge measures
+# negative. That is the intended safety net for running a near-zero signal.
+APP_VERSION = "0.10.0"
 
 app = FastAPI(
     title="StockBot API",
