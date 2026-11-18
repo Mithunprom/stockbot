@@ -192,8 +192,9 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    train_end = pd.Timestamp(args.train_end, tz="UTC")
-    val_end = pd.Timestamp(args.val_end, tz="UTC")
+    # +1 day so the named date is inclusive: splits use exclusive < at midnight UTC
+    train_end = pd.Timestamp(args.train_end, tz="UTC") + pd.Timedelta(days=1)
+    val_end = pd.Timestamp(args.val_end, tz="UTC") + pd.Timedelta(days=1)
     oos_start = pd.Timestamp(args.oos_start, tz="UTC")
     oos_end = pd.Timestamp(args.oos_end, tz="UTC")
 
@@ -238,14 +239,9 @@ def main() -> None:
         raise SystemExit(
             "Quarantined v3 model not found — run the Nov 16 clean retrain first"
         )
-    with open(quarantine) as f:
-        meta = json.load(f)
-    import pickle
-    model_pkl = quarantine.with_suffix(".pkl")
-    with open(model_pkl, "rb") as f:
-        lgbm_model = pickle.load(f)
-
-    model_feature_cols: list[str] = meta.get("feature_cols", feature_cols)
+    # Load via LGBMSignalModel so we get the proper regressor, not the raw pickle dict
+    loaded_model = LGBMSignalModel.load(str(quarantine))
+    model_feature_cols: list[str] = loaded_model.feature_cols
 
     # Generate predictions on all OOS bars
     sub = feats_df[feats_df["bar_time"] >= oos_start].dropna(subset=model_feature_cols)
@@ -253,7 +249,7 @@ def main() -> None:
         raise SystemExit("No OOS bars found — check --oos-start")
 
     sub = sub.copy()
-    sub["pred_return"] = lgbm_model.predict(sub[model_feature_cols])
+    sub["pred_return"] = loaded_model.regressor.predict(sub[model_feature_cols])
     pred_df = sub[["ticker", "bar_time", "pred_return"]]
 
     # ------------------------------------------------------------------ IC curve (F15 model)
@@ -291,10 +287,10 @@ def main() -> None:
             print(f"  Training F{h} model...")
             try:
                 model_h = train_lgbm_on_horizon(
-                    feats_df, fwd_df, h, train_end, val_end, feature_cols
+                    feats_df, fwd_df, h, train_end, val_end, model_feature_cols
                 )
-                sub_h = feats_df[feats_df["bar_time"] >= oos_start].dropna(subset=feature_cols).copy()
-                sub_h["pred_return"] = model_h.predict(sub_h[feature_cols])
+                sub_h = feats_df[feats_df["bar_time"] >= oos_start].dropna(subset=model_feature_cols).copy()
+                sub_h["pred_return"] = model_h.predict(sub_h[model_feature_cols])
                 pred_df_h = sub_h[["ticker", "bar_time", "pred_return"]]
                 r = run_ic_curve(pred_df_h, fwd_df, [h], oos_start, oos_end).get(h, {})
                 retrain_results[h] = r
