@@ -1158,8 +1158,22 @@ class SignalLoop:
         # only ever be corrected upward — never silently lowered.
         broker_peak = await self._peak_from_broker_history()
         peak_candidates = [current, broker_peak]
-        if snap is not None:
+        epoch = self._drawdown_peak_epoch()
+        if snap is not None and epoch is None:
             peak_candidates.append(snap.peak_value)
+        elif snap is not None:
+            # An epoch restarts the measurement, so the STORED peak must be
+            # dropped too — it was set before the epoch and would otherwise win
+            # the max() and silently defeat the re-anchor. The broker lookup is
+            # already epoch-filtered, so the peak becomes the highest equity
+            # since the epoch (or today's, whichever is greater) and climbs
+            # normally from there.
+            logger.warning(
+                "drawdown_peak_epoch_discards_stored_peak",
+                stored=round(snap.peak_value, 2),
+                epoch=epoch.isoformat(),
+                new_peak=round(max(peak_candidates), 2),
+            )
         self._pm._peak_value = max(peak_candidates)
 
         if snap is None:
@@ -1220,6 +1234,50 @@ class SignalLoop:
             halted=self._cb.is_halted,
         )
 
+    @staticmethod
+    def _drawdown_peak_epoch() -> datetime | None:
+        """Parse DRAWDOWN_PEAK_EPOCH, or None when unset/invalid.
+
+        OWNER-AUTHORISED RE-ANCHOR OF THE HIGH-WATER MARK. Treat as temporary
+        and audited, exactly like KELLY_EPOCH.
+
+        Why it exists: on 2026-11-02 the drawdown breaker correctly halted at
+        11.01% against its 8% limit. That halt cannot be traded out of — equity
+        must reach $99,901 to clear, which requires trading, which the halt
+        forbids. A resume on 2026-11-16 was re-halted by the next risk
+        evaluation without placing a single order. The block is correct and
+        self-perpetuating, so clearing it requires an explicit decision rather
+        than a code change that weakens the control.
+
+        What it does NOT do: it does not raise the 8% limit, and it does not
+        touch `_check_max_drawdown`. The limit still halts on an 8% fall from
+        the epoch forward. Only the START of the measurement moves.
+
+        What it DOES cost, stated plainly: the 2026-04-03 peak of $108,588.50
+        and the 11.01% drawdown from it stop being counted. The defence is that
+        a drawdown is a statement about a STRATEGY, and the strategy is being
+        replaced in the same deploy — feature pipeline v2 (which contained
+        look-ahead in 7 of 30 features) to v3, plus a model retrained on the
+        clean definitions. A high-water mark set by a strategy that no longer
+        exists, on features since proven leaky, is not a meaningful bar for the
+        one that replaces it. The honest counter-argument stays on the record:
+        capital does not care which model version lost it, and the account is
+        still 11% below its all-time high.
+
+        DEFAULTS TO EMPTY — all-time peak, the safe behaviour. Set in the
+        deployment environment so `railway variables` shows it, never as a code
+        default. Reverting is unsetting one variable.
+        """
+        raw = (os.environ.get("DRAWDOWN_PEAK_EPOCH") or "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            logger.warning("drawdown_peak_epoch_unparseable", value=raw)
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
     async def _peak_from_broker_history(self, period: str = "1A") -> float:
         """Highest completed-session equity from Alpaca. 0.0 if unavailable.
 
@@ -1264,7 +1322,25 @@ class SignalLoop:
                     },
                 )
                 resp.raise_for_status()
-                equity = [e for e in resp.json().get("equity", []) if e]
+                payload = resp.json()
+                equity = list(payload.get("equity") or [])
+                stamps = list(payload.get("timestamp") or [])
+
+            epoch = self._drawdown_peak_epoch()
+            if epoch is not None and len(stamps) == len(equity):
+                cutoff = epoch.timestamp()
+                equity = [
+                    e for e, t in zip(equity, stamps)
+                    if e and t is not None and float(t) >= cutoff
+                ]
+                logger.warning(
+                    "drawdown_peak_epoch_applied",
+                    epoch=epoch.isoformat(),
+                    points_after_epoch=len(equity),
+                    note="pre-epoch highs excluded from the high-water mark",
+                )
+            else:
+                equity = [e for e in equity if e]
             return float(max(equity)) if equity else 0.0
         except Exception as exc:
             logger.warning("peak_from_broker_history_failed", error=str(exc))
