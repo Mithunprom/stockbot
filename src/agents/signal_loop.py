@@ -502,6 +502,12 @@ TICKER_IC_BLOCK_THRESHOLD = -0.05
 TICKER_IC_MIN_N = 300              # min filled predictions before the IC gate acts
 TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
 
+# Contamination audit reference epoch (H43). Oct 16 2026 is when v0.9.5 repaired
+# the IC fill job — outcomes recorded before this date are unreliable because fills
+# were not being processed. The audit shows which IC-blocked tickers would unblock
+# if IC_OUTCOMES_EPOCH (PR #111) were set to this date.
+IC_EPOCH_AUDIT_REF_ISO = "2026-10-16T00:00:00+00:00"
+
 # The block gate reads a 30-DAY window with no `since` filter, matching the
 # probe (KELLY_PROBE_IC_WINDOW_DAYS). It used to read 7 days with
 # `since=_loop_started_at`, and the combination made TICKER_IC_MIN_N = 300
@@ -856,6 +862,52 @@ def _load_rl_agent() -> Any | None:
         return None
 
 
+async def _ic_block_epoch_audit(
+    tracker: Any,
+    blocked: list[str],
+    window_days: int,
+    ref_epoch_iso: str,
+    min_n: int,
+    block_threshold: float,
+) -> dict[str, Any]:
+    """Return which IC-blocked tickers would unblock if IC_OUTCOMES_EPOCH=ref_epoch_iso.
+
+    Diagnostic only — never gates trading. Called hourly alongside the normal
+    IC refresh whenever there are blocked tickers.
+    """
+    try:
+        since = datetime.fromisoformat(ref_epoch_iso)
+        post_epoch = await tracker._compute_per_ticker_ic(
+            window_days=window_days,
+            since=since,
+        )
+        post_epoch_ic: dict[str, tuple[float, int]] = {
+            t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
+            for t, v in (post_epoch or {}).items()
+        }
+        would_unblock = [
+            t for t in blocked
+            if t not in post_epoch_ic
+            or not (
+                post_epoch_ic[t][1] >= min_n
+                and post_epoch_ic[t][0] < block_threshold
+            )
+        ]
+        return {
+            "reference_epoch": ref_epoch_iso,
+            "currently_blocked_count": len(blocked),
+            "would_unblock": sorted(would_unblock),
+            "would_unblock_count": len(would_unblock),
+            "would_remain_blocked": sorted(
+                [t for t in blocked if t not in would_unblock]
+            ),
+        }
+    except Exception as exc:
+        import structlog as _sl
+        _sl.get_logger(__name__).warning("ic_epoch_audit_failed", error=str(exc))
+        return {}
+
+
 class SignalLoop:
     """Runs the 1m bar → ensemble → execution loop.
 
@@ -990,6 +1042,10 @@ class SignalLoop:
         # Live IC Tracker — set via set_ic_tracker() after construction
         # (tracker is created after signal loop in main.py startup sequence)
         self._ic_tracker: Any | None = None
+
+        # IC-block contamination audit (H43). Populated hourly alongside
+        # _ticker_ic; never gates trading. Null until the first IC refresh.
+        self._ic_block_epoch_audit: dict[str, Any] = {}
 
     def set_ic_tracker(self, tracker: Any) -> None:
         """Attach a LiveICTracker instance for prediction recording.
@@ -1535,6 +1591,7 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
             ],
+            "ic_block_epoch_audit": self._ic_block_epoch_audit or None,
             # Names the Kelly-probation probe may fire on (30d IC window). When
             # Kelly is in probation and this is empty, ALL entries are blocked.
             "tickers_probe_eligible": [
@@ -2076,6 +2133,19 @@ class SignalLoop:
                 kelly_mode=self._kelly_mode(),
                 probe_eligible=probe_eligible or None,
             )
+            # Contamination audit: if there are blocked tickers, check which
+            # would unblock with IC_OUTCOMES_EPOCH=IC_EPOCH_AUDIT_REF_ISO
+            # (the date the IC fill job was repaired). Diagnostic only — does
+            # not change which entries are gated.
+            if blocked:
+                self._ic_block_epoch_audit = await _ic_block_epoch_audit(
+                    self._ic_tracker,
+                    blocked,
+                    TICKER_IC_WINDOW_DAYS,
+                    IC_EPOCH_AUDIT_REF_ISO,
+                    TICKER_IC_MIN_N,
+                    TICKER_IC_BLOCK_THRESHOLD,
+                )
         except Exception as exc:
             # Fail open: missing IC data never blocks trading by itself
             logger.warning("ticker_ic_refresh_failed", error=str(exc))
