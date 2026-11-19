@@ -105,7 +105,7 @@ function dagHtml(s) {
           })
           .join("")}
       </div>
-      <div class="arrow">↓ ${s.debate ? `Bull / Bear debate (weight ${s.debate_weight})` : "no debate — weighted mean only"}</div>
+      <div class="arrow">↓ ${s.debate_weight > 0 ? `Bull / Bear debate (weight ${s.debate_weight})` : "no debate — weighted mean only"}</div>
       <div class="dag-row"><div class="node on">Trader<small>threshold ${s.entry_threshold} · stop ${s.stop_atr}×ATR · hold ${s.holding_days}d</small></div></div>
       <div class="arrow">↓ risk mode: ${s.risk_mode}${s.committee ? " (committee)" : ""}</div>
       <div class="dag-row"><div class="node on">Risk committee<small>heat ${Math.round(s.heat_ceiling * 100)}% · daily −3% · DD −8%${s.trend_filter ? " · SPY>200d" : ""}${s.hmm_filter ? " · skip high-vol" : ""}</small></div></div>
@@ -210,7 +210,7 @@ function playTab() {
           ${slider("spy_rvol_20", "SPY rvol", 0.08, 0.45, 0.01, state.row.spy_rvol_20, (v) => sliderFmt("spy_rvol_20", v))}
           ${slider("hmm_regime", "HMM regime", 0, 2, 1, state.row.hmm_regime, (v) => sliderFmt("hmm_regime", v))}
           ${slider("seq_pred", "Seq. predictor", -0.06, 0.06, 0.002, state.row.seq_pred, (v) => sliderFmt("seq_pred", v))}
-          ${slider("ret_5", "5-day return", -0.08, 0.08, 0.002, state.row.ret_5, (v) => sliderFmt("ret_5", v))}
+          ${slider("ret_5", "5-day return", -0.12, 0.12, 0.002, state.row.ret_5, (v) => sliderFmt("ret_5", v))}
           ${slider("vol_z", "Volume z", -1, 4, 0.1, state.row.vol_z, (v) => sliderFmt("vol_z", v))}
           ${slider("adx", "ADX", 8, 45, 1, state.row.adx, (v) => sliderFmt("adx", v))}
         </div>
@@ -236,6 +236,12 @@ function metricRow(label, m, extra = "") {
     <td class="num">${fmtPct(m.win_rate * 100, 1)}</td>
     <td class="num">${m.n_trades}</td>
   </tr>`;
+}
+
+function shortSpecName(name) {
+  const parts = String(name).split("~");
+  if (parts.length >= 2) return `${parts[0]}~${parts[1]}`;
+  return name;
 }
 
 function resultsTab() {
@@ -265,7 +271,7 @@ function resultsTab() {
               const v = r.metrics.total_return_pct;
               const wdt = Math.min(100, (Math.abs(v) / maxAbs) * 100);
               const ddFail = r.metrics.max_dd_pct > 8;
-              return `<div class="bar-row"><span>${r.name.replace(/~.*/, "")}${r.name.includes("buy_hold") ? "" : ""}</span><div class="bar-track"><div class="bar-fill ${v < 0 ? "neg" : ddFail ? "" : "good"}" style="width:${wdt}%"></div></div><span class="${clsNum(v)}">${fmtPct(v, 1)}</span></div>
+              return `<div class="bar-row"><span>${shortSpecName(r.name)}</span><div class="bar-track"><div class="bar-fill ${v < 0 ? "neg" : ddFail ? "" : "good"}" style="width:${wdt}%"></div></div><span class="${clsNum(v)}">${fmtPct(v, 1)}</span></div>
                 <div class="note" style="margin:0 0 8px 128px">Sharpe ${fmtN(r.metrics.sharpe, 2)} · DD ${fmtN(r.metrics.max_dd_pct, 1)}%${ddFail ? " · fails 8% cap" : ""} · score ${fmtN(r.metrics.score, 2)}</div>`;
             })
             .join("")}

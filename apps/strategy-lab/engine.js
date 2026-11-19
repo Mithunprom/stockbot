@@ -381,7 +381,7 @@ export const SCENARIOS = {
   },
   overbought: {
     label: "Overbought squeeze",
-    note: "RSI 78 and a blow-off range. Technicals flip bearish; most graphs stay FLAT.",
+    note: "RSI 82 and a blow-off range. Technicals flip bearish; most graphs stay FLAT.",
     row: {
       ...DEFAULT_ROW,
       rsi_14: 82,
