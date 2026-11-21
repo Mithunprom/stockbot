@@ -28,6 +28,27 @@ logger = logging.getLogger(__name__)
 TRADING_THRESHOLD = 0.0005  # 0.05% — direction filter; entry gate (SIZING_COST_THRESHOLD) handles actual trade gating
 MODEL_DIR = Path("models/lgbm")
 
+# H43: Conservative hyperparameters to prevent the 99% generalisation failure
+# observed on the v3 clean model (train_ic=0.774, OOS IC=0.0078).
+# Root cause: 500 trees × 63 leaves = 31 500 leaf nodes; with min_child_samples=20
+# the model memorises the training corpus rather than extracting the weak true
+# signal (live IC ≈ 0.025).  Reducing capacity forces the model to represent
+# only patterns supported by ≥200 samples, so train_ic should fall to ~0.10–0.20
+# and val/OOS IC should close toward the true signal level.
+LGBM_PARAMS: dict = dict(
+    n_estimators=100,       # was 500 — 5× fewer trees
+    learning_rate=0.05,
+    num_leaves=15,          # was 63 — shallower trees, less capacity
+    min_child_samples=200,  # was 20 — each leaf backed by 200+ samples
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=1.0,          # was 0.1 — 10× stronger L1
+    reg_lambda=1.0,         # was 0.1 — 10× stronger L2
+    random_state=42,
+    n_jobs=-1,
+    verbose=-1,
+)
+
 
 class LGBMSignalModel:
     """LightGBM-based signal model with regressor + classifier heads."""
@@ -51,22 +72,8 @@ class LGBMSignalModel:
         """Train regressor + classifier. Returns metrics dict."""
         from lightgbm import LGBMClassifier, LGBMRegressor
 
-        lgbm_params = dict(
-            n_estimators=500,
-            learning_rate=0.05,
-            num_leaves=63,
-            min_child_samples=20,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.1,
-            reg_lambda=0.1,
-            random_state=42,
-            n_jobs=-1,
-            verbose=-1,
-        )
-
         # Head A: Regressor — predict raw 15m forward return
-        self.regressor = LGBMRegressor(**lgbm_params)
+        self.regressor = LGBMRegressor(**LGBM_PARAMS)
         self.regressor.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
@@ -77,7 +84,7 @@ class LGBMSignalModel:
         dir_train = (y_train > direction_epsilon).astype(int)
         dir_val = (y_val > direction_epsilon).astype(int)
 
-        self.classifier = LGBMClassifier(**lgbm_params)
+        self.classifier = LGBMClassifier(**LGBM_PARAMS)
         self.classifier.fit(
             X_train, dir_train,
             eval_set=[(X_val, dir_val)],
