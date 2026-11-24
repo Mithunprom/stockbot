@@ -1535,6 +1535,8 @@ class SignalLoop:
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
             ],
+            # H43: richer IC gate view — block rate, mean IC, per-ticker detail.
+            "ic_gate_health": self._ic_gate_health_summary(),
             # Names the Kelly-probation probe may fire on (30d IC window). When
             # Kelly is in probation and this is empty, ALL entries are blocked.
             "tickers_probe_eligible": [
@@ -2025,6 +2027,57 @@ class SignalLoop:
         today = datetime.now(ZoneInfo("America/New_York")).date()
         delta = (earnings_date - today).days
         return -EARNINGS_BLACKOUT_DAYS <= delta <= EARNINGS_BLACKOUT_DAYS
+
+    def _ic_gate_health_summary(self) -> dict[str, Any]:
+        """Summarise IC gate arming state for /diagnostics (H43).
+
+        A high block_rate_among_armed under a near-zero-IC model signals
+        window contamination from a prior model version rather than genuine
+        negative signal from the current deploy.  When v0.10.0 OOS IC is
+        +0.0078 and block_rate_among_armed is near 1.0, the 30-day window
+        still contains the majority of its rows from the leaky v0.9.9 model
+        (confirmed serving IC = -0.010); setting IC_OUTCOMES_EPOCH to the
+        v0.10.0 deploy date (2026-11-18) would clear the contamination.
+        """
+        armed: dict[str, tuple[float, int]] = {
+            t: (ic, n) for t, (ic, n) in self._ticker_ic.items()
+            if n >= TICKER_IC_MIN_N
+        }
+        unarmed: dict[str, tuple[float, int]] = {
+            t: (ic, n) for t, (ic, n) in self._ticker_ic.items()
+            if n < TICKER_IC_MIN_N
+        }
+        blocked = {t: (ic, n) for t, (ic, n) in armed.items()
+                   if ic < TICKER_IC_BLOCK_THRESHOLD}
+
+        mean_ic_armed: float | None = (
+            round(sum(ic for ic, _ in armed.values()) / len(armed), 4)
+            if armed else None
+        )
+
+        return {
+            "n_tickers_in_cache": len(self._ticker_ic),
+            "n_tickers_armed": len(armed),
+            "n_tickers_unarmed": len(unarmed),
+            "n_tickers_blocked": len(blocked),
+            "block_rate_among_armed": (
+                round(len(blocked) / len(armed), 3) if armed else None
+            ),
+            "mean_ic_armed": mean_ic_armed,
+            "armed_threshold": TICKER_IC_MIN_N,
+            "block_threshold": TICKER_IC_BLOCK_THRESHOLD,
+            # Per-armed-ticker detail sorted ascending by IC (worst first).
+            # block_rate_among_armed near 1.0 at low n_tickers_armed indicates
+            # window contamination rather than a genuine model failure.
+            "armed_tickers": {
+                t: {
+                    "ic": round(ic, 4),
+                    "n": n,
+                    "blocked": ic < TICKER_IC_BLOCK_THRESHOLD,
+                }
+                for t, (ic, n) in sorted(armed.items(), key=lambda kv: kv[1][0])
+            },
+        }
 
     async def _maybe_refresh_ticker_ic(self) -> None:
         """Refresh the per-ticker live IC cache from the IC tracker (hourly)."""
