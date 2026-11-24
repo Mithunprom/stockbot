@@ -462,6 +462,8 @@ async def lifespan(app: FastAPI):
     )
     from src.agents.news_risk_agent import NewsRiskAgent
     news_risk_agent = NewsRiskAgent()
+    from src.agents.strategy_search_agent import StrategySearchAgent
+    strategy_search_agent = StrategySearchAgent()
     _signal_loop.set_ic_tracker(live_ic_tracker)
     # Store globally so API endpoints can trigger it manually
     app.state.quant_research_agent = quant_research_agent
@@ -471,6 +473,7 @@ async def lifespan(app: FastAPI):
     app.state.watchdog_agent = watchdog_agent
     app.state.integrity_agent = integrity_agent
     app.state.news_risk_agent = news_risk_agent
+    app.state.strategy_search_agent = strategy_search_agent
     app.state.ensemble = ensemble
     app.state.screener_agent = screener_agent
 
@@ -488,6 +491,7 @@ async def lifespan(app: FastAPI):
         watchdog_agent=watchdog_agent,
         integrity_agent=integrity_agent,
         news_risk_agent=news_risk_agent,
+        strategy_search_agent=strategy_search_agent,
         mode=settings.alpaca_mode,
     )
     scheduler.start()
