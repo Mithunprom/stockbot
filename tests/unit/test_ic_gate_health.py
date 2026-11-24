@@ -10,6 +10,9 @@ rather than genuine negative signal.  These tests pin:
 3. Clean-state behaviour: block_rate_among_armed = 0 when all tickers have
    positive IC.
 4. Partial-arm state: unarmed tickers (n < 300) don't affect block rate.
+5. The "blocked" flag matches _ticker_ic_blocked() (entry gate ≤ 0.0), not just
+   the hard-block threshold (< -0.05).  Tickers in (-0.05, 0.0] are entry-blocked
+   but were previously shown as "unblocked" — Bugbot d92ca99e.
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ import pytest
 
 from src.agents.signal_loop import (
     TICKER_IC_BLOCK_THRESHOLD,
+    TICKER_IC_MIN_ENTRY,
     TICKER_IC_MIN_N,
     SignalLoop,
 )
@@ -43,7 +47,7 @@ def test_summary_has_required_keys():
     required = {
         "n_tickers_in_cache", "n_tickers_armed", "n_tickers_unarmed",
         "n_tickers_blocked", "block_rate_among_armed", "mean_ic_armed",
-        "armed_threshold", "block_threshold", "armed_tickers",
+        "armed_threshold", "entry_threshold", "hard_block_threshold", "armed_tickers",
     }
     assert required.issubset(result.keys())
 
@@ -63,19 +67,41 @@ def test_empty_cache_returns_none_rate():
 # ---------------------------------------------------------------------------
 
 def test_full_block_rate_signals_contamination():
-    """block_rate_among_armed = 1.0 when all armed tickers have IC just below
-    threshold — the signature of a leaky-model contamination rather than
-    genuine per-ticker failure on a +0.0078-IC model.
+    """block_rate_among_armed = 1.0 when all armed tickers have IC at or below
+    TICKER_IC_MIN_ENTRY (≤ 0.0) — the signature of a leaky-model contamination
+    rather than genuine per-ticker failure on a +0.0078-IC model.
     """
     n = TICKER_IC_MIN_N + 50
-    # IC slightly below the -0.05 threshold, consistent with noise around ~0
-    ic_data = {f"TKR{i}": (-0.06 - i * 0.001, n) for i in range(22)}
+    # IC slightly below 0.0 (the entry gate), consistent with noise around ~0.
+    ic_data = {f"TKR{i}": (-0.01 - i * 0.001, n) for i in range(22)}
     loop = _make_loop_with_ic(ic_data)
     result = loop._ic_gate_health_summary()
 
     assert result["n_tickers_armed"] == 22
     assert result["n_tickers_blocked"] == 22
     assert result["block_rate_among_armed"] == 1.0
+
+
+def test_entry_gate_gap_tickers_are_blocked():
+    """Tickers with IC in (-0.05, 0.0] are entry-blocked but were missed by the
+    old implementation that used ic < TICKER_IC_BLOCK_THRESHOLD (-0.05).
+
+    _ticker_ic_blocked() uses ic <= TICKER_IC_MIN_ENTRY (0.0), so the diagnostic
+    must match — Bugbot finding d92ca99e.
+    """
+    n = TICKER_IC_MIN_N + 1
+    ic_data = {
+        "GAP_NEG": (-0.03, n),   # -0.05 < IC ≤ 0.0 → entry-blocked (old code missed)
+        "AT_ZERO": (0.0, n),     # IC == 0.0 exactly → entry-blocked (≤ 0.0)
+        "POS":     (0.01, n),    # IC > 0.0 → NOT blocked
+    }
+    loop = _make_loop_with_ic(ic_data)
+    result = loop._ic_gate_health_summary()
+
+    assert result["n_tickers_blocked"] == 2
+    assert result["armed_tickers"]["GAP_NEG"]["blocked"] is True
+    assert result["armed_tickers"]["AT_ZERO"]["blocked"] is True
+    assert result["armed_tickers"]["POS"]["blocked"] is False
 
 
 def test_zero_block_rate_when_all_ic_positive():
@@ -120,7 +146,8 @@ def test_reports_correct_thresholds():
     loop = _make_loop_with_ic({})
     result = loop._ic_gate_health_summary()
     assert result["armed_threshold"] == TICKER_IC_MIN_N
-    assert result["block_threshold"] == TICKER_IC_BLOCK_THRESHOLD
+    assert result["entry_threshold"] == TICKER_IC_MIN_ENTRY
+    assert result["hard_block_threshold"] == TICKER_IC_BLOCK_THRESHOLD
 
 
 # ---------------------------------------------------------------------------

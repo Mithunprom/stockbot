@@ -2047,8 +2047,12 @@ class SignalLoop:
             t: (ic, n) for t, (ic, n) in self._ticker_ic.items()
             if n < TICKER_IC_MIN_N
         }
+        # Use the same threshold as _ticker_ic_blocked(): ic <= TICKER_IC_MIN_ENTRY.
+        # TICKER_IC_BLOCK_THRESHOLD (-0.05) is the hard-block signal; tickers in
+        # (-0.05, 0.0] are also entry-blocked, so using only TICKER_IC_BLOCK_THRESHOLD
+        # under-counts the blocked set and misrepresents trading capacity.
         blocked = {t: (ic, n) for t, (ic, n) in armed.items()
-                   if ic < TICKER_IC_BLOCK_THRESHOLD}
+                   if ic <= TICKER_IC_MIN_ENTRY}
 
         mean_ic_armed: float | None = (
             round(sum(ic for ic, _ in armed.values()) / len(armed), 4)
@@ -2065,7 +2069,10 @@ class SignalLoop:
             ),
             "mean_ic_armed": mean_ic_armed,
             "armed_threshold": TICKER_IC_MIN_N,
-            "block_threshold": TICKER_IC_BLOCK_THRESHOLD,
+            # entry_threshold matches _ticker_ic_blocked() (the actual gate).
+            # hard_block_threshold is kept for contamination-signal context.
+            "entry_threshold": TICKER_IC_MIN_ENTRY,
+            "hard_block_threshold": TICKER_IC_BLOCK_THRESHOLD,
             # Per-armed-ticker detail sorted ascending by IC (worst first).
             # block_rate_among_armed near 1.0 at low n_tickers_armed indicates
             # window contamination rather than a genuine model failure.
@@ -2073,7 +2080,7 @@ class SignalLoop:
                 t: {
                     "ic": round(ic, 4),
                     "n": n,
-                    "blocked": ic < TICKER_IC_BLOCK_THRESHOLD,
+                    "blocked": ic <= TICKER_IC_MIN_ENTRY,
                 }
                 for t, (ic, n) in sorted(armed.items(), key=lambda kv: kv[1][0])
             },
