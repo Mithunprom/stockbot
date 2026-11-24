@@ -1308,6 +1308,7 @@ async def diagnostics() -> JSONResponse:
             "pdt_budget_remaining": summary.get("pdt_budget_remaining"),
             "ticker_ic_tracked": summary.get("ticker_ic_tracked", 0),
             "tickers_ic_blocked": summary.get("tickers_ic_blocked", []),
+            "ic_gate_health": summary.get("ic_gate_health"),
             "tickers_probe_eligible": summary.get("tickers_probe_eligible", []),
             "n_trades_today": summary.get("n_trades_today", 0),
             "max_trades_per_day": summary.get("max_trades_per_day", 8),
