@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity MET; data_run BLOCKED week 25). W48 program review Nov 23. v0.10.0 DEPLOYED Nov 18 (owner-authorized): feature pipeline v2\u2192v3 (H42 resolved; all 30 features 0.000e+00 in point-in-time audit), clean model pinned lgbm_v3_clean.pkl (OOS IC=+0.0078 vs 2bps cost \u2014 expected to lose; Kelly governor is safety net), DRAWDOWN_PEAK_EPOCH re-anchors HWM (CB halt LIFTED). M3 CLOCK RESET Nov 18 (strategy change). n=0 new M3 window. Prior M3 (Oct 8\u2013Oct 30, n=40, PF=0.310) RETIRED (leaky-feature model). Live data BLOCKED from cloud session. EMAIL_ALERTS_ENABLED=false UNCONFIRMED. H24/H25 (PRs #51-57) UNMERGED. Railway worker week 25. 4 direct pushes W48 (owner-authorized).",
- "last_iteration_date": "2026-11-23",
- "active_hypothesis": "H42 \u2014 RESOLVED 2026-11-18. Feature pipeline v3 deployed in v0.10.0 (owner-authorized). All 30 features 0.000e+00 in point_in_time_audit.py. FEATURE_PIPELINE_VERSION bumped 2\u21923. Clean retrain (OOS IC=+0.0078 vs 2bps cost = 0.23\u00d7 break-even) confirms the edge is below cost \u2014 not a serving bug, not a feature fix that recovers alpha. The clean model is pinned via LGBM_MODEL_PATH and expected to lose slowly under Kelly governor. NEW ACTIVE QUESTION: does any alpha exist in this universe/horizon/feature set? Railway worker required for live IC measurement. Next step after Railway enables: measure live IC over 20+ trades under v0.10.0, then decide whether to explore new alpha sources (new universe, new horizon, new features).",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity MET; data_run BLOCKED week 26). W48 nightly Nov 25. v0.10.0 DEPLOYED Nov 18. M3 v0.10.0: n=4 (Nov 19\u201324), 0W/4L, net ~-$336 (AXON -$52.21, SNDK -$188.44, AMD -$33.70, SNDK -$61.77). Consistent with expected-to-lose model (OOS IC=0.0078, 0.23\u00d7 cost). Kelly inactive mode (ramp_entry_cap=2). H45 PROPOSED this nightly: LightGBM early stopping + conservative hyperparameters to fix 99% generalisation failure (train_ic=0.774 / OOS IC=0.0078). PR opened. Railway worker still week 26 (all data_run hypotheses blocked).",
+ "last_iteration_date": "2026-11-25",
+ "active_hypothesis": "H45 \u2014 PROPOSED 2026-11-25. LightGBM early stopping + conservative hyperparameters: two complementary fixes for the 99% train\u2192OOS generalisation failure (train_ic=0.774 / OOS IC=0.0078 on v3 clean model). Root cause: callbacks=[] explicitly disabled early stopping despite eval_set being configured \u2014 all 500 trees trained unconditionally, memorising the 756k training corpus. Fix 1 (conservative params): n_estimators=1000 (budget; early_stopping decides actual count), num_leaves=31 (was 63 \u2014 halved), min_child_samples=50 (was 20), reg_lambda=1.0 (was 0.1). Fix 2 (early stopping): callbacks=[early_stopping(50, verbose=False), log_evaluation(period=-1)] on both regressor and classifier heads. With patience=50, training halts when val loss plateaus for 50 consecutive rounds \u2014 typically 100\u2013250 trees on financial data. Expected: train_ic falls from 0.774 to ~0.15\u20130.25; val_ic / OOS IC closes toward true signal level (target \u2265 MIN_VAL_IC=0.05 for model promotion without env pin). 10 unit tests pass. PR opened 2026-11-25. Supersedes H43 (PR #127, unmerged) which fixed params but not callbacks. Status: needs_data_run (Railway worker, week 26).",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -15,7 +15,7 @@
   "integrity_criterion_met": true,
   "integrity_criterion_met_date": "2026-07-28",
   "integrity_sentinel_last_run": "2026-08-31T12:25:00Z",
-  "integrity_sentinel_status": "ALL GREEN Nov 16 22:25 UTC \u2014 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker. Integrity criterion MET and holding.",
+  "integrity_sentinel_status": "ALL GREEN Nov 24 22:25 UTC \u2014 5 checks pass: pnl_pct_consistency, fill_price_pnl_consistency, stale_open_rows, kelly_seed_sanity, db_vs_broker. Integrity criterion MET and holding.",
   "integrity_sentinel_critical_since": null,
   "integrity_sentinel_critical_check": null,
   "integrity_sentinel_stale_rows": [],
@@ -235,7 +235,25 @@
   "note": "Railway blocks datacenter IPs. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
+ "m3_v010_n": 4,
+ "m3_v010_win_rate": 0.0,
+ "m3_v010_pf": 0.0,
+ "m3_v010_net_pnl": -336.12,
+ "m3_v010_note": "M3 v0.10.0 window started Nov 18 2026 (strategy change). n=4 (Nov 19-24): 0W/4L, PF=0.000, net ~-$336.12. Trades: id=314 AXON trailing_stop -$52.21 (Nov 19), id=315 SNDK trailing_stop -$188.44 (Nov 20), id=316 AMD trailing_stop -$33.70 (Nov ~22), id=317 SNDK trailing_stop -$61.77 (Nov ~24). All losses consistent with expected-to-lose model (OOS IC=0.0078, 0.23× 2bps cost). Kelly inactive mode (ramp_entry_cap=2). Gate 6 (n≥20) not yet reached. All exits via trailing_stop — barriers working. Do not act on PF signal until n≥20 (gate 6).",
  "hypothesis_queue": [
+  {
+   "id": "H45",
+   "status": "proposed",
+   "priority": "P0 — follows H42+H43; fixes the mechanical early-stopping bug (callbacks=[]) that caused 99% generalisation failure",
+   "hypothesis": "LightGBM early stopping + conservative hyperparameters: two complementary fixes for the 99% train→OOS generalisation failure (train_ic=0.774 / OOS IC=0.0078 on v3 clean model). Root cause: callbacks=[] explicitly disabled early stopping despite eval_set being configured — all 500 trees trained unconditionally, memorising 756k training rows. Fix 1 (conservative params): n_estimators=1000 (budget), num_leaves=31 (was 63), min_child_samples=50 (was 20), reg_lambda=1.0 (was 0.1). Fix 2 (early stopping): callbacks=[early_stopping(50, verbose=False), log_evaluation(period=-1)] on both heads. Expected: train_ic falls from 0.774 to ~0.15–0.25; val_ic / OOS IC closes toward true signal (target ≥ MIN_VAL_IC=0.05). Supersedes H43 (PR #127, unmerged) which fixed params but left callbacks=[].",
+   "test_plan": "Railway retrain via scripts/train_lgbm.py on feature archive v3. Measure: (1) train_ic ≤ 0.30 (was 0.774), (2) val_ic ≥ 0.05 (was 0.022), (3) OOS IC15 on Oct 2026 holdout ≥ 0.05 (was 0.0078), (4) edge_bps_per_trade > 2.0 bps round-trip cost. 10 sandbox unit tests pass (param guards + early stopping wiring, no lightgbm execution required).",
+   "success_criteria": "val_ic ≥ MIN_VAL_IC=0.05 on the new checkpoint, without LGBM_MODEL_PATH pin, so the model promotes via the standard selection path.",
+   "evidence": "models/lgbm/lgbm_v3_clean.json: train_ic=0.7739, val_ic=0.0218, oos_ic15=0.0078, oos_rows=130478, edge_bps=0.462 vs 2.0 cost. Nightly 2026-11-25.",
+   "files_changed": ["src/models/lgbm.py", "tests/unit/test_h45_lgbm_early_stopping.py"],
+   "needs_data_run": true,
+   "proposed_by": "claude-code session 2026-11-25",
+   "added": "2026-11-25"
+  },
   {
    "id": "H42",
    "status": "RESOLVED \u2014 deployed in v0.10.0 (Nov 18). Feature pipeline v3 live. All 30 features 0.000e+00. Clean model OOS IC=+0.0078 (below cost threshold). M3 clock reset to Nov 18.",

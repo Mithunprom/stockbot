@@ -28,6 +28,27 @@ logger = logging.getLogger(__name__)
 TRADING_THRESHOLD = 0.0005  # 0.05% — direction filter; entry gate (SIZING_COST_THRESHOLD) handles actual trade gating
 MODEL_DIR = Path("models/lgbm")
 
+# H45: Conservative hyperparameters + early stopping to close the 99% generalisation
+# failure (train_ic=0.774, OOS IC=0.0078) on the v3 clean model.
+# Root cause: 500 trees × 63 leaves × min_child_samples=20 ≈ 31,500 nodes — enough
+# to memorise the 756k training corpus. Two complementary fixes:
+#   (1) Halve num_leaves and raise min_child_samples to reduce memorisation risk.
+#   (2) early_stopping(50) halts training when val loss plateaus, so n_estimators=1000
+#       is a budget ceiling, not an unconditional train-to-completion count.
+LGBM_PARAMS: dict = dict(
+    n_estimators=1000,          # budget; early_stopping(50) decides actual tree count
+    learning_rate=0.05,
+    num_leaves=31,              # was 63 — halved capacity (depth ~5)
+    min_child_samples=50,       # was 20 — each leaf requires 50+ samples
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.1,
+    reg_lambda=1.0,             # was 0.1 — 10× stronger L2 regularisation
+    random_state=42,
+    n_jobs=-1,
+    verbose=-1,
+)
+
 
 class LGBMSignalModel:
     """LightGBM-based signal model with regressor + classifier heads."""
@@ -49,39 +70,25 @@ class LGBMSignalModel:
         direction_epsilon: float = 0.0001,
     ) -> dict[str, float]:
         """Train regressor + classifier. Returns metrics dict."""
-        from lightgbm import LGBMClassifier, LGBMRegressor
-
-        lgbm_params = dict(
-            n_estimators=500,
-            learning_rate=0.05,
-            num_leaves=63,
-            min_child_samples=20,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.1,
-            reg_lambda=0.1,
-            random_state=42,
-            n_jobs=-1,
-            verbose=-1,
-        )
+        from lightgbm import LGBMClassifier, LGBMRegressor, early_stopping, log_evaluation
 
         # Head A: Regressor — predict raw 15m forward return
-        self.regressor = LGBMRegressor(**lgbm_params)
+        self.regressor = LGBMRegressor(**LGBM_PARAMS)
         self.regressor.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
-            callbacks=[],
+            callbacks=[early_stopping(50, verbose=False), log_evaluation(period=-1)],
         )
 
         # Head B: Classifier — predict direction (up/down)
         dir_train = (y_train > direction_epsilon).astype(int)
         dir_val = (y_val > direction_epsilon).astype(int)
 
-        self.classifier = LGBMClassifier(**lgbm_params)
+        self.classifier = LGBMClassifier(**LGBM_PARAMS)
         self.classifier.fit(
             X_train, dir_train,
             eval_set=[(X_val, dir_val)],
-            callbacks=[],
+            callbacks=[early_stopping(50, verbose=False), log_evaluation(period=-1)],
         )
 
         # Compute metrics
