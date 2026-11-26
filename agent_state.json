@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity MET; data_run BLOCKED week 25). W48 program review Nov 23. v0.10.0 DEPLOYED Nov 18 (owner-authorized): feature pipeline v2\u2192v3 (H42 resolved; all 30 features 0.000e+00 in point-in-time audit), clean model pinned lgbm_v3_clean.pkl (OOS IC=+0.0078 vs 2bps cost \u2014 expected to lose; Kelly governor is safety net), DRAWDOWN_PEAK_EPOCH re-anchors HWM (CB halt LIFTED). M3 CLOCK RESET Nov 18 (strategy change). n=0 new M3 window. Prior M3 (Oct 8\u2013Oct 30, n=40, PF=0.310) RETIRED (leaky-feature model). Live data BLOCKED from cloud session. EMAIL_ALERTS_ENABLED=false UNCONFIRMED. H24/H25 (PRs #51-57) UNMERGED. Railway worker week 25. 4 direct pushes W48 (owner-authorized).",
- "last_iteration_date": "2026-11-23",
- "active_hypothesis": "H42 \u2014 RESOLVED 2026-11-18. Feature pipeline v3 deployed in v0.10.0 (owner-authorized). All 30 features 0.000e+00 in point_in_time_audit.py. FEATURE_PIPELINE_VERSION bumped 2\u21923. Clean retrain (OOS IC=+0.0078 vs 2bps cost = 0.23\u00d7 break-even) confirms the edge is below cost \u2014 not a serving bug, not a feature fix that recovers alpha. The clean model is pinned via LGBM_MODEL_PATH and expected to lose slowly under Kelly governor. NEW ACTIVE QUESTION: does any alpha exist in this universe/horizon/feature set? Railway worker required for live IC measurement. Next step after Railway enables: measure live IC over 20+ trades under v0.10.0, then decide whether to explore new alpha sources (new universe, new horizon, new features).",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity MET; data_run BLOCKED week 25). W48 program review Nov 26. v0.10.0 DEPLOYED Nov 18 (owner-authorized). CB halt CONFIRMED LIFTED ~Nov 19 (17-day halt Nov 2-19). M3 v0.10.0: n=6, 2W/4L, PF=1.72 (noise), net=+$241.91. Kelly inactive (n=6/10; 4 trades until activation \u2014 H24/H25 UNMERGED CRITICAL). H43 diagnostics (M3 stats at /diagnostics) IMPLEMENTED 2026-11-26 (PR open). Gate: PF>=1.2 at n>=100. EMAIL_ALERTS_ENABLED=false \u26a0 (must re-enable before Kelly activation at n=10). Railway worker week 25 (backtests blocked).",
+ "last_iteration_date": "2026-11-26",
+ "active_hypothesis": "H43 \u2014 IMPLEMENTED 2026-11-26 (FREEZE-EXEMPT diagnostics). M3 progress stats (_maybe_refresh_m3_stats) added to get_portfolio_summary and /diagnostics. Computes n, win_rate, gross_profit, gross_loss, pf, net_pnl, expectancy, t30_pf, gate_pf_target=1.2, gate_n_target=100 from closed-trade ledger since M3_CLOCK_DATE env var. 8 unit tests (all pass). PR pending. CB halt CONFIRMED LIFTED ~Nov 19 (6 new trades in M3 window Nov 19-25: n=6, 2W/4L, PF=1.72, net=+$241.91 \u2014 noise level). Kelly approaching activation: n=6/10 (4 more trades needed). H24/H25 (PRs #51-57) CRITICAL unmerged. Next: Railway worker enable (AGENT_WORKER_ENABLE=true) to unblock backtests; re-enable email (EMAIL_ALERTS_ENABLED=true) before Kelly activates at n=10.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -29,7 +29,25 @@
   "integrity_sentinel_positions_resolved_aug10": [
    "MSCI (id 119) \u2014 ZOMBIE RESOLVED via v0.6.2. Exited max_hold +$9.61. Root cause: universe-rotation dropped MSCI from screener; sync_from_broker skipped it; exit path never saw it; portfolio_heat read 0.0 while 12.9% deployed. v0.6.2 added _owned_tickers so positions are tracked regardless of universe membership."
   ],
-  "watchdog_status": "v0.10.0 deployed Nov 18. CB halt LIFTED via DRAWDOWN_PEAK_EPOCH (owner-authorized). Kelly: inactive governor mode (1 entry/day ~$1,200 notional). Trading resumed ~Nov 18. Live data blocked from cloud session — exact status unconfirmed as of Nov 23.",
+  "watchdog_status": "v0.10.0 deployed Nov 18. CB halt LIFTED confirmed Nov 25 (trading resumed; 6 new trades Nov 19-25 in M3 window). Kelly: inactive mode (n=6/10; 4 more trades until activation). M3 v0.10.0: n=6, 2W/4L, PF=1.72 (noise), net=+$241.91, exp=$40.32/trade. Entry rank mean=96.7 (healthy). IC block: 24/75 tickers. Live data blocked from cloud session. H43 diagnostics (M3 progress at /diagnostics) PR open 2026-11-26.",
+  "m3_v0100_n": 6,
+  "m3_v0100_wins": 2,
+  "m3_v0100_losses": 4,
+  "m3_v0100_win_rate": 0.333,
+  "m3_v0100_pf": 1.72,
+  "m3_v0100_gross_profit": 578.03,
+  "m3_v0100_gross_loss": 336.12,
+  "m3_v0100_net_pnl": 241.91,
+  "m3_v0100_expectancy": 40.32,
+  "m3_v0100_clock_date": "2026-11-18",
+  "m3_v0100_note": "M3 window Nov 18 2026 (v0.10.0 deploy — M3 clock reset, strategy change). CB halt lifted ~Nov 19 (DRAWDOWN_PEAK_EPOCH). n=6 (Nov 19-25). PF=1.72 NOISE (n<<30, n<<100 gate). Positive net PnL early but statistically meaningless. Gate: PF>=1.2 at n>=100. Kelly activation at n=10 (4 more trades needed). H24/H25 structural guards UNMERGED — CRITICAL risk.",
+  "cb_halt_v099": {
+   "halted_since": "2026-11-02",
+   "halted_reason": "max_drawdown 11.01% (threshold 8%)",
+   "lifted_date": "~2026-11-19",
+   "lifted_method": "DRAWDOWN_PEAK_EPOCH env var re-anchors HWM (owner-authorized)",
+   "halt_duration_days": 17
+  },
   "kelly_probation_note": "W41: Kelly epoch re-seed Sep 29 (owner-authorized). Sep 21 outcomes excluded from Kelly window via KELLY_EPOCH env var. Kelly is now fresh (window starts at epoch). Entries resumed Sep 29. Structural guards (PRs #35, #51\u201357) still unmerged \u2014 structural risk persists as Kelly window builds under v0.8.0+ strategy.",
   "diagnostics_sep14": "2 tickers pass both gates (INTC pred_return 0.003707, LITE 0.006675) but blocked by kelly_probation. 8 blocked (pred_return_too_small + kelly_probation). Heat: 0.0. PDT budget: 3. n_trades_today: 6/6 (persisted from Sep 11 last session). Kelly: -0.6661 probation. kelly_entries_blocked: false (flag; all would-trade=false per kelly_probation). Kelly n_trades in window: 12 (Sep 10-11 trades). probation_entries_today: 0. Market closed (Sunday). Exit mode: daily_vol_swing. SL floor: 0.01, trail floor: 0.008, TP floor: 0.015.",
   "diagnostics_sep17": "3 signals pass both gates: LITE (pred_return 0.6192%, dir_prob 80.79%), SNDK (pred_return 0.8474%, dir_prob 64.09%), PCG (pred_return 0.4591%, dir_prob 78.12%). All 3 blocked by kelly_probation. 7 blocked (pred_return_too_small or kelly_probation). Heat: 0.0. PDT budget: 3. Kelly: -0.6661 probation. n_trades_in_window: 12 (Sep 10-11). probation_entries_today: 0. Market closed. NOTE: PCG is a new ticker (utilities) not previously in SECTOR_MAP \u2014 H27 (PR #62) fixes this.",
@@ -236,6 +254,17 @@
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
  "hypothesis_queue": [
+  {
+   "id": "H43",
+   "hypothesis": "M3 progress stats at /diagnostics. _maybe_refresh_m3_stats() reads closed-trade ledger since M3_CLOCK_DATE, computes n/win_rate/pf/net_pnl/expectancy/t30_pf/gate targets, caches in _m3_stats_cache, exposed via get_portfolio_summary and /diagnostics. FREEZE-EXEMPT: read-only DB query; zero effect on entries, exits, or sizing. Motivation: during the 15-day CB halt Nov 2-19 there was no easy way to track M3 gate progress (PF>=1.2 at n>=100) without hitting the trades endpoint. M3 progress is the top-level metric determining CODE RED exit.",
+   "status": "IMPLEMENTED 2026-11-26 — PR open (feat/rnd-H43-m3-stats-diagnostics). 8 unit tests all pass. Freeze-exempt.",
+   "added": "2026-11-26",
+   "added_by": "nightly desk W48 — CB halt lifted, Kelly approaching activation (n=6), M3 progress blind spot identified",
+   "freeze_classification": "EXEMPT — read-only DB query. No change to entries, exits, sizing, or risk controls.",
+   "pr_branch": "feat/rnd-H43-m3-stats-diagnostics",
+   "pr_state": "OPEN",
+   "priority": "MEDIUM — observability; merge before n=100 M3 gate review"
+  },
   {
    "id": "H42",
    "status": "RESOLVED \u2014 deployed in v0.10.0 (Nov 18). Feature pipeline v3 live. All 30 features 0.000e+00. Clean model OOS IC=+0.0078 (below cost threshold). M3 clock reset to Nov 18.",

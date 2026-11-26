@@ -430,6 +430,37 @@ KELLY_HARD_BLOCK_THRESHOLD = -0.25
 #   3. Reverting is unsetting one variable.
 KELLY_EPOCH_ISO = os.environ.get("KELLY_EPOCH", "")
 
+# M3_CLOCK_DATE — the ISO date of the current measurement-window reset.
+# Set this env var whenever a strategy change forces a new measurement clock
+# (per manifesto: M3 resets on strategy change). Defaults to 2026-11-18
+# (v0.10.0 deploy: feature pipeline v3, clean model pinned).
+# Used only by _maybe_refresh_m3_stats() to bound the diagnostics query;
+# it never affects entries, exits, or sizing.
+M3_CLOCK_DATE_ISO = os.environ.get("M3_CLOCK_DATE", "2026-11-18")
+
+# How often (in ticks) to refresh the M3 stats cache. 30 ticks ≈ 30 minutes
+# at 1 tick/minute — fresh enough for the nightly desk, cheap enough to not
+# perturb latency.
+M3_STATS_REFRESH_TICKS = 30
+
+
+def _m3_clock_cutoff() -> datetime:
+    """Parse M3_CLOCK_DATE_ISO into a UTC midnight datetime.
+
+    Falls back to 2026-11-18 on parse error so a misconfigured env var
+    degrades gracefully rather than crashing the stats refresh.
+    """
+    raw = (M3_CLOCK_DATE_ISO or "").strip()
+    try:
+        d = datetime.fromisoformat(raw).date() if raw else None
+    except ValueError:
+        logger.warning("m3_clock_date_unparseable", value=raw)
+        d = None
+    if d is None:
+        from datetime import date as _date
+        d = _date(2026, 11, 18)
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+
 
 def _kelly_epoch() -> datetime | None:
     """Parse KELLY_EPOCH_ISO, or None when unset/invalid (no filtering)."""
@@ -986,6 +1017,12 @@ class SignalLoop:
         self._daytrade_count: int = 0
         self._pdt_refresh_countdown: int = 0
         self._pdt_deferred_logged: set[str] = set()  # throttle deferral logs
+
+        # M3 performance stats cache — refreshed every M3_STATS_REFRESH_TICKS.
+        # Exposed at /diagnostics so the owner can track gate progress (PF>=1.2
+        # at n>=100) without hitting the trades endpoint separately.
+        self._m3_stats_cache: dict[str, Any] = {}
+        self._m3_stats_refresh_countdown: int = 0
 
         # Live IC Tracker — set via set_ic_tracker() after construction
         # (tracker is created after signal loop in main.py startup sequence)
@@ -1602,6 +1639,10 @@ class SignalLoop:
                 for e in [_atr_exits(self._daily_vol_for(t))]
             },
             "daily_vol_cache_n": len(self._ticker_daily_vol),
+            # M3 measurement window performance. Refreshed every
+            # M3_STATS_REFRESH_TICKS (~30 min). Gate: PF >= 1.2 at n >= 100.
+            # Empty dict until the first refresh completes after startup.
+            "m3_stats": self._m3_stats_cache,
         }
 
     # ── Main tick ────────────────────────────────────────────────────────────
@@ -1949,6 +1990,7 @@ class SignalLoop:
         await self._maybe_refresh_daytrade_count()
         await self._maybe_refresh_daily_vol()
         await self._maybe_refresh_earnings_dates()
+        await self._maybe_refresh_m3_stats()
 
     def _daily_vol_for(self, ticker: str) -> float:
         """True daily volatility fraction for exit sizing.
@@ -2025,6 +2067,90 @@ class SignalLoop:
         today = datetime.now(ZoneInfo("America/New_York")).date()
         delta = (earnings_date - today).days
         return -EARNINGS_BLACKOUT_DAYS <= delta <= EARNINGS_BLACKOUT_DAYS
+
+    async def _maybe_refresh_m3_stats(self) -> None:
+        """Refresh M3-window performance stats from the closed-trade ledger.
+
+        Queries trades closed since M3_CLOCK_DATE and computes: n, win rate,
+        gross profit/loss, profit factor, net PnL, and expectancy per trade.
+        Also computes trailing-30 PF for the CODE RED T30 trigger (PF < 0.8).
+        Results land in _m3_stats_cache and are exposed at /diagnostics.
+
+        Freeze-exempt: read-only DB query; zero effect on entries, exits, or sizing.
+        """
+        self._m3_stats_refresh_countdown -= 1
+        if self._m3_stats_refresh_countdown > 0:
+            return
+        self._m3_stats_refresh_countdown = M3_STATS_REFRESH_TICKS
+        try:
+            from sqlalchemy import select as _sel
+            from src.data.db import Trade as _T
+
+            cutoff = _m3_clock_cutoff()
+            async with self._sf() as session:
+                query = (
+                    _sel(_T.pnl, _T.exit_time)
+                    .where(
+                        _T.exit_time.isnot(None),
+                        _T.exit_time >= cutoff,
+                        _T.pnl.isnot(None),
+                    )
+                    .order_by(_T.exit_time.asc())
+                )
+                if self._pipeline_id:
+                    query = query.where(_T.pipeline_id == self._pipeline_id)
+                result = await session.execute(query)
+                rows = [(float(pnl), ts) for pnl, ts in result.all()
+                        if pnl is not None]
+
+            n = len(rows)
+            if n == 0:
+                self._m3_stats_cache = {
+                    "clock_date": M3_CLOCK_DATE_ISO,
+                    "n": 0, "wins": 0, "losses": 0,
+                    "win_rate": None, "gross_profit": 0.0, "gross_loss": 0.0,
+                    "pf": None, "net_pnl": 0.0, "expectancy": None,
+                    "t30_n": 0, "t30_pf": None,
+                    "gate_pf_target": 1.2, "gate_n_target": 100,
+                }
+                return
+
+            pnls = [r[0] for r in rows]
+            wins = sum(1 for p in pnls if p > 0)
+            losses = sum(1 for p in pnls if p < 0)
+            gross_profit = sum(p for p in pnls if p > 0)
+            gross_loss = abs(sum(p for p in pnls if p < 0))
+            net_pnl = sum(pnls)
+
+            # Trailing-30 for the CODE RED T30 trigger (PF < 0.8 → escalate).
+            t30_pnls = pnls[-30:]
+            t30_gp = sum(p for p in t30_pnls if p > 0)
+            t30_gl = abs(sum(p for p in t30_pnls if p < 0))
+
+            self._m3_stats_cache = {
+                "clock_date": M3_CLOCK_DATE_ISO,
+                "n": n,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round(wins / n, 3) if n else None,
+                "gross_profit": round(gross_profit, 2),
+                "gross_loss": round(gross_loss, 2),
+                "pf": round(gross_profit / gross_loss, 3) if gross_loss > 0 else None,
+                "net_pnl": round(net_pnl, 2),
+                "expectancy": round(net_pnl / n, 2) if n else None,
+                "t30_n": len(t30_pnls),
+                "t30_pf": round(t30_gp / t30_gl, 3) if t30_gl > 0 else None,
+                "gate_pf_target": 1.2,
+                "gate_n_target": 100,
+            }
+            logger.info(
+                "m3_stats_refreshed",
+                n=n, pf=self._m3_stats_cache["pf"],
+                win_rate=self._m3_stats_cache["win_rate"],
+                net_pnl=self._m3_stats_cache["net_pnl"],
+            )
+        except Exception as exc:
+            logger.warning("m3_stats_refresh_failed", error=str(exc))
 
     async def _maybe_refresh_ticker_ic(self) -> None:
         """Refresh the per-ticker live IC cache from the IC tracker (hourly)."""
