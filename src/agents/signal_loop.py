@@ -36,6 +36,7 @@ except ImportError:
 from src.data.options_flow import get_options_flow
 from src.execution.alpaca import AlpacaOrderRouter, OrderRequest
 from src.execution.position_manager import PositionManager
+from src.features.indicators import FEATURE_PIPELINE_VERSION
 from src.execution.position_sizer import (
     SmartPositionSizer,
     SECTOR_MAP,
@@ -501,6 +502,13 @@ def _carried_overnight(entry: datetime | None, exit_: datetime | None) -> bool:
 TICKER_IC_BLOCK_THRESHOLD = -0.05
 TICKER_IC_MIN_N = 300              # min filled predictions before the IC gate acts
 TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
+# H43: when set, _compute_per_ticker_ic only scores predictions from this pipeline
+# version. Defaults to the current FEATURE_PIPELINE_VERSION ("3" for v3), so the IC
+# gate automatically ignores predictions made by a prior leaky pipeline. Set to ""
+# (empty string) to disable version filtering and use all rows in the window.
+IC_PIPELINE_VERSION_FILTER: str | None = os.environ.get(
+    "IC_PIPELINE_VERSION_FILTER", str(FEATURE_PIPELINE_VERSION)
+) or None
 
 # The block gate reads a 30-DAY window with no `since` filter, matching the
 # probe (KELLY_PROBE_IC_WINDOW_DAYS). It used to read 7 days with
@@ -524,10 +532,11 @@ TICKER_IC_REFRESH_TICKS = 60       # refresh per-ticker IC from tracker hourly
 # pipeline by a PREVIOUS pipeline's record (Pipeline B's June history once
 # blocked 10/20 tickers on a freshly deployed Pipeline A). That risk is now
 # small and bounded — the rolling 30-day window ages out any prior incarnation
-# on its own, and A/B is disabled. The durable fix is a `pipeline_id` column on
-# `prediction_outcomes`, which does not exist yet; `since` was always a proxy
-# for it. The probe accepted exactly this trade-off in June for exactly this
-# reason, and keeping the two paths consistent matters more than the proxy.
+# on its own, and A/B is disabled. The durable fix (H43) is the
+# `feature_pipeline_version` column on `prediction_outcomes` — now implemented.
+# IC_PIPELINE_VERSION_FILTER passes that version to _compute_per_ticker_ic so
+# the gate only scores predictions the current pipeline produced. `since` was
+# always a proxy for it; H43 is the permanent replacement.
 #
 # SAMPLE MATH, so the next reader does not have to re-derive it: ~12.9
 # predictions/ticker/trading-day × ~21 trading days in 30 calendar days ≈ 271
@@ -1531,6 +1540,9 @@ class SignalLoop:
             "dynamic_cost_threshold": round(self._dynamic_cost_threshold(), 5),
             "pred_magnitude_samples": len(self._pred_magnitudes),
             "ticker_ic_tracked": len(self._ticker_ic),
+            # H43: surfaces the version filter so the owner knows whether the IC gate
+            # is scoped to the current pipeline or seeing all historical predictions.
+            "ic_pipeline_version_filter": IC_PIPELINE_VERSION_FILTER,
             "tickers_ic_blocked": [
                 t for t, (ic, n) in self._ticker_ic.items()
                 if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
@@ -1710,6 +1722,7 @@ class SignalLoop:
                             pred_return=sig.lgbm_pred_return,
                             dir_prob=sig.lgbm_dir_prob,
                             ensemble_signal=sig.ensemble_signal,
+                            feature_pipeline_version=str(FEATURE_PIPELINE_VERSION),
                         )
                     except Exception as exc:
                         logger.debug(
@@ -2035,9 +2048,11 @@ class SignalLoop:
             return
         self._ic_refresh_countdown = TICKER_IC_REFRESH_TICKS
         try:
-            # 30d, no `since` — see TICKER_IC_WINDOW_DAYS for why both changed.
+            # H43: pass IC_PIPELINE_VERSION_FILTER so the IC gate only scores
+            # predictions produced by the current feature pipeline version.
             by_ticker = await self._ic_tracker._compute_per_ticker_ic(
                 window_days=TICKER_IC_WINDOW_DAYS,
+                pipeline_version_filter=IC_PIPELINE_VERSION_FILTER,
             )
             self._ticker_ic = {
                 t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
@@ -2049,13 +2064,14 @@ class SignalLoop:
             self._ticker_ic_probe = {}
             if self._kelly_mode() == "probation":
                 if KELLY_PROBE_IC_WINDOW_DAYS == TICKER_IC_WINDOW_DAYS:
-                    # Same window, same (absent) `since` → identical query.
+                    # Same window, same version filter → identical query.
                     # Reuse rather than pay a second round-trip; the two gates
                     # differ only in their thresholds, not their sample.
                     self._ticker_ic_probe = dict(self._ticker_ic)
                 else:
                     probe_by_ticker = await self._ic_tracker._compute_per_ticker_ic(
                         window_days=KELLY_PROBE_IC_WINDOW_DAYS,
+                        pipeline_version_filter=IC_PIPELINE_VERSION_FILTER,
                     )
                     self._ticker_ic_probe = {
                         t: (float(v.get("ic", 0.0)), int(v.get("n", 0)))
