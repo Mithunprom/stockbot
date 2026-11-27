@@ -90,6 +90,7 @@ class LiveICTracker:
         pred_return: float,
         dir_prob: float,
         ensemble_signal: float | None = None,
+        feature_pipeline_version: str | None = None,
     ) -> None:
         """Store a prediction for later comparison with actual returns.
 
@@ -102,6 +103,10 @@ class LiveICTracker:
             pred_return: LightGBM predicted 15-bar forward return.
             dir_prob: LightGBM direction probability P(up).
             ensemble_signal: Weighted ensemble signal value.
+            feature_pipeline_version: Version tag of the feature pipeline that
+                produced this prediction (H43). Enables version-scoped IC queries
+                so the IC gate is not poisoned by predictions from prior pipeline
+                versions when features change between deploys.
         """
         try:
             async with self._sf() as session:
@@ -111,6 +116,7 @@ class LiveICTracker:
                     pred_return=pred_return,
                     dir_prob=dir_prob,
                     ensemble_signal=ensemble_signal,
+                    feature_pipeline_version=feature_pipeline_version,
                 )
                 session.add(outcome)
                 await session.commit()
@@ -432,7 +438,10 @@ class LiveICTracker:
     # ── Per-ticker IC breakdown ───────────────────────────────────────────────
 
     async def _compute_per_ticker_ic(
-        self, window_days: int = 7, since: datetime | None = None
+        self,
+        window_days: int = 7,
+        since: datetime | None = None,
+        pipeline_version_filter: str | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Compute IC and directional accuracy per ticker.
 
@@ -443,6 +452,13 @@ class LiveICTracker:
                 avoid judging the current pipeline by a PREVIOUS pipeline's
                 prediction record (Pipeline B's June history once blocked
                 10/20 tickers for the freshly deployed Pipeline A).
+            pipeline_version_filter: When set, only predictions tagged with this
+                feature pipeline version are included (H43). This is the durable
+                replacement for the `since` timestamp proxy — it filters by the
+                feature pipeline that produced the prediction rather than a
+                calendar date, so it survives redeploys and pipeline-version
+                changes cleanly. Rows recorded before H43 deployed have
+                feature_pipeline_version=NULL and are excluded when this is set.
 
         Returns:
             Dict mapping ticker -> {ic, dir_acc, n} for tickers with >= 20 predictions.
@@ -454,7 +470,7 @@ class LiveICTracker:
 
         try:
             async with self._sf() as session:
-                result = await session.execute(
+                query = (
                     select(
                         PredictionOutcome.ticker,
                         PredictionOutcome.pred_return,
@@ -462,7 +478,14 @@ class LiveICTracker:
                     ).where(
                         PredictionOutcome.actual_return_15m.isnot(None),
                         PredictionOutcome.timestamp >= cutoff,
-                    ).order_by(
+                    )
+                )
+                if pipeline_version_filter is not None:
+                    query = query.where(
+                        PredictionOutcome.feature_pipeline_version == pipeline_version_filter
+                    )
+                result = await session.execute(
+                    query.order_by(
                         PredictionOutcome.ticker,
                         PredictionOutcome.timestamp,
                     )

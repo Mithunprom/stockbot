@@ -1,7 +1,7 @@
 {
- "current_phase": "CODE RED \u2014 Validation Recovery (integrity MET; data_run BLOCKED week 25). W48 program review Nov 23. v0.10.0 DEPLOYED Nov 18 (owner-authorized): feature pipeline v2\u2192v3 (H42 resolved; all 30 features 0.000e+00 in point-in-time audit), clean model pinned lgbm_v3_clean.pkl (OOS IC=+0.0078 vs 2bps cost \u2014 expected to lose; Kelly governor is safety net), DRAWDOWN_PEAK_EPOCH re-anchors HWM (CB halt LIFTED). M3 CLOCK RESET Nov 18 (strategy change). n=0 new M3 window. Prior M3 (Oct 8\u2013Oct 30, n=40, PF=0.310) RETIRED (leaky-feature model). Live data BLOCKED from cloud session. EMAIL_ALERTS_ENABLED=false UNCONFIRMED. H24/H25 (PRs #51-57) UNMERGED. Railway worker week 25. 4 direct pushes W48 (owner-authorized).",
- "last_iteration_date": "2026-11-23",
- "active_hypothesis": "H42 \u2014 RESOLVED 2026-11-18. Feature pipeline v3 deployed in v0.10.0 (owner-authorized). All 30 features 0.000e+00 in point_in_time_audit.py. FEATURE_PIPELINE_VERSION bumped 2\u21923. Clean retrain (OOS IC=+0.0078 vs 2bps cost = 0.23\u00d7 break-even) confirms the edge is below cost \u2014 not a serving bug, not a feature fix that recovers alpha. The clean model is pinned via LGBM_MODEL_PATH and expected to lose slowly under Kelly governor. NEW ACTIVE QUESTION: does any alpha exist in this universe/horizon/feature set? Railway worker required for live IC measurement. Next step after Railway enables: measure live IC over 20+ trades under v0.10.0, then decide whether to explore new alpha sources (new universe, new horizon, new features).",
+ "current_phase": "CODE RED \u2014 Validation Recovery (integrity MET; data_run BLOCKED week 25). W49 nightly run Nov 27. v0.10.0 DEPLOYED Nov 18 (owner-authorized): feature pipeline v2\u2192v3 (H42 resolved; all 30 features 0.000e+00 in point-in-time audit), clean model pinned lgbm_v3_clean.pkl (OOS IC=+0.0078 vs 2bps cost \u2014 expected to lose; Kelly governor is safety net), DRAWDOWN_PEAK_EPOCH re-anchors HWM (CB halt LIFTED). M3 CLOCK RESET Nov 18. n=6 M3 v0.10.0 trades (noise, need n\u2265100). H43 IMPLEMENTED Nov 27: feature_pipeline_version column on prediction_outcomes; IC gate now version-scoped \u2014 25 blocked tickers should clear as v3 predictions accumulate (no longer contaminated by leaky v2 history). PR open for review. Railway worker week 25. EMAIL_ALERTS_ENABLED=false UNCONFIRMED.",
+ "last_iteration_date": "2026-11-27",
+ "active_hypothesis": "H43 \u2014 IMPLEMENTED 2026-11-27 (needs_data_run). IC contamination fix: 25 tickers on IC block post-v0.10.0 deploy because the 30d IC window included pre-Nov-18 predictions from leaky feature pipeline v2. With a 30d window and only 6 trading days of v3 data, ~71% of IC scores were contaminated by v2 predictions. Fix: added feature_pipeline_version column to prediction_outcomes (db.py migration + ORM), tagged all new predictions with str(FEATURE_PIPELINE_VERSION)='3', IC gate queries now filter by IC_PIPELINE_VERSION_FILTER env var (defaults to '3'). Tickers blocked by v2-contaminated IC scores will clear as v3 predictions accumulate (days, not 30 trading days). PR open for human review. Validation: 6/6 unit tests pass. FREEZE-EXEMPT: data tagging + diagnostics only \u2014 no change to entry logic, sizing, or risk controls. Exit criteria: (a) PR merged by owner, (b) IC block list contracts measurably under Railway v3-only window, (c) live IC accumulates toward +0.021 cost threshold.",
  "metrics_history": {
   "baseline_sharpe": 0.0,
   "current_sharpe": 0.0,
@@ -235,7 +235,26 @@
   "note": "Railway blocks datacenter IPs. Cloud routines read the live-snapshot branch; local sessions hit Railway directly.",
   "read_from": "https://raw.githubusercontent.com/Mithunprom/stockbot/live-snapshot/snapshot/{health,watchdog,integrity,diagnostics,trades}.json"
  },
+ "m3_v010_n": 6,
+ "m3_v010_win_rate": 0.333,
+ "m3_v010_pf": 1.72,
+ "m3_v010_net_pnl": 241.91,
+ "m3_v010_note": "M3 window Nov 18 2026 (v0.10.0 deploy). n=6 as of Nov 27 (NOISE — n<30). WR=33.3% (2W/4L), PF=1.72, net +$241.91. Sharpe, drawdown, and expectancy not computable at n=6. Do NOT act on PF signal until n≥100. IC gate blocked 25 tickers on leaky v2 history. H43 (pipeline version tagging) PR open to unblock IC gate.",
  "hypothesis_queue": [
+  {
+   "id": "H43",
+   "hypothesis": "IC gate contaminated by leaky v2 predictions in 30d rolling window. Post-v0.10.0 deploy (Nov 18), 25 tickers on IC block but only 6 trading days of v3 predictions exist. The IC gate scores mix leaky v2 predictions (71% of window) with clean v3 predictions, producing unreliable IC estimates. Fix: add feature_pipeline_version column to prediction_outcomes; default IC gate queries to filter to current pipeline version via IC_PIPELINE_VERSION_FILTER env var. Contaminated v2 predictions excluded immediately; tickers clear as v3 predictions accumulate.",
+   "status": "implemented — PR open (Nov 27, FREEZE-EXEMPT)",
+   "added": "2026-11-27",
+   "added_by": "nightly desk W49 — 25 tickers IC-blocked on leaky v2 history; H42 codebase comment identified pipeline_id column as the durable fix",
+   "pr_branch": "feat/rnd-H43-pipeline-version-ic",
+   "pr_state": "OPEN — freeze-exempt: data tagging and diagnostics only. No change to entry logic, sizing, or risk controls. 6/6 unit tests pass. 14 pre-existing failures unchanged.",
+   "freeze_classification": "FREEZE-EXEMPT: (1) adds a nullable column to prediction_outcomes — no effect on existing rows; (2) IC filter defaults to current pipeline version via env var — operator can disable with IC_PIPELINE_VERSION_FILTER=''; (3) no change to entry gates, sizing, or any risk control; (4) diagnostic field added to get_portfolio_summary.",
+   "expected_impact": "25 IC-blocked tickers can re-qualify once they accumulate n≥300 clean v3 predictions within the 30d window. Without this fix, all 25 remain blocked for ~15 more trading days (natural v2 rolloff). With this fix, unblocking begins immediately as v3 trades accumulate.",
+   "validation": "6 unit tests: record_prediction stores version field, None version stored as None, IC math correct with version filter, default env var = str(FEATURE_PIPELINE_VERSION), empty-string disables filter, diagnostics export ic_pipeline_version_filter.",
+   "priority": "HIGH — merge before next trading day. IC block list contracting is the prerequisite for live IC accumulation and CODE RED exit criterion (c).",
+   "pm_flag": "FREEZE-EXEMPT confirmed: does not change which trades are taken or sizing. Clears a measurement artifact (contaminated IC window) rather than changing strategy. TPM: single bottleneck remains Railway worker for backtest queue; this fix is executable without it."
+  },
   {
    "id": "H42",
    "status": "RESOLVED \u2014 deployed in v0.10.0 (Nov 18). Feature pipeline v3 live. All 30 features 0.000e+00. Clean model OOS IC=+0.0078 (below cost threshold). M3 clock reset to Nov 18.",

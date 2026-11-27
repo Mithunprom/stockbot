@@ -301,6 +301,8 @@ class PredictionOutcome(Base):
     actual_return_15m = Column(Float)                     # actual 15-bar forward return
     actual_return_30m = Column(Float)                     # actual 30-bar forward return
     filled_at = Column(TIMESTAMP(timezone=True))          # when actuals were filled
+    # H43: pipeline version that generated this prediction; enables version-scoped IC queries
+    feature_pipeline_version = Column(String(10), nullable=True)
 
 
 # ─── Engine & session factory ──────────────────────────────────────────────────
@@ -390,6 +392,8 @@ async def init_db() -> None:
         "ALTER TABLE options_flow ADD COLUMN IF NOT EXISTS put_call_ratio FLOAT",
         "ALTER TABLE options_flow ADD COLUMN IF NOT EXISTS iv_rank FLOAT",
         "ALTER TABLE trades ADD COLUMN IF NOT EXISTS pipeline_id VARCHAR(32) DEFAULT 'pipeline_a'",
+        # H43: tag each prediction with the feature pipeline version that produced it
+        "ALTER TABLE prediction_outcomes ADD COLUMN IF NOT EXISTS feature_pipeline_version TEXT",
     ]
     async with engine.begin() as conn:
         for stmt in _migrations:
