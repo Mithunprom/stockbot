@@ -2075,7 +2075,7 @@ class SignalLoop:
                     }
             blocked = [
                 t for t, (ic, n) in self._ticker_ic.items()
-                if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+                if n >= TICKER_IC_MIN_N and ic <= TICKER_IC_MIN_ENTRY
             ]
             probe_eligible = [
                 t for t, (ic, n) in self._ticker_ic_probe.items()

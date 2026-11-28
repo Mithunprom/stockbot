@@ -10,29 +10,16 @@ silently excluded tickers in the -0.05..0.0 band. Those tickers appeared
 unblocked on the dashboard but were blocked in the entry gate.
 """
 
-import types
-from unittest.mock import MagicMock, AsyncMock, patch
+import inspect
 
 import pytest
 
+from src.agents import signal_loop as sl
 
-def _make_signal_loop_module():
-    """Import signal_loop constants without instantiating the class."""
-    import importlib
-    spec = importlib.util.spec_from_file_location(
-        "signal_loop",
-        "src/agents/signal_loop.py",
-    )
-    # We only need the constants — we do NOT actually import the module
-    # (heavy transitive deps). Instead we extract the values by parsing
-    # the grep-verified constants directly.
-    return None
-
-
-# Constants mirrored from signal_loop.py (kept in sync via the test assertions below).
-TICKER_IC_MIN_N = 300
-TICKER_IC_BLOCK_THRESHOLD = -0.05   # old diagnostics threshold (do NOT use for entry)
-TICKER_IC_MIN_ENTRY = 0.0           # entry gate threshold (correct diagnostics threshold)
+# Pull constants from production — a constant-value drift is caught here too.
+TICKER_IC_MIN_N = sl.TICKER_IC_MIN_N
+TICKER_IC_BLOCK_THRESHOLD = sl.TICKER_IC_BLOCK_THRESHOLD  # -0.05 (old; kept for reference)
+TICKER_IC_MIN_ENTRY = sl.TICKER_IC_MIN_ENTRY              # 0.0 (correct gate threshold)
 
 
 def _build_mock_summary(ticker_ic: dict[str, tuple[float, int]]) -> dict:
@@ -133,4 +120,17 @@ class TestICBlockDiagnosticParity:
         summary = _build_mock_summary(ticker_ic)
         assert set(summary["tickers_ic_blocked_details"].keys()) == set(
             summary["tickers_ic_blocked"]
+        )
+
+    def test_no_stale_threshold_in_signal_loop_source(self):
+        """Regression guard: H43 must not regress by reintroducing the old comparison.
+
+        The problematic code pattern was: `and ic < TICKER_IC_BLOCK_THRESHOLD` inside
+        a list comprehension. This check catches that code form while tolerating comment
+        lines that mention the old threshold for historical context.
+        """
+        source = inspect.getsource(sl)
+        assert "and ic < TICKER_IC_BLOCK_THRESHOLD" not in source, (
+            "signal_loop contains 'and ic < TICKER_IC_BLOCK_THRESHOLD' — H43 regression. "
+            "All IC block comparisons must use 'ic <= TICKER_IC_MIN_ENTRY'."
         )
