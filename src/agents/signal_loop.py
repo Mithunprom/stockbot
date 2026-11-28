@@ -1531,10 +1531,22 @@ class SignalLoop:
             "dynamic_cost_threshold": round(self._dynamic_cost_threshold(), 5),
             "pred_magnitude_samples": len(self._pred_magnitudes),
             "ticker_ic_tracked": len(self._ticker_ic),
+            # Uses the same threshold as _ticker_ic_blocked() (ic <= TICKER_IC_MIN_ENTRY
+            # = 0.0) so the count here matches what the entry gate actually enforces.
+            # The old list used ic < TICKER_IC_BLOCK_THRESHOLD (-0.05), which silently
+            # under-counted tickers in the -0.05..0.0 band that were blocked at entry
+            # but invisible on the dashboard.
             "tickers_ic_blocked": [
                 t for t, (ic, n) in self._ticker_ic.items()
-                if n >= TICKER_IC_MIN_N and ic < TICKER_IC_BLOCK_THRESHOLD
+                if n >= TICKER_IC_MIN_N and ic <= TICKER_IC_MIN_ENTRY
             ],
+            # Per-ticker detail for the blocked set so the owner can see IC / n and
+            # decide whether to set IC_OUTCOMES_EPOCH to clear contaminated outcomes.
+            "tickers_ic_blocked_details": {
+                t: {"ic": round(ic, 4), "n": n}
+                for t, (ic, n) in self._ticker_ic.items()
+                if n >= TICKER_IC_MIN_N and ic <= TICKER_IC_MIN_ENTRY
+            },
             # Names the Kelly-probation probe may fire on (30d IC window). When
             # Kelly is in probation and this is empty, ALL entries are blocked.
             "tickers_probe_eligible": [
